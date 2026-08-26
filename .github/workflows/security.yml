@@ -10,6 +10,10 @@
 # This is a foundational library consumed by rally/opshub — a vulnerable
 # transitive dep or injected pattern here propagates to every product, so this
 # gate belongs here just as much as in the app repos.
+#
+# actions-security (zizmor) replaces Code Scanning Default Setup's
+# `Analyze (actions)`. Non-blocking on first rollout; flip `blocking: true`
+# after triaging.
 # =============================================================================
 name: Security · Scan
 
@@ -42,3 +46,9 @@ jobs:
       scan_container: false # no Dockerfile — skip Trivy, keep Semgrep + Gitleaks + osv
       node_version: '22'
     # security.yml declares no secrets — nothing to pass (no `secrets: inherit`).
+
+  actions-security:
+    permissions:
+      contents: read
+      security-events: write
+    uses: QNSC-VN/qnsc-ci/.github/workflows/actions-security.yml@v1

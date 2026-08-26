@@ -30,7 +30,7 @@ concurrency:
 
 permissions:
   contents: read
-  security-events: write # SARIF upload (no-op on the free plan, lights up after GHAS)
+  security-events: write # zizmor: ignore[excessive-permissions] ceiling for reusable's SARIF job
   packages: read # ceiling for the reusable Trivy job's `packages: read`; a called
   # workflow's job permissions can only be REDUCED, not elevated, above the caller's
   # top-level grant. Trivy is skipped here (scan_container: false), but GitHub validates

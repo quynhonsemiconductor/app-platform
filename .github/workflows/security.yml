@@ -10,6 +10,9 @@
 # This is a foundational library consumed by rally/opshub — a vulnerable
 # transitive dep or injected pattern here propagates to every product, so this
 # gate belongs here just as much as in the app repos.
+#
+# actions-security (zizmor) replaces Code Scanning Default Setup's
+# `Analyze (actions)`. Blocking — the initial rollout ran clean, no findings.
 # =============================================================================
 name: Security · Scan
 
@@ -27,7 +30,7 @@ concurrency:
 
 permissions:
   contents: read
-  security-events: write # SARIF upload (no-op on the free plan, lights up after GHAS)
+  security-events: write # zizmor: ignore[excessive-permissions] ceiling for reusable's SARIF job
   packages: read # ceiling for the reusable Trivy job's `packages: read`; a called
   # workflow's job permissions can only be REDUCED, not elevated, above the caller's
   # top-level grant. Trivy is skipped here (scan_container: false), but GitHub validates
@@ -36,9 +39,17 @@ permissions:
 
 jobs:
   security:
-    uses: QNSC-VN/qnsc-ci/.github/workflows/security.yml@v1.6.3
+    uses: QNSC-VN/qnsc-ci/.github/workflows/security.yml@v1.9.0
     with:
       product: qnsc-app-platform
       scan_container: false # no Dockerfile — skip Trivy, keep Semgrep + Gitleaks + osv
       node_version: '22'
     # security.yml declares no secrets — nothing to pass (no `secrets: inherit`).
+
+  actions-security:
+    permissions:
+      contents: read
+      security-events: write
+    uses: QNSC-VN/qnsc-ci/.github/workflows/actions-security.yml@v1
+    with:
+      blocking: true

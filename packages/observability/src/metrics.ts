@@ -43,6 +43,7 @@ export const METRIC_NAMES = {
   QUEUE_LAG_SECONDS: 'queue.lag_seconds',
   SECURITY_FAIL_OPEN: 'security.fail_open',
   AUTHZ_STALE_TOKEN: 'authz.stale_token',
+  AUTH_LOGIN: 'auth.login',
 } as const;
 
 /** HTTP status grouped to three values, because raw codes are unbounded enough to hurt. */
@@ -308,5 +309,32 @@ export class SecurityMetrics {
 
   recordStaleToken(): void {
     this.staleToken.add(1);
+  }
+}
+
+/**
+ * "Is login itself working" — deliberately separate from HttpMetrics. A 5xx-rate
+ * panel over `/bff/callback`/`/bff/dev-login` cannot distinguish a broken IdP
+ * integration, an expired client secret, or a user mistyping an email from an
+ * unrelated server error, because the BFF controller deliberately collapses every
+ * login failure into one generic 401 (never surfaces OIDC/internal detail to the
+ * browser) — so the HTTP status code alone carries no signal about WHICH kind of
+ * failure this is. `outcome` and `method` are both bounded enums, never a raw
+ * error message or provider response, so this cannot become an unbounded-label
+ * incident the way a naive "log the IdP error as a label" attempt would.
+ */
+export type LoginMethod = 'sso' | 'dev';
+export type LoginOutcome = 'success' | 'failure';
+
+@Injectable()
+export class AuthMetrics {
+  private readonly meter = getMeter();
+
+  private readonly login: Counter = this.meter.createCounter(METRIC_NAMES.AUTH_LOGIN, {
+    description: 'Login attempts completing the BFF callback or dev-login, by method and outcome',
+  });
+
+  recordLogin(method: LoginMethod, outcome: LoginOutcome): void {
+    this.login.add(1, { method, outcome });
   }
 }

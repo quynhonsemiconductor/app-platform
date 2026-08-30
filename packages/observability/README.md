@@ -141,6 +141,12 @@ dbPoolMetrics.register(() => ({ inUse: pool.totalCount - pool.idleCount, waiting
 // Security: pair with failOpenLog() — same FailOpenControl union, so the metric label
 // and the log-based alarm pattern cannot drift apart
 securityMetrics.recordFailOpen('denylist');
+
+// Auth: "is login itself working", separate from the generic HTTP error rate — the
+// BFF login callback deliberately collapses every failure into one 401 (never
+// surfaces OIDC/internal detail to the browser), so the status code alone cannot
+// tell a broken IdP integration from a user mistyping an email.
+authMetrics.recordLogin('sso', 'success');
 ```
 
 **Labels are bounded by construction.** Status codes collapse to `2xx/3xx/4xx/5xx`,

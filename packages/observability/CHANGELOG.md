@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/QNSC-VN/qnsc-app-platform/compare/observability-v0.1.4...observability-v0.1.5) (2026-08-30)
+
+
+### ✨ Features
+
+* **observability:** auth.login metric — is login itself working ([#82](https://github.com/QNSC-VN/qnsc-app-platform/issues/82)) ([807d2c1](https://github.com/QNSC-VN/qnsc-app-platform/commit/807d2c1957db6358d5aced021b1c04df5db7771c))
+
 ## [0.1.4](https://github.com/QNSC-VN/qnsc-app-platform/compare/observability-v0.1.3...observability-v0.1.4) (2026-07-27)
 
 

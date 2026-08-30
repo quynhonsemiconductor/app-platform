@@ -16,6 +16,7 @@ vi.mock('@opentelemetry/api', () => ({
 }));
 
 import {
+  AuthMetrics,
   DbPoolMetrics,
   HttpMetrics,
   JobMetrics,
@@ -252,6 +253,20 @@ describe('SecurityMetrics', () => {
   });
 });
 
+describe('AuthMetrics', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('counts a successful SSO login', () => {
+    new AuthMetrics().recordLogin('sso', 'success');
+    expect(add).toHaveBeenCalledWith(1, { method: 'sso', outcome: 'success' });
+  });
+
+  it('counts a failed dev login', () => {
+    new AuthMetrics().recordLogin('dev', 'failure');
+    expect(add).toHaveBeenCalledWith(1, { method: 'dev', outcome: 'failure' });
+  });
+});
+
 describe('METRIC_NAMES', () => {
   it('every declared name has a recorder that emits it', () => {
     // The previous approach declared 23 names and implemented none, which implied
@@ -263,6 +278,7 @@ describe('METRIC_NAMES', () => {
     new QueueMetrics();
     new DbPoolMetrics();
     new SecurityMetrics();
+    new AuthMetrics();
 
     const created = [
       ...createHistogram.mock.calls,

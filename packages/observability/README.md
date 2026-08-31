@@ -74,6 +74,68 @@ rest) and leave this at `1.0`.
 Health, readiness and favicon requests are skipped outright — no span is created, so
 they consume no sampling budget and no quota.
 
+### Latency histogram buckets (`httpDurationBoundaries`)
+
+```ts
+startOtel({
+  defaultServiceName: 'rally-api',
+  // Milliseconds. Strictly ascending, finite, non-negative.
+  httpDurationBoundaries: [0, 100, 500, 1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 300_000],
+});
+```
+
+| | |
+|---|---|
+| Option | `httpDurationBoundaries?: number[]` on `startOtel` |
+| Unit | **milliseconds** |
+| Applies to | the `http.server.duration` instrument only |
+| Omitted | the OpenTelemetry defaults are kept, and the SDK configuration is unchanged |
+
+**Why you might want it.** The OTel JS default explicit-histogram boundaries end at
+`10000`:
+
+```
+[0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
+```
+
+Everything slower than 10s falls into one overflow bucket, and `histogram_quantile()`
+clamps to the largest finite boundary — so a p99 alert on a service with genuinely slow
+requests fires with the value `10000`, which is not a latency, and a 12s request is
+arithmetically indistinguishable from a 180s one. If your request path wraps calls in
+resilience presets whose timeout budgets run to 60s × 3 attempts, and those requests
+return `200`, then neither the latency alert nor the 5xx alert can see them. Widen the
+buckets past your own worst-case timeout budget and they become visible.
+
+> **⚠️ Rolling this out invalidates existing latency series.** Bucket boundaries are part
+> of the exported time series' identity: each one is a separate `..._bucket{le="…"}`
+> series. Changing them does not re-label the old data — it stops writing those series
+> and starts writing different ones. Everything downstream that was built on the old
+> boundaries goes stale at the moment of deploy:
+>
+> - `histogram_quantile()` over a window straddling the change mixes two bucket layouts
+>   and returns a meaningless number until the window clears
+> - recording rules, dashboard panels and alert thresholds pinned to a specific `le`
+>   value (`le="1000"`, `le="10000"`) will silently return no data if that boundary is
+>   not in the new set
+> - historical comparisons ("p99 vs. last week") break across the boundary change
+>
+> Keep the old boundaries as a subset of the new ones wherever you can — appending
+> `30000, 60000, 120000, 300000` to the defaults preserves every existing `le` — and
+> schedule it like a metric migration, not a config tweak.
+
+**Validation is fatal at startup.** An empty array, a non-finite value (`NaN`,
+`Infinity`), a negative value, or anything not strictly ascending throws from
+`startOtel`, with the offending index and value in the message. This is deliberate: the
+SDK's aggregator silently sorts and de-duplicates whatever it is handed, so a typo'd
+array is accepted upstream and quietly becomes a *different* bucket set than you wrote —
+producing a histogram that looks healthy and lies, which is the exact failure this
+option exists to fix. The check runs **before** the `OTEL_ENABLED` gate, so a bad array
+fails in local dev and CI rather than waiting for the one environment that has
+telemetry switched on.
+
+Only `http.server.duration` is affected. `job.duration` and every other instrument keep
+their defaults, and a product that does not pass the option sees no change at all.
+
 ## Logger
 
 ```ts
@@ -148,6 +210,10 @@ securityMetrics.recordFailOpen('denylist');
 // tell a broken IdP integration from a user mistyping an email.
 authMetrics.recordLogin('sso', 'success');
 ```
+
+The `http.server.duration` histogram uses the OpenTelemetry default buckets, which stop
+at 10s — see [`httpDurationBoundaries`](#latency-histogram-buckets-httpdurationboundaries)
+if your p99 is being clamped to `10000`.
 
 **Labels are bounded by construction.** Status codes collapse to `2xx/3xx/4xx/5xx`,
 methods to a fixed set plus `OTHER`, error labels take a domain code. Passing an id is

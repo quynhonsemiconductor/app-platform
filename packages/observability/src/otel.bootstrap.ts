@@ -21,7 +21,11 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
-import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import {
+  AggregationType,
+  PeriodicExportingMetricReader,
+  type ViewOptions,
+} from '@opentelemetry/sdk-metrics';
 import {
   BatchSpanProcessor,
   ParentBasedSampler,
@@ -47,6 +51,102 @@ export interface OtelBootstrapOptions {
    * so a single task definition can host both without them colliding.
    */
   serviceNameEnvVar?: string;
+  /**
+   * Explicit bucket boundaries, in MILLISECONDS, for the `http.server.duration`
+   * histogram. Omit it and the instrument keeps the OpenTelemetry default buckets —
+   * that is the path every existing consumer is on, and it must stay unchanged.
+   *
+   * WHY THIS EXISTS. The OTel JS default explicit-histogram boundaries end at 10000:
+   * `[0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]`
+   * (`Aggregation.DEFAULT_INSTANCE` in `@opentelemetry/sdk-metrics`). Everything
+   * slower than 10s lands in the same overflow bucket, and `histogram_quantile`
+   * clamps to the largest finite boundary — so a p99 alert on a product whose slow
+   * requests take three minutes fires with the value `10000`, which is not a latency
+   * at all, and a 12s request is arithmetically indistinguishable from a 180s one.
+   *
+   * That blind spot is real for a consumer whose request path wraps calls in
+   * resilience presets with timeout budgets of 60s x 3 attempts: those requests
+   * return 200, so the 5xx alert never sees them either. Such a product needs
+   * boundaries that reach past its own worst-case budget.
+   *
+   * OPT-IN ON PURPOSE, not a new default. Changing the buckets changes the shape of
+   * the exported `_bucket` series — an existing recording rule, dashboard or alert
+   * built on the old boundaries goes stale the moment the new ones ship. That is a
+   * per-product rollout decision with a per-product blast radius, so it is a
+   * per-product option rather than a package-wide default.
+   */
+  httpDurationBoundaries?: number[];
+}
+
+/**
+ * Instrument name the histogram View selects.
+ *
+ * A LITERAL, deliberately, and not `METRIC_NAMES.HTTP_SERVER_DURATION`. `METRIC_NAMES`
+ * lives in `./metrics`, which imports `@nestjs/common` and `./fail-open`; importing it
+ * here would make this file — the one file that must be required before anything else —
+ * pull Nest in ahead of `sdk.start()`. Auto-instrumentation patches modules as they are
+ * required, so a Nest (and, transitively, an http/pg/ioredis) module loaded before the
+ * instrumentation installs is loaded unpatched and silently emits no spans. That is the
+ * exact failure the IMPORT DISCIPLINE note at the top of this file forbids, and the
+ * reason `ignored-paths.ts` exists as a dependency-free leaf.
+ *
+ * Promoting the name into that leaf was the alternative. It was not worth it for one
+ * string: `ignored-paths` is about request paths, and a second unrelated constant there
+ * makes the leaf a junk drawer. Instead the spec asserts this literal equals
+ * `METRIC_NAMES.HTTP_SERVER_DURATION` — a test file may import both freely, so the two
+ * cannot drift without a red test.
+ */
+const HTTP_SERVER_DURATION_INSTRUMENT = 'http.server.duration';
+
+/**
+ * Reject a boundaries array that would produce a histogram which looks healthy and
+ * lies. Throwing at boot is the correct failure mode here: this option exists because a
+ * silently-wrong bucket set already cost us a p99 alert that reported `10000`, and a
+ * second silently-wrong bucket set would be just as invisible. A crashed deploy is
+ * loud; a mis-bucketed latency metric is not.
+ *
+ * Strict ascent is checked rather than tolerated because the SDK's own histogram
+ * aggregator SORTS and de-duplicates whatever it is handed (`Aggregation.js` does
+ * `boundaries.sort()`). A typo'd or out-of-order array is therefore accepted upstream
+ * and quietly turned into a *different* bucket set than the operator wrote — one with a
+ * different boundary count, so the `_bucket` series will not match the dashboard they
+ * built alongside it. Better to name the offending value.
+ */
+function validateHttpDurationBoundaries(boundaries: number[]): void {
+  if (boundaries.length === 0) {
+    throw new Error(
+      'startOtel: httpDurationBoundaries must not be empty. Omit the option entirely to keep the OpenTelemetry default buckets.',
+    );
+  }
+
+  for (let i = 0; i < boundaries.length; i += 1) {
+    const value = boundaries[i];
+
+    // Covers NaN and +/-Infinity in one check. `Infinity` is especially worth
+    // rejecting: the SDK strips it, so the array silently loses an entry.
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        `startOtel: httpDurationBoundaries[${i}] is not a finite number (received ${String(value)}). Boundaries must be finite millisecond values.`,
+      );
+    }
+
+    // Negative latency is not a thing; a negative boundary is a sign-flip or a unit
+    // mix-up, and it produces a bucket no observation can ever fall into.
+    if (value < 0) {
+      throw new Error(
+        `startOtel: httpDurationBoundaries[${i}] is negative (received ${value}). Boundaries are milliseconds and cannot be below zero.`,
+      );
+    }
+
+    if (i > 0) {
+      const previous = boundaries[i - 1];
+      if (value <= previous) {
+        throw new Error(
+          `startOtel: httpDurationBoundaries must be strictly ascending, but ${previous} at index ${i - 1} is not below ${value} at index ${i}.`,
+        );
+      }
+    }
+  }
 }
 
 let sdk: NodeSDK | undefined;
@@ -59,6 +159,16 @@ let sdk: NodeSDK | undefined;
  * the only cheap way to tell "observability is off" from "observability is broken".
  */
 export function startOtel(options: OtelBootstrapOptions): boolean {
+  // Validated BEFORE the OTEL_ENABLED gate, on purpose. The boundaries are static
+  // config, not runtime state, so their correctness does not depend on whether the
+  // collector is switched on — and every environment where OTel is off (local dev, CI,
+  // a product that has not adopted it yet) is exactly where a typo in this array should
+  // be caught. Gating the check behind OTEL_ENABLED would let a bad array ship all the
+  // way to the one environment that has telemetry enabled: production.
+  if (options.httpDurationBoundaries !== undefined) {
+    validateHttpDurationBoundaries(options.httpDurationBoundaries);
+  }
+
   if (process.env['OTEL_ENABLED'] !== 'true') return false;
   if (sdk) return true; // idempotent — a second call must not double-register
 
@@ -88,6 +198,31 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
   const samplingProbability = Number.parseFloat(
     process.env['OTEL_SAMPLING_PROBABILITY'] ?? (isProd ? '0.1' : '1.0'),
   );
+
+  // NOTE ON THE API SHAPE: `@opentelemetry/sdk-metrics` v2 removed the 1.x
+  // `new View({ aggregation: new ExplicitBucketHistogramAggregation([...]) })` form.
+  // Neither `View` nor `ExplicitBucketHistogramAggregation` is exported from the
+  // package root any more; `NodeSDK` takes `views?: ViewOptions[]`, plain declarative
+  // objects, and the aggregation is the tagged union below. This package's peer range
+  // is `@opentelemetry/sdk-metrics >=2`, so this is the only form that compiles.
+  //
+  // The array is copied. The SDK keeps the reference we hand it, so a caller that
+  // mutates its own boundaries array after startup would otherwise re-bucket a live
+  // histogram — and the validation above would already have passed.
+  const httpDurationView: { views?: ViewOptions[] } =
+    options.httpDurationBoundaries === undefined
+      ? {}
+      : {
+          views: [
+            {
+              instrumentName: HTTP_SERVER_DURATION_INSTRUMENT,
+              aggregation: {
+                type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+                options: { boundaries: [...options.httpDurationBoundaries] },
+              },
+            },
+          ],
+        };
 
   sdk = new NodeSDK({
     serviceName,
@@ -120,6 +255,14 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
       exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
       exportIntervalMillis: isProd ? 30_000 : 10_000,
     }),
+
+    // Spread, not `views: views` — when the caller omits the option the key must be
+    // ABSENT from the config object, not present-and-empty. `views: []` is not the same
+    // thing as no views: it hands the MeterProvider a (currently ignored, but not
+    // contractually inert) view registry, and it changes what every other product's SDK
+    // config looks like. Every consumer that does not opt in has to see byte-identical
+    // configuration to what it got before this option existed.
+    ...httpDurationView,
 
     instrumentations: [
       getNodeAutoInstrumentations({

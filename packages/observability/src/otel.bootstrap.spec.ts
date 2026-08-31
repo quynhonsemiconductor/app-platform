@@ -20,12 +20,18 @@ vi.mock('@opentelemetry/sdk-node', () => ({
   },
 }));
 
+import { AggregationType } from '@opentelemetry/sdk-metrics';
 import {
   __ignoredRequestPaths,
   resetOtelForTesting,
   shutdownOtel,
   startOtel,
 } from './otel.bootstrap';
+// Imported for ONE assertion. `otel.bootstrap` cannot import `./metrics` — that module
+// reaches `@nestjs/common`, and the bootstrap must not pull Nest in before
+// `sdk.start()` — so the instrument name is a literal there. A spec has no such
+// constraint, so this is where the literal and the canonical name are pinned together.
+import { METRIC_NAMES } from './metrics';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -147,6 +153,125 @@ describe('startOtel', () => {
 
       const { sampler } = nodeSdkConstructor.mock.calls[0][0] as { sampler: unknown };
       expect(String(sampler)).toContain(expected);
+    });
+  });
+
+  /**
+   * The p99 alert on rally reported `10000`. That is not a latency — it is the largest
+   * finite boundary of the OTel JS default explicit histogram, which `histogram_quantile`
+   * clamps to, so a 12s request and a 180s request were the same number. Those requests
+   * return 200 (the resilience presets budget 60s x 3 attempts), so the 5xx alert could
+   * not see them either. Widening the buckets is opt-in, because it restates the
+   * exported `_bucket` series and invalidates whatever was built on the old ones.
+   */
+  describe('httpDurationBoundaries', () => {
+    beforeEach(() => {
+      process.env['OTEL_ENABLED'] = 'true';
+    });
+
+    // The load-bearing test for every OTHER product in the monorepo. Omitting the
+    // option must not merely produce an equivalent config — it must produce the SAME
+    // config, with no `views` key at all. `views: []` would fail this deliberately.
+    it('adds no views key at all when the option is omitted', () => {
+      startOtel({ defaultServiceName: 'svc' });
+
+      const config = nodeSdkConstructor.mock.calls[0][0] as Record<string, unknown>;
+      expect('views' in config).toBe(false);
+      expect(config['views']).toBeUndefined();
+    });
+
+    it('registers one view on http.server.duration with exactly the given boundaries', () => {
+      const boundaries = [0, 100, 1_000, 10_000, 30_000, 60_000, 120_000, 300_000];
+      startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: boundaries });
+
+      const { views } = nodeSdkConstructor.mock.calls[0][0] as { views: unknown[] };
+      expect(views).toHaveLength(1);
+      expect(views[0]).toEqual({
+        instrumentName: 'http.server.duration',
+        aggregation: {
+          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+          options: { boundaries },
+        },
+      });
+    });
+
+    // Guards the one duplicated string in the package. `otel.bootstrap` may not import
+    // `./metrics` (Nest), so the instrument name is a literal there; if someone renames
+    // the metric in METRIC_NAMES the View would silently select nothing and the buckets
+    // would revert to the defaults with no error anywhere. This is that error.
+    it('selects the same instrument name METRIC_NAMES declares', () => {
+      startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: [1, 2, 3] });
+
+      const { views } = nodeSdkConstructor.mock.calls[0][0] as {
+        views: { instrumentName: string }[];
+      };
+      expect(views[0].instrumentName).toBe(METRIC_NAMES.HTTP_SERVER_DURATION);
+    });
+
+    // The SDK keeps the reference it is handed, so a caller mutating its own array
+    // afterwards would re-bucket a live histogram past validation.
+    it('copies the array so a later caller mutation cannot re-bucket a live histogram', () => {
+      const boundaries = [10, 20, 30];
+      startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: boundaries });
+      boundaries.push(-1);
+
+      const { views } = nodeSdkConstructor.mock.calls[0][0] as {
+        views: { aggregation: { options: { boundaries: number[] } } }[];
+      };
+      expect(views[0].aggregation.options.boundaries).toEqual([10, 20, 30]);
+    });
+
+    describe('rejects a bucket set that would look fine and lie', () => {
+      it('throws on an empty array, pointing at omitting the option instead', () => {
+        expect(() => startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: [] })).toThrow(
+          /must not be empty/,
+        );
+        expect(start).not.toHaveBeenCalled();
+      });
+
+      // Infinity matters as much as NaN: the SDK strips it, so the array silently
+      // loses an entry and the series has one fewer bucket than the operator wrote.
+      it.each([
+        ['NaN', [0, Number.NaN, 100]],
+        ['Infinity', [0, 100, Number.POSITIVE_INFINITY]],
+        ['-Infinity', [Number.NEGATIVE_INFINITY, 100]],
+      ])('throws on %s, naming the offending value', (label, boundaries) => {
+        expect(() =>
+          startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: boundaries }),
+        ).toThrow(new RegExp(`not a finite number \\(received ${label}\\)`));
+        expect(start).not.toHaveBeenCalled();
+      });
+
+      it('throws on a negative boundary, naming the offending value', () => {
+        expect(() =>
+          startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: [0, -5, 100] }),
+        ).toThrow(/httpDurationBoundaries\[1\] is negative \(received -5\)/);
+        expect(start).not.toHaveBeenCalled();
+      });
+
+      // Not merely "unsorted": the SDK's aggregator sorts and de-duplicates whatever it
+      // gets, so an out-of-order or repeated boundary is accepted upstream and quietly
+      // becomes a different bucket set — one that no longer matches the dashboard built
+      // beside it. Equal neighbours are as wrong as descending ones.
+      it.each([
+        ['descending', [0, 500, 100, 1_000], /500 at index 1 is not below 100 at index 2/],
+        ['a repeated boundary', [0, 100, 100], /100 at index 1 is not below 100 at index 2/],
+      ])('throws on %s', (_label, boundaries, expected) => {
+        expect(() =>
+          startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: boundaries }),
+        ).toThrow(expected);
+        expect(start).not.toHaveBeenCalled();
+      });
+
+      // Validation runs BEFORE the OTEL_ENABLED gate. Local dev and CI run with OTel
+      // off, and that is precisely where a typo in this array should surface — not in
+      // the single environment that has telemetry switched on: production.
+      it('throws even when OTEL_ENABLED is off, so a typo fails in dev and CI too', () => {
+        delete process.env['OTEL_ENABLED'];
+        expect(() =>
+          startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: [100, 50] }),
+        ).toThrow(/strictly ascending/);
+      });
     });
   });
 

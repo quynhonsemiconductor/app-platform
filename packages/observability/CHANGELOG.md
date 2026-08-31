@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/QNSC-VN/qnsc-app-platform/compare/observability-v0.1.5...observability-v0.1.6) (2026-08-31)
+
+
+### ✨ Features
+
+* **observability:** opt-in http.server.duration histogram boundaries ([#84](https://github.com/QNSC-VN/qnsc-app-platform/issues/84)) ([38aa1a2](https://github.com/QNSC-VN/qnsc-app-platform/commit/38aa1a296c5fbf21cdb2654171e7079d12dc46f0))
+
 ## [0.1.5](https://github.com/QNSC-VN/qnsc-app-platform/compare/observability-v0.1.4...observability-v0.1.5) (2026-08-30)
 
 

@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/QNSC-VN/qnsc-app-platform.git",
+    "url": "git+https://github.com/quynhonsemiconductor/qnsc-app-platform.git",
     "directory": "packages/platform-http"
   },
   "scripts": {

@@ -2,7 +2,7 @@
 
 Shared **application-layer** packages for QNSC product backends (`rally`,
 `opshub`, and future products). This repo does for application code what
-[`qnsc-tf-modules`](https://github.com/QNSC-VN/qnsc-tf-modules) does for
+[`qnsc-tf-modules`](https://github.com/quynhonsemiconductor/qnsc-tf-modules) does for
 infrastructure: **one implementation, independently versioned, consumed by many
 products** — eliminating the copy-mirror drift that previously lived in each
 product's `libs/`.

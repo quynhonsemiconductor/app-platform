@@ -110,5 +110,5 @@ Stated as limits, not gaps to be embarrassed about:
   be verified by a third party as-is.
 
 `FailOpenControl` still declares `authz_epoch` and `authz_epoch_bump`. Nothing
-emits them since rally deleted its authorization epoch (QNSC-VN/rally#238);
+emits them since rally deleted its authorization epoch (quynhonsemiconductor/rally#238);
 removing union members is breaking, so they come out on the next major.

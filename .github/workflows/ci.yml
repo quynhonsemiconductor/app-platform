@@ -1,6 +1,6 @@
 # Lint · typecheck · test · secret-scan on every PR and push to main.
 # Job names are the status-check contexts required by the branch ruleset,
-# matching the QNSC-VN/rally convention.
+# matching the quynhonsemiconductor/rally convention.
 name: CI
 
 on:

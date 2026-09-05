@@ -17,3 +17,4 @@ helpers used by `@quynhonsemiconductor/identity`.
 ```bash
 pnpm add @quynhonsemiconductor/platform-cache
 ```
+

@@ -182,3 +182,4 @@ They are kept, not deleted, because that duplication is drift rather than a real
 divergence: the cookie-vs-Bearer branch is mechanism, and the second product needs
 exactly the first one's version when it adopts BFF sessions. Converging them here
 is the next step, not another deletion.
+

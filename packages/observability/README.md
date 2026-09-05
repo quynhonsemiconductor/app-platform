@@ -240,3 +240,4 @@ the auto-instrumented baseline is what guarantees nothing is blind.
   collector-side tail sampler, because the decision needs the finished trace.
 - **No health controller.** Readiness checks are product-specific and would drag
   Terminus in as a peer dependency.
+

@@ -1,8 +1,8 @@
-# qnsc-app-platform
+# app-platform
 
 Shared **application-layer** packages for QNSC product backends (`rally`,
 `opshub`, and future products). This repo does for application code what
-[`qnsc-tf-modules`](https://github.com/quynhonsemiconductor/tf-modules) does for
+[`tf-modules`](https://github.com/quynhonsemiconductor/tf-modules) does for
 infrastructure: **one implementation, independently versioned, consumed by many
 products** — eliminating the copy-mirror drift that previously lived in each
 product's `libs/`.
@@ -21,7 +21,7 @@ product's `libs/`.
 | [`@qnsc-vn/observability`](packages/observability)   | OTel bootstrap, logger factory, ALS request/job context, metric instruments, fail-open contract                                                                       | `observability-v*`  |
 
 Each package is versioned and released **independently** via release-please
-(Conventional Commits), mirroring the per-module tag model of `qnsc-tf-modules`.
+(Conventional Commits), mirroring the per-module tag model of `tf-modules`.
 
 **Before adding anything here, read [docs/ADMISSION-TEST.md](docs/ADMISSION-TEST.md).**
 A file belongs in this repo only if divergence between products would be a security
@@ -78,6 +78,6 @@ packages/
   platform-http/    @qnsc-vn/platform-http
 .github/workflows/
   ci.yml            lint · typecheck · test · build (PRs + main)
-  release-please.yml  per-package release PRs (calls qnsc-ci reusable)
+  release-please.yml  per-package release PRs (calls ci reusable)
   publish.yml       publish to GitHub Packages on <package>-v* tag
 ```

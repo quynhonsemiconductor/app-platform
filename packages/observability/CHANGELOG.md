@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.1.6...observability-v0.2.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* package scope changed; update dependency names to the new scope.
+
+### ✨ Features
+
+* publish packages under the organization scope ([#91](https://github.com/quynhonsemiconductor/app-platform/issues/91)) ([cd3af62](https://github.com/quynhonsemiconductor/app-platform/commit/cd3af62cde67a78dda2798a4896cf902cf3c0a2a))
+
 ## [0.1.6](https://github.com/QNSC-VN/qnsc-app-platform/compare/observability-v0.1.5...observability-v0.1.6) (2026-08-31)
 
 

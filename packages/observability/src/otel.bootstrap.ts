@@ -8,7 +8,7 @@
  * own name.
  *
  * IMPORT DISCIPLINE — this file must only import `@opentelemetry/*` and node
- * built-ins, and consumers must import it via the `@qnsc-vn/observability/otel`
+ * built-ins, and consumers must import it via the `@quynhonsemiconductor/observability/otel`
  * subpath rather than the package root. Auto-instrumentation patches modules as
  * they are required, so anything that pulls in Nest, pg, or ioredis *before*
  * `startOtel()` runs would be loaded unpatched and silently produce no spans.

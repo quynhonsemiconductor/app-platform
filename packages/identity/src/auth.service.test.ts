@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NotFoundException, UnauthorizedException } from '@qnsc-vn/platform-http';
+import { NotFoundException, UnauthorizedException } from '@quynhonsemiconductor/platform-http';
 import { AuthService, type LoginResult } from './auth.service';
 import type { AuthServiceOptions } from './auth-options';
 import type { AuthSession, User, SsoConnection } from './domain-types';

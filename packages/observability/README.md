@@ -1,4 +1,4 @@
-# @qnsc-vn/observability
+# @quynhonsemiconductor/observability
 
 Shared observability primitives for QNSC product backends: one OpenTelemetry
 bootstrap, one pino configuration, and the AsyncLocalStorage context that ties log
@@ -12,7 +12,7 @@ That class of bug is the reason this package exists.
 ## Install
 
 ```bash
-pnpm add @qnsc-vn/observability
+pnpm add @quynhonsemiconductor/observability
 ```
 
 Peer dependencies are the OpenTelemetry SDK packages and `nestjs-pino`, which the
@@ -22,7 +22,7 @@ consuming app already has.
 
 ```ts
 // apps/api/src/otel.ts — MUST be the very first import in main.ts
-import { startOtel, shutdownOtel } from '@qnsc-vn/observability/otel';
+import { startOtel, shutdownOtel } from '@quynhonsemiconductor/observability/otel';
 
 export { shutdownOtel };
 
@@ -31,7 +31,7 @@ startOtel({ defaultServiceName: 'rally-api' });
 
 ```ts
 // apps/worker/src/otel.ts
-import { startOtel, shutdownOtel } from '@qnsc-vn/observability/otel';
+import { startOtel, shutdownOtel } from '@quynhonsemiconductor/observability/otel';
 
 export { shutdownOtel };
 

@@ -19,7 +19,7 @@ import { JwtService } from '@nestjs/jwt';
 import { randomBytes } from 'node:crypto';
 import { uuidv7 } from 'uuidv7';
 import { AuthTokenCache } from './auth-token-cache.service';
-import { NotFoundException, UnauthorizedException } from '@qnsc-vn/platform-http';
+import { NotFoundException, UnauthorizedException } from '@quynhonsemiconductor/platform-http';
 import { signAccessToken } from './access-token';
 import { CLAIMS_PROVIDER, type IClaimsProvider, type ProductClaims } from './claims-provider';
 import { generateRefreshToken, hashToken, parseTtlSeconds } from './refresh-token';

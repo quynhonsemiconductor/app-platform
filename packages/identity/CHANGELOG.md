@@ -69,7 +69,7 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **identity:** requires @qnsc-vn/platform-cache >=2.0.0. The denylist/rotation/ revocation methods previously reached through ValkeyService are now provided by the exported AuthTokenCache (registered by AuthModule).
+* **identity:** requires @quynhonsemiconductor/platform-cache >=2.0.0. The denylist/rotation/ revocation methods previously reached through ValkeyService are now provided by the exported AuthTokenCache (registered by AuthModule).
 
 ### ✨ Features
 
@@ -80,7 +80,7 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **identity:** consumers must install @qnsc-vn/platform-http (>=2.0.0) and @qnsc-vn/platform-cache (>=1.0.0) directly.
+* **identity:** consumers must install @quynhonsemiconductor/platform-http (>=2.0.0) and @quynhonsemiconductor/platform-cache (>=1.0.0) directly.
 
 ### ✨ Features
 

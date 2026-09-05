@@ -19,7 +19,7 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **platform-http:** @qnsc-vn/platform-cache is now a peerDependency and must be provided by the consumer; requires >=2.0.0.
+* **platform-http:** @quynhonsemiconductor/platform-cache is now a peerDependency and must be provided by the consumer; requires >=2.0.0.
 
 ### ✨ Features
 

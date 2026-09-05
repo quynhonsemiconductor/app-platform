@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { CacheService } from '@qnsc-vn/platform-cache';
+import { CacheService } from '@quynhonsemiconductor/platform-cache';
 import type { BffAuthRequest, BffSession } from './bff.types';
 
 const SESSION_KEY_PREFIX = 'bff:sess:';

@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import type { CacheService } from '@qnsc-vn/platform-cache';
+import type { CacheService } from '@quynhonsemiconductor/platform-cache';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

@@ -1,4 +1,4 @@
-# @qnsc-vn/identity
+# @quynhonsemiconductor/identity
 
 Shared authentication for QNSC product backends — the mechanism, not the policy.
 
@@ -14,8 +14,8 @@ Authorization is deliberately absent. It carries product vocabulary (permission
 codes, scope dimensions, role definitions), so it belongs in the product — see
 [Not in scope](#not-in-scope).
 
-Depends on [`@qnsc-vn/platform-cache`](../platform-cache) and
-[`@qnsc-vn/platform-http`](../platform-http) as **peer** dependencies: the cache
+Depends on [`@quynhonsemiconductor/platform-cache`](../platform-cache) and
+[`@quynhonsemiconductor/platform-http`](../platform-http) as **peer** dependencies: the cache
 must be the same instance your app uses, or BFF sessions written by one holder are
 invisible to the other.
 
@@ -23,11 +23,11 @@ invisible to the other.
 
 ```ini
 # .npmrc
-@qnsc-vn:registry=https://npm.pkg.github.com
+@quynhonsemiconductor:registry=https://npm.pkg.github.com
 ```
 
 ```bash
-pnpm add @qnsc-vn/identity
+pnpm add @quynhonsemiconductor/identity
 ```
 
 ## What you must bind
@@ -50,7 +50,7 @@ each extends the JWT payload and owns its own routes.
 | `JWT_STRATEGY_OPTIONS`    | `JwtStrategyOptions`     | ES256 verification material                                                                   |
 | `ENTRA_VERIFIER_OPTIONS`  | `EntraVerifierOptions`   | tenant + audience                                                                             |
 | `JwtService`              | `JwtModule`              | from `@nestjs/jwt`                                                                            |
-| `CacheService`            | `CacheModule`            | from `@qnsc-vn/platform-cache`; backs `AuthTokenCache`                                        |
+| `CacheService`            | `CacheModule`            | from `@quynhonsemiconductor/platform-cache`; backs `AuthTokenCache`                                        |
 
 ### Optional — bind only if the concept exists in your product
 
@@ -115,11 +115,11 @@ could not resolve — check it against the required table above.
 
 ## Testing your adapters
 
-`@qnsc-vn/identity/testing` ships typed in-memory ports and the conformance suites
+`@quynhonsemiconductor/identity/testing` ships typed in-memory ports and the conformance suites
 that cover the semantics the interfaces cannot express:
 
 ```ts
-import { describeAuthSessionRepositoryContract } from '@qnsc-vn/identity/testing';
+import { describeAuthSessionRepositoryContract } from '@quynhonsemiconductor/identity/testing';
 
 describeAuthSessionRepositoryContract({
   name: 'AuthSessionDrizzleRepository',

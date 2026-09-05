@@ -58,22 +58,22 @@
   ],
   "packages": {
     "packages/identity": {
-      "package-name": "@qnsc-vn/identity",
+      "package-name": "@quynhonsemiconductor/identity",
       "component": "identity",
       "changelog-path": "CHANGELOG.md"
     },
     "packages/platform-cache": {
-      "package-name": "@qnsc-vn/platform-cache",
+      "package-name": "@quynhonsemiconductor/platform-cache",
       "component": "platform-cache",
       "changelog-path": "CHANGELOG.md"
     },
     "packages/platform-http": {
-      "package-name": "@qnsc-vn/platform-http",
+      "package-name": "@quynhonsemiconductor/platform-http",
       "component": "platform-http",
       "changelog-path": "CHANGELOG.md"
     },
     "packages/observability": {
-      "package-name": "@qnsc-vn/observability",
+      "package-name": "@quynhonsemiconductor/observability",
       "component": "observability",
       "changelog-path": "CHANGELOG.md"
     }

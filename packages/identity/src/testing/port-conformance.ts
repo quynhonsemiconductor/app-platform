@@ -10,7 +10,7 @@
  * So each suite is exported for a consumer to run against its own implementation:
  *
  * ```ts
- * import { describeAuthSessionRepositoryContract } from '@qnsc-vn/identity/testing';
+ * import { describeAuthSessionRepositoryContract } from '@quynhonsemiconductor/identity/testing';
  *
  * describeAuthSessionRepositoryContract({
  *   name: 'AuthSessionDrizzleRepository',

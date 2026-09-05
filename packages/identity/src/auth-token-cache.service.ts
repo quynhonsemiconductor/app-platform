@@ -1,12 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { CacheService } from '@qnsc-vn/platform-cache';
+import { CacheService } from '@quynhonsemiconductor/platform-cache';
 
 /**
  * Auth-token cache: the identity domain's policy over the shared cache primitive.
  *
  * Owns the token-lifecycle key schemes — access-token denylist, refresh-rotation
  * grace window, and user-level fast revocation — composing the generic
- * {@link CacheService} from `@qnsc-vn/platform-cache`. Keeping these semantics in
+ * {@link CacheService} from `@quynhonsemiconductor/platform-cache`. Keeping these semantics in
  * identity (rather than the cache package) puts token-revocation policy where the
  * bounded context that owns tokens can evolve it.
  *

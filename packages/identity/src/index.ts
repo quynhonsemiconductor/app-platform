@@ -1,5 +1,5 @@
 /**
- * `@qnsc-vn/identity`
+ * `@quynhonsemiconductor/identity`
  *
  * Shared AUTHENTICATION mechanism for QNSC product backends: the refresh-rotation
  * auth service with family theft-detection, Entra/SSO token verification,

@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import { UnauthorizedException } from '@qnsc-vn/platform-http';
+import { UnauthorizedException } from '@quynhonsemiconductor/platform-http';
 import { randomUUID } from 'node:crypto';
 import { AuthService } from './auth.service';
 import { BFF_OPTIONS, type BffOptions } from './bff-options';

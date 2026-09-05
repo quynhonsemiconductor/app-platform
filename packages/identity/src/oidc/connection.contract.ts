@@ -1,5 +1,5 @@
 /**
- * Connection schema contract — owned by @qnsc-vn/identity so every consuming app
+ * Connection schema contract — owned by @quynhonsemiconductor/identity so every consuming app
  * keeps the same `sso_connections` shape (no per-app drift). Apps run
  * {@link assertConnectionContract} against their real DB in an e2e; the package
  * is the single source of truth for the broker columns + routing table.

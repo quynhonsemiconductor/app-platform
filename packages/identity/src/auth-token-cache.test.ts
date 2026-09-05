@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { CacheService } from '@qnsc-vn/platform-cache';
+import type { CacheService } from '@quynhonsemiconductor/platform-cache';
 import { AuthTokenCache } from './auth-token-cache.service';
 
 // AuthTokenCache depends only on `CacheService.redis` (the raw ioredis client)

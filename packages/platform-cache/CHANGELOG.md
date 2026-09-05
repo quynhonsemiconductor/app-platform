@@ -13,7 +13,7 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **platform-cache:** ValkeyService/VALKEY_OPTIONS are removed. Use CacheService and CACHE_OPTIONS. Auth-token denylist/rotation/revocation now live in @qnsc-vn/identity (AuthTokenCache).
+* **platform-cache:** ValkeyService/VALKEY_OPTIONS are removed. Use CacheService and CACHE_OPTIONS. Auth-token denylist/rotation/revocation now live in @quynhonsemiconductor/identity (AuthTokenCache).
 
 ### ✨ Features
 

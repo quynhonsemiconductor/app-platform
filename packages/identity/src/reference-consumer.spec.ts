@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { CacheService } from '@qnsc-vn/platform-cache';
+import { CacheService } from '@quynhonsemiconductor/platform-cache';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AuthService } from './auth.service';
 import { AuthTokenCache } from './auth-token-cache.service';

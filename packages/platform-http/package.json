@@ -1,5 +1,5 @@
 {
-  "name": "@qnsc-vn/platform-http",
+  "name": "@quynhonsemiconductor/platform-http",
   "version": "3.1.1",
   "description": "Shared NestJS/Fastify HTTP contract (error taxonomy, global exception filter, cursor & offset pagination) for QNSC product backends.",
   "license": "UNLICENSED",
@@ -24,7 +24,7 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@qnsc-vn/platform-cache": ">=2.0.0",
+    "@quynhonsemiconductor/platform-cache": ">=2.0.0",
     "@nestjs/common": ">=11",
     "@nestjs/core": ">=11",
     "@nestjs/swagger": ">=11",
@@ -34,7 +34,7 @@
     "zod": ">=4"
   },
   "devDependencies": {
-    "@qnsc-vn/platform-cache": "workspace:^",
+    "@quynhonsemiconductor/platform-cache": "workspace:^",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/swagger": "^11.4.5",

@@ -13,7 +13,7 @@ import { CACHE_OPTIONS, type CacheMode, type CacheModuleOptions } from './cache.
  *
  * This is the generic *mechanism* — connection lifecycle, key/value access, a
  * token-bucket rate-limit helper, and distributed locks. It carries no domain
- * policy: auth-token denylist/rotation semantics live in `@qnsc-vn/identity`
+ * policy: auth-token denylist/rotation semantics live in `@quynhonsemiconductor/identity`
  * (`AuthTokenCache`), and each product owns its own rate-limit/cache policy.
  *
  * Runtime state is per-product: each backend wires its own connection options

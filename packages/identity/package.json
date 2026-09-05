@@ -1,5 +1,5 @@
 {
-  "name": "@qnsc-vn/identity",
+  "name": "@quynhonsemiconductor/identity",
   "version": "6.0.0",
   "description": "Shared authentication mechanism for QNSC product backends: refresh-token rotation with theft detection, Entra/SSO verification, ES256 JWT strategy + guard, and the BFF session flow. Authorization stays in the product.",
   "license": "UNLICENSED",
@@ -37,8 +37,8 @@
     "uuidv7": "^1.2.1"
   },
   "peerDependencies": {
-    "@qnsc-vn/platform-cache": ">=2.0.0",
-    "@qnsc-vn/platform-http": ">=2.0.0",
+    "@quynhonsemiconductor/platform-cache": ">=2.0.0",
+    "@quynhonsemiconductor/platform-http": ">=2.0.0",
     "@nestjs/common": ">=11",
     "@nestjs/jwt": ">=11",
     "@nestjs/passport": ">=11",
@@ -46,8 +46,8 @@
     "passport-jwt": ">=4"
   },
   "devDependencies": {
-    "@qnsc-vn/platform-cache": "workspace:^",
-    "@qnsc-vn/platform-http": "workspace:^",
+    "@quynhonsemiconductor/platform-cache": "workspace:^",
+    "@quynhonsemiconductor/platform-http": "workspace:^",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/jwt": "^11.0.0",

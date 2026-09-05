@@ -2,7 +2,7 @@
 # Security · Scan — thin caller of the shared reusable suite (qnsc-ci).
 #
 # qnsc-app-platform is a TypeScript library monorepo (packages/* published as
-# @qnsc-vn/*, no Dockerfile), so it calls the shared workflow with
+# @quynhonsemiconductor/*, no Dockerfile), so it calls the shared workflow with
 # `scan_container: false`: the Trivy container-CVE job is skipped while Semgrep
 # (SAST, replaces CodeQL), Gitleaks (secrets) and osv-scanner (dependency CVEs,
 # reads pnpm-lock.yaml) still run source-based.

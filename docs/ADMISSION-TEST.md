@@ -91,7 +91,7 @@ Two artefacts exist so the boundary is testable rather than asserted:
   context with **only** the bindings the README documents as required. If a port
   gains a dependency, or an `@Optional()` stops being optional, it fails here
   instead of in a product's boot logs after publishing.
-- `@qnsc-vn/identity/testing` exports the conformance suites a product runs against
+- `@quynhonsemiconductor/identity/testing` exports the conformance suites a product runs against
   its own adapters. They cover what the interfaces cannot express — a
   `revokeByIdIfActive` that returns `true` unconditionally typechecks perfectly and
   makes a stolen refresh token replayable for ever.

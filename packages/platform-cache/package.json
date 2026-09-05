@@ -1,6 +1,6 @@
 {
   "name": "@quynhonsemiconductor/platform-cache",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "Shared Valkey/Redis cache primitive (ioredis wrapper) for QNSC product backends.",
   "license": "UNLICENSED",
   "main": "dist/index.js",

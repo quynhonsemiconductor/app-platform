@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v2.1.0...platform-cache-v3.0.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* package scope changed; update dependency names to the new scope.
+
+### ✨ Features
+
+* publish packages under the organization scope ([#91](https://github.com/quynhonsemiconductor/app-platform/issues/91)) ([cd3af62](https://github.com/quynhonsemiconductor/app-platform/commit/cd3af62cde67a78dda2798a4896cf902cf3c0a2a))
+
 ## [2.1.0](https://github.com/QNSC-VN/qnsc-app-platform/compare/platform-cache-v2.0.0...platform-cache-v2.1.0) (2026-07-11)
 
 

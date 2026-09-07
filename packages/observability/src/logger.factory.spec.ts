@@ -3,7 +3,7 @@ import { requestContextStorage } from './request-context';
 import { __redactedPaths, createLoggerOptions } from './logger.factory';
 
 const base = {
-  serviceName: 'rally-api',
+  serviceName: 'rova-api',
   nodeEnv: 'test',
   serviceVersion: '1.2.3',
   level: 'info',
@@ -58,14 +58,14 @@ describe('createLoggerOptions', () => {
 
   it('stamps service, env and version on every line', () => {
     const props = optionsOf(createLoggerOptions(base)).customProps?.();
-    expect(props).toEqual({ service: 'rally-api', env: 'test', version: '1.2.3' });
+    expect(props).toEqual({ service: 'rova-api', env: 'test', version: '1.2.3' });
   });
 
   it('takes the service name from the caller, so api and worker differ', () => {
     const worker = optionsOf(
-      createLoggerOptions({ ...base, serviceName: 'rally-worker' }),
+      createLoggerOptions({ ...base, serviceName: 'rova-worker' }),
     ).customProps?.();
-    expect(worker?.['service']).toBe('rally-worker');
+    expect(worker?.['service']).toBe('rova-worker');
   });
 
   it('disables autoLogging so the interceptor owns the request line', () => {

@@ -26,7 +26,7 @@ import { startOtel, shutdownOtel } from '@quynhonsemiconductor/observability/ote
 
 export { shutdownOtel };
 
-startOtel({ defaultServiceName: 'rally-api' });
+startOtel({ defaultServiceName: 'rova-api' });
 ```
 
 ```ts
@@ -36,7 +36,7 @@ import { startOtel, shutdownOtel } from '@quynhonsemiconductor/observability/ote
 export { shutdownOtel };
 
 startOtel({
-  defaultServiceName: 'rally-worker',
+  defaultServiceName: 'rova-worker',
   serviceNameEnvVar: 'OTEL_WORKER_SERVICE_NAME',
 });
 ```
@@ -78,7 +78,7 @@ they consume no sampling budget and no quota.
 
 ```ts
 startOtel({
-  defaultServiceName: 'rally-api',
+  defaultServiceName: 'rova-api',
   // Milliseconds. Strictly ascending, finite, non-negative.
   httpDurationBoundaries: [0, 100, 500, 1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 300_000],
 });
@@ -143,7 +143,7 @@ LoggerModule.forRootAsync({
   inject: [AppConfigService],
   useFactory: (config: AppConfigService) =>
     createLoggerOptions({
-      serviceName: 'rally-api',
+      serviceName: 'rova-api',
       nodeEnv: config.get('NODE_ENV'),
       serviceVersion: config.get('SERVICE_VERSION'),
       level: config.get('LOG_LEVEL'),

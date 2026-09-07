@@ -77,19 +77,19 @@ describe('startOtel', () => {
     });
 
     it('falls back to the caller-supplied name', () => {
-      startOtel({ defaultServiceName: 'rally-api' });
-      expect(nodeSdkConstructor.mock.calls[0][0]).toMatchObject({ serviceName: 'rally-api' });
+      startOtel({ defaultServiceName: 'rova-api' });
+      expect(nodeSdkConstructor.mock.calls[0][0]).toMatchObject({ serviceName: 'rova-api' });
     });
 
     it('reads the env var the caller nominates, so worker and api can differ', () => {
       // A single task definition can host both processes; without a distinct var
       // they would report as the same service.
-      process.env['OTEL_WORKER_SERVICE_NAME'] = 'rally-worker';
+      process.env['OTEL_WORKER_SERVICE_NAME'] = 'rova-worker';
       startOtel({
         defaultServiceName: 'fallback',
         serviceNameEnvVar: 'OTEL_WORKER_SERVICE_NAME',
       });
-      expect(nodeSdkConstructor.mock.calls[0][0]).toMatchObject({ serviceName: 'rally-worker' });
+      expect(nodeSdkConstructor.mock.calls[0][0]).toMatchObject({ serviceName: 'rova-worker' });
     });
 
     it('stamps namespace, version, environment and instance id on the resource', () => {

@@ -27,7 +27,7 @@ const REDACTED_PATHS: readonly string[] = [
 ];
 
 export interface LoggerFactoryOptions {
-  /** Value of the `service` field on every line — `rally-api`, `rally-worker`. */
+  /** Value of the `service` field on every line — `rova-api`, `rova-worker`. */
   serviceName: string;
   /** `NODE_ENV`, used for the `env` field and the pretty-print default. */
   nodeEnv: string;

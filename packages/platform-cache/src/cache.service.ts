@@ -45,11 +45,17 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     // on `isAvailable` (status === 'ready') and never issue a command — so the
     // connection is never established and the cache is permanently reported
     // "unavailable". Eager connect avoids this.
+    // Auto-pipelining batches commands issued in the same event-loop tick into a
+    // single round trip. `Promise.all([...])` gives concurrency, not batching —
+    // without this, the two denylist reads `JwtAuthGuard` performs on every
+    // authenticated request cost two round trips instead of one. The saving
+    // applies to any call site that fires independent commands together.
     this.client = new Redis(url, {
       keyPrefix: this.options.keyPrefix,
       enableReadyCheck: true,
       maxRetriesPerRequest: 3,
       lazyConnect: false,
+      enableAutoPipelining: true,
     });
 
     this.client.on('error', (err) => this.logger.error({ err }, 'Cache connection error'));

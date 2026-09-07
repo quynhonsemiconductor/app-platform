@@ -1,0 +1,58 @@
+{
+  "name": "@quynhonsemiconductor/platform-runtime",
+  "version": "0.1.0",
+  "description": "Shared runtime primitives for QNSC product backends: env loading, typed config, exclusive scheduled jobs, and request-arrival timing.",
+  "license": "UNLICENSED",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./load-env": {
+      "types": "./dist/config/load-env.d.ts",
+      "default": "./dist/config/load-env.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quynhonsemiconductor/app-platform.git",
+    "directory": "packages/platform-runtime"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@nestjs/common": ">=11",
+    "@nestjs/config": ">=4",
+    "@quynhonsemiconductor/observability": ">=0.2.0",
+    "@quynhonsemiconductor/platform-cache": ">=3.0.0",
+    "fastify": ">=5",
+    "zod": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "fastify": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@quynhonsemiconductor/observability": "workspace:^",
+    "@quynhonsemiconductor/platform-cache": "workspace:^",
+    "fastify": "^5.12.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.4.3"
+  }
+}

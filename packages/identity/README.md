@@ -133,6 +133,45 @@ into a token that can be replayed for ever — the suite is what catches it. Sam
 family revocation scope (theft detection) and `upsertBySsoIdentity` linking an
 existing email instead of creating a second account.
 
+### Running them against a REAL adapter
+
+The example above is the in-memory shape. Pointing the suite at a Drizzle adapter
+needs two more options, and until 7.1.0 it could not be done at all — which is why
+no product runs these today:
+
+```ts
+import {
+  describeAuthSessionRepositoryContract,
+  SESSION_CONTRACT_USER_IDS,
+} from '@quynhonsemiconductor/identity/testing';
+
+// Deterministic: the suite maps the same logical name more than once.
+const uuidFor = (logical: string) => uuidv5(logical, FIXTURE_NAMESPACE);
+
+describeAuthSessionRepositoryContract({
+  name: 'AuthSessionDrizzleRepository',
+  id: uuidFor,
+  seedUsers: async (userIds) => {
+    await db.delete(authSessions);
+    await db.insert(users).values(userIds.map(seedUserRow)).onConflictDoNothing();
+  },
+  create: async () => new AuthSessionDrizzleRepository(),
+});
+```
+
+**`id`** exists because the fixtures are logical names (`'session-1'`). A `uuid`
+column rejects those with `22P02 invalid input syntax for type uuid` before a single
+assertion runs. **`seedUsers`** exists because `auth_sessions.user_id` is a foreign
+key — the parent rows have to exist first. `SESSION_CONTRACT_USER_IDS` is exported so
+you know exactly which ones. `describeUserRepositoryContract` takes `absentId` and
+`absentEmail` for the same reason.
+
+`revokeByIdIfActive wins exactly once under REAL concurrency` is the assertion worth
+the setup. The sequential case passes even for an adapter that reads and then writes
+in two statements — the second call simply sees the first's committed result. Only
+firing them together separates a genuine compare-and-swap from a race, and that
+distinction is what single-use rotation rests on.
+
 The in-memory classes (`InMemoryUserRepository`, `InMemoryAuthSessionRepository`,
 `InMemoryTransactionRunner`, `StubClaimsProvider`, `RecordingAuditService`,
 `RecordingAuthContext`) are usable directly in your own tests. They carry real

@@ -12,47 +12,47 @@
   "changelog-sections": [
     {
       "type": "feat",
-      "section": "\u2728 Features"
+      "section": "✨ Features"
     },
     {
       "type": "fix",
-      "section": "\ud83d\udc1b Bug Fixes"
+      "section": "🐛 Bug Fixes"
     },
     {
       "type": "perf",
-      "section": "\u26a1 Performance"
+      "section": "⚡ Performance"
     },
     {
       "type": "refactor",
-      "section": "\u267b\ufe0f Refactors",
+      "section": "♻️ Refactors",
       "hidden": false
     },
     {
       "type": "security",
-      "section": "\ud83d\udd12 Security"
+      "section": "🔒 Security"
     },
     {
       "type": "deps",
-      "section": "\ud83d\udce6 Dependencies"
+      "section": "📦 Dependencies"
     },
     {
       "type": "chore",
-      "section": "\ud83d\udd27 Chores",
+      "section": "🔧 Chores",
       "hidden": true
     },
     {
       "type": "ci",
-      "section": "\ud83d\udc77 CI/CD",
+      "section": "👷 CI/CD",
       "hidden": true
     },
     {
       "type": "docs",
-      "section": "\ud83d\udcda Docs",
+      "section": "📚 Docs",
       "hidden": true
     },
     {
       "type": "test",
-      "section": "\u2705 Tests",
+      "section": "✅ Tests",
       "hidden": true
     }
   ],
@@ -76,8 +76,13 @@
       "package-name": "@quynhonsemiconductor/observability",
       "component": "observability",
       "changelog-path": "CHANGELOG.md"
+    },
+    "packages/platform-runtime": {
+      "package-name": "@quynhonsemiconductor/platform-runtime",
+      "component": "platform-runtime",
+      "changelog-path": "CHANGELOG.md"
     }
   },
   "pull-request-title-pattern": "chore(release): ${component} ${version}",
-  "pull-request-header": "\ud83e\udd16 Opened by Release Please. Merging tags `${component}-v${version}` and publishes the package to GitHub Packages."
+  "pull-request-header": "🤖 Opened by Release Please. Merging tags `${component}-v${version}` and publishes the package to GitHub Packages."
 }

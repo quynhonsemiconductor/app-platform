@@ -57,7 +57,7 @@
     "@opentelemetry/sdk-node": "^0.220.0",
     "@opentelemetry/sdk-trace-base": "^2.9.0",
     "@opentelemetry/semantic-conventions": "^1.41.1",
-    "nestjs-pino": "^4.6.1",
+    "nestjs-pino": "^5.1.0",
     "pino": "^10.3.1",
     "reflect-metadata": "^0.2.2",
     "@nestjs/common": "^11.0.0",

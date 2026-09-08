@@ -4,12 +4,24 @@
 name: Publish
 
 on:
+  # Re-publish an existing tag without tag surgery. Needed the first time a new
+  # package is added and this allowlist is not updated with it: release-please
+  # tags and releases correctly, no workflow fires, and the only other way to
+  # recover is deleting and re-pushing a tag that already has a GitHub Release
+  # attached. Same permission level as pushing the tag in the first place.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish, e.g. platform-runtime-v0.1.1'
+        required: true
+        type: string
   push:
     tags:
       - 'identity-v*'
       - 'platform-cache-v*'
       - 'platform-http-v*'
       - 'observability-v*'
+      - 'platform-runtime-v*'
 
 permissions:
   contents: read
@@ -24,6 +36,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
+          # On a tag push this is already the tag; on a manual run it is the
+          # default branch, so check out the tag the operator named.
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4
         with:
@@ -46,9 +61,11 @@ jobs:
 
       - name: Resolve package directory from tag
         id: pkg
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${TAG}"
           component="${tag%-v*}"
           dir="packages/${component}"
           if [ ! -d "$dir" ]; then

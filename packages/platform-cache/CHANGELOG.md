@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v3.0.0...platform-cache-v3.1.0) (2026-09-08)
+
+
+### ✨ Features
+
+* add platform-runtime, make the conformance kit runnable against real adapters ([#98](https://github.com/quynhonsemiconductor/app-platform/issues/98)) ([486783f](https://github.com/quynhonsemiconductor/app-platform/commit/486783f69edd0090a8251626bd7b032909945c10))
+
 ## [3.0.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v2.1.0...platform-cache-v3.0.0) (2026-09-05)
 
 

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
@@ -23,7 +23,15 @@ import { ConfigService } from '@nestjs/config';
  */
 @Injectable()
 export class TypedConfigService<TEnv extends Record<string, unknown>> {
-  constructor(private readonly config: ConfigService<TEnv, true>) {}
+  // `@Inject(ConfigService)` explicitly, rather than relying on the parameter type
+  // alone. Two reasons, and the first is not style: `consistent-type-imports` sees a
+  // constructor annotation as a type-only usage and would have this import rewritten
+  // to `import type`, which erases the class at runtime — `design:paramtypes` then
+  // emits `Object` and Nest cannot resolve the dependency at all. Naming the token
+  // makes the import a real value usage, and makes the wiring independent of
+  // `emitDecoratorMetadata` either way. Same shape `AuthTokenCache` uses in
+  // `@quynhonsemiconductor/identity`.
+  constructor(@Inject(ConfigService) private readonly config: ConfigService<TEnv, true>) {}
 
   /**
    * Read a validated variable.

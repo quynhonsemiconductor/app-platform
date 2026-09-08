@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { CacheService } from '@quynhonsemiconductor/platform-cache';
 import { JobMetrics, withJobContext } from '@quynhonsemiconductor/observability';
 
@@ -47,7 +47,11 @@ export class ExclusiveJob {
    */
   private readonly running = new Set<string>();
 
-  constructor(private readonly cache: CacheService) {}
+  // Token named explicitly — see the note in `TypedConfigService`. A bare parameter
+  // annotation reads as a type-only import to `consistent-type-imports`, and taking
+  // that advice would erase `CacheService` at runtime and break injection silently.
+  // This is the one deviation from the file as it stood in `rova`/`opshub`.
+  constructor(@Inject(CacheService) private readonly cache: CacheService) {}
 
   /**
    * Run `fn` under a cluster-wide lock named after the job.

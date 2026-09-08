@@ -33,7 +33,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "jose": "^6.2.3",
+    "jose": "^6.2.11",
     "uuidv7": "^1.2.1"
   },
   "peerDependencies": {

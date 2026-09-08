@@ -35,7 +35,17 @@ updates:
     labels: ["dependencies"]
     commit-message:
       prefix: "deps"
-    open-pull-requests-limit: 10
+    # ZERO = Dependabot opens no npm VERSION pull requests. Renovate owns those now
+    # (org preset: quynhonsemiconductor/.github renovate-config.json).
+    #
+    # SECURITY updates are unaffected and keep flowing — they come from the advisory
+    # database and ignore this file entirely, which is why the ecosystem block stays
+    # here rather than being deleted. Deleting it would look equivalent and is not.
+    #
+    # The groups below are therefore dormant for npm. They are kept because they are
+    # correct, and because reverting this one line is the whole of stepping back from
+    # Renovate if that is ever wanted.
+    open-pull-requests-limit: 0
     groups:
       # MINOR AND PATCH ONLY, and the exclusion is the point of the grouping.
       #

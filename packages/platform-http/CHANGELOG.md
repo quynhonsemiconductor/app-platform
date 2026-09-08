@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.1](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v4.0.0...platform-http-v4.0.1) (2026-09-08)
+
+
+### 🐛 Bug Fixes
+
+* **platform-http:** align the fastify devDependency on ^5.12.3 ([#122](https://github.com/quynhonsemiconductor/app-platform/issues/122)) ([ae9bf89](https://github.com/quynhonsemiconductor/app-platform/commit/ae9bf89b1007c4714a1286174fef0482f9a0a6c6))
+
 ## [4.0.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v3.1.1...platform-http-v4.0.0) (2026-09-05)
 
 

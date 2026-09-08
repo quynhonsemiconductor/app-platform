@@ -1,0 +1,60 @@
+# =============================================================================
+# PR title — Conventional Commits, in its own workflow.
+#
+# WHY IT MOVED OUT OF ci.yml. The check has to re-run when a title is EDITED,
+# so ci.yml listened for that event — while also setting
+# `cancel-in-progress: true`. Editing a PR title or body therefore CANCELLED
+# the in-flight lint/typecheck/test run and started all of it again, for a
+# change that cannot affect any of it. rova and opshub split this out after
+# hitting a worse version, where the heavy jobs were additionally guarded with
+# `if: github.event.action != 'edited'` — the replacement run SKIPPED them, and
+# GitHub counts a skipped required check as PASSING, so the PR went green
+# having executed nothing. This repo has no such guards, so it was wasteful
+# rather than wrong; splitting removes the coupling that makes the wrong
+# version one line away.
+#
+# WHY IT NO LONGER RUNS commitlint. The old job did checkout + pnpm/action-setup
+# + setup-node + `pnpm install --frozen-lockfile` in order to pipe ONE STRING
+# into commitlint — minutes of install to validate a title. The shared action
+# reads the title from the event payload and needs no checkout at all.
+#
+# ONE REAL BEHAVIOUR CHANGE, stated rather than glossed: commitlint's
+# `subject-case: never [start-case, pascal-case, upper-case]` accepts a subject
+# beginning with a single capital ("fix: API rate limit"), while the shared
+# action's `^(?![A-Z]).+$` rejects any leading capital. So this is a slight
+# TIGHTENING, onto the rule rova, opshub, qnsc-kb-* and tf-modules already use.
+# The type list is unchanged — commitlint.config.mjs and the action declare the
+# same 13 types. commitlint.config.mjs is KEPT: it still governs real commit
+# messages via the local hook, which is a different surface from PR titles.
+#
+# WHY THE ACTION, NOT ci's REUSABLE WORKFLOW: a job that calls a reusable
+# workflow reports its check as `<caller job>/<called job>`, which would rename
+# this check — and this repo's ruleset REQUIRES "PR title (conventional
+# commits)". A required check that never reports does not fail; it blocks every
+# merge.
+# =============================================================================
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  # Deliberately NOT the ci group. Sharing one is what let a title edit cancel
+  # a test run.
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read # required by the action's underlying semantic-pull-request step
+
+jobs:
+  pr-title:
+    # This name IS the required check. Do not rename it.
+    name: PR title (conventional commits)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No checkout: the action reads the title from the event payload.
+      - uses: quynhonsemiconductor/ci/actions/pr-title-conventional-commits@v1

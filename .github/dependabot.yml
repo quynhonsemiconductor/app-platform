@@ -35,22 +35,26 @@ updates:
     labels: ["dependencies"]
     commit-message:
       prefix: "deps"
-    # Back to 10. The handover to Renovate was applied before Renovate could
-    # actually take over, which left npm updated by NOTHING in this repo.
+    # ZERO = Dependabot opens no npm VERSION pull requests. Renovate owns them now.
     #
-    # Two prerequisites are still open, and both must hold before this goes to 0
-    # again:
-    #   1. Renovate mode is still "Silent" — it opens no PRs at all.
-    #   2. Renovate cannot READ the first-party packages. Its own dashboard reports
-    #      "Failed to look up npm package @quynhonsemiconductor/{identity,
-    #      observability,platform-cache,platform-http,platform-runtime}: no-result".
-    #      GitHub Packages is a private scope and Renovate's installation token does
-    #      not cover the packages registry, so it needs hostRules with an encrypted
-    #      read:packages token in the org preset.
+    # Both prerequisites that forced the earlier revert are now met:
+    #   1. Renovate is out of Silent mode with Automated PRs on, set at the org
+    #      level so every repository inherits it.
+    #   2. Renovate can READ the first-party packages. Its dashboard reported
+    #      "no-result" for all five @quynhonsemiconductor/* packages until a host
+    #      rule bound npm.pkg.github.com to a read:packages token belonging to the
+    #      qnsc-bot machine account. The Dependency Lookup Warnings panel is now
+    #      clear. Note the binding lives in the Mend UI, NOT in
+    #      .github/renovate-config.json — config-based secret templating did not
+    #      resolve on the hosted app.
     #
-    # Until (2) is fixed, Dependabot is the ONLY thing that can see those five —
-    # which is precisely the set this org's shared-platform work depends on.
-    open-pull-requests-limit: 10
+    # SECURITY updates are unaffected and keep flowing: they come from the advisory
+    # database and ignore this file entirely. That is why the ecosystem block stays
+    # rather than being deleted — deleting it looks equivalent and is not.
+    #
+    # github-actions, terraform and pip stay with Dependabot until Renovate's own
+    # dashboard shows it detecting them here. Evidence, not assumption.
+    open-pull-requests-limit: 0
     groups:
       # MINOR AND PATCH ONLY, and the exclusion is the point of the grouping.
       #

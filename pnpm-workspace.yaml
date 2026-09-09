@@ -1,2 +1,56 @@
 packages:
   - "packages/*"
+
+# Transitive CVE floors. Everything here is a package this repo does NOT declare: it
+# arrives under a dev or build tool whose own declared range already admits the fix, so
+# the lockfile was simply resolved before the advisory published.
+#
+# WHY THIS BLOCK EXISTS AT ALL. Until now there was no `overrides:`, and
+# `security / Dependency CVE scan (osv-scanner)` ran REPORT-ONLY — the shared workflow
+# defaults `osv_blocking` to false and nothing set it — so sixteen findings printed as
+# warnings inside a job that concluded `success`. `osv_blocking` is set to true in the
+# same change that clears them.
+overrides:
+  # GHSA-5p4m-2wfm-xmqj (CVE-2026-59870, quadratic CPU in !!omap resolution, fixed
+  # 4.3.1) and GHSA-2883-xcg3-v3hh (fixed 4.3.2), CVSS 7.5 each. The second walks past
+  # the first's mitigation: `maxTotalMergeKeys` counts only the keys a merge actually
+  # CONTRIBUTES, so an alias chain of EMPTY merge sources costs CPU without ever
+  # incrementing the counter the limit reads.
+  #
+  # `^` and not `>=`: the looser form resolves into 5.x, a major nothing here declares.
+  "js-yaml@4": "^4.3.2"
+  # GHSA-5jgf-p345-68v8, GHSA-7p8r-x3mc-p8w7, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf
+  # and GHSA-jqff-g426-hqxp — CVSS 7.5 each, five advisories against one URI parser:
+  # host confusion and SSRF via failed IDN canonicalisation, a backslash authority
+  # introducer, malformed and repeated authority forms, and percent-encoded schemes.
+  # Fixed in 3.1.6 on the 3.x line.
+  #
+  # THE UPPER BOUND IS THE POINT. An unbounded floor resolves the newest thing that
+  # satisfies it, and this tree already carries an independent fast-uri 4.1.4 — so
+  # `>=3.1.6` alone would collapse the 3.x consumers onto a major none of them declare.
+  # That is not hypothetical: it is the exact failure rova's own fast-uri entry records,
+  # where an override written to close this parser's holes is what carried its tree into
+  # an unpatched major and became the thing tripping its scanner.
+  "fast-uri@<3.1.6": ">=3.1.6 <4.0.0"
+  # GHSA-rgw5-rvv9-x895 (CVSS 7.5, DoS via unbounded intermediate arrays) and
+  # GHSA-mh99-v99m-4gvg. The first explicitly BYPASSES the second's mitigation, so the
+  # second's fixes are not safe floors — only newer ones.
+  #
+  # THREE entries, one per major present in this tree (1.1.16, 2.1.2, 5.0.8), because
+  # the advisory is patched per major: 1.1.18, 2.1.4, 5.0.9. This DIVERGES from rova,
+  # which forces its whole tree to 5.0.9 — it could do that because it had already
+  # verified its consumers accept a forced 5.x. Nothing here has verified that, and a
+  # per-major floor is exactly as effective without the cross-major push, which is the
+  # thing the fast-uri entry above exists to warn about.
+  "brace-expansion@<1.1.18": ">=1.1.18 <2.0.0"
+  "brace-expansion@>=2.0.0 <2.1.4": ">=2.1.4 <3.0.0"
+  "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9"
+  # GHSA-fxqj-rqcc-2cmp (CVSS 6.3) — incomplete fix of GHSA-6g55-p6wh-862q: an
+  # attacker-controlled `sourceMappingURL` is still read. Fixed in 8.5.23. Build
+  # toolchain only.
+  "postcss@<8.5.23": ">=8.5.23"
+  # GHSA-2v37-7h3g-55p8 (CVSS 8.2) — a custom generator can loop indefinitely when size
+  # is zero. Reached only through postcss, which calls it with a fixed non-zero size, so
+  # the zero-size path is not reachable here; floored anyway so the scanner stays clean.
+  # NOT forced across majors: postcss declares ^3.3.11 and nanoid 4.x+ is ESM-only.
+  "nanoid@>=3.0.0 <3.3.18": "3.3.18"

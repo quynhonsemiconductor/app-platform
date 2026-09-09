@@ -44,6 +44,17 @@ jobs:
       product: qnsc-app-platform
       scan_container: false # no Dockerfile — skip Trivy, keep Semgrep + Gitleaks + osv
       node_version: '22'
+      # ENFORCED, not report-only. The shared workflow defaults this to false and
+      # nothing here had set it, so osv-scanner printed sixteen findings as warnings
+      # inside a job that concluded `success`. A green check that means "the scanner
+      # ran" rather than "the tree is clean" is worse than no check, because it is read
+      # as the second thing — and this repo publishes the packages every product
+      # consumes, so a floor missing here is a floor missing downstream.
+      #
+      # Every finding it was hiding is cleared in the same change that sets this, so it
+      # is turned on against a clean tree rather than left to be triaged later — which
+      # is how it came to be false in the first place.
+      osv_blocking: true
     # security.yml declares no secrets — nothing to pass (no `secrets: inherit`).
 
   actions-security:

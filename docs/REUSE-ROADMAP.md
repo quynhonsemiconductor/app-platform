@@ -1,7 +1,7 @@
 # Shared-platform roadmap and implementation plan
 
-> **Status:** WP-0 and WP-1 shipped; **WP-2 withdrawn** — replaced by the conformance kit — **v3, supersedes v1 of 2026-09-07**
-> **Date:** 2026-09-07
+> **Status:** WP-0 and WP-1 shipped **and adopted**; **WP-2 withdrawn**; **WP-3 measured and not needed** — **v4, supersedes v3**
+> **Date:** 2026-09-08
 > **Consumers:** `rova` · `opshub` · `solodesk` · Learning (new)
 > **Related:** [ADMISSION-TEST.md](./ADMISSION-TEST.md) · [LOCAL-CREDENTIALS.md](./LOCAL-CREDENTIALS.md)
 
@@ -90,14 +90,21 @@ it works whatever ORM a future product picks.
 |---|---|---|
 | **WP-0** | **Done** | `enableAutoPipelining` in `platform-cache`; argon2 parameters pinned in `solodesk` with rehash-on-login; timing equalisation; per-IP login limit; reset now revokes live access tokens |
 | **WP-1** | **Done** | `@quynhonsemiconductor/platform-runtime@0.1.0` — published-ready, builds clean, tests green |
-| **WP-2** | **Shipped** | `@quynhonsemiconductor/identity-drizzle@0.1.0` — transaction runner, auth-session repository (the CAS), and `createUserRepository` minus `upsertBySsoIdentity` (see below). SSO connection repository still out: one consumer |
-| WP-3 | Not started | `platform-email` |
+| **WP-2** | **Withdrawn** | `identity-drizzle` was built, adopted into `solodesk`, then **deleted**. The package no longer exists. Replaced by the port-conformance kit in `identity` 7.1.0 — §0.0 |
+| **WP-3** | **Not needed** | `platform-email` — measured, and the duplication is not there. §0.2 |
 | WP-4 / WP-5 / WP-6 | Not started | Convergence; audit/notifications; the guard decision |
 
-**Product adoption has NOT happened for any package.** Both new packages exist and
-build; no product imports either yet. That is deliberate — the plan's own sequencing
-says one product at a time with a staging soak, and WP-2 touches three live auth
-paths.
+**Adoption HAS happened, as of 2026-09-08.** `rova` and `opshub` both consume
+`platform-runtime@0.1.1` — `load-env`, `registerRequestTiming`, `ExclusiveJob`
+(2 and 9 cron sites), `AppConfigModule` and `TypedConfigService` — and both moved to
+`identity@7.1.0` and `platform-cache@3.1.0`. `solodesk` deliberately does not:
+four of the five `platform-runtime` pieces have no counterpart there, and the fifth
+is a 7-line `validateEnv` whose divergence is inconsistent rather than a defect,
+which ADMISSION-TEST.md puts in the product.
+
+The conformance kit shipped in `identity@7.1.0` and had **zero consumers** until
+rova's e2e suite began running it against the real Drizzle adapter — the thing WP-2's
+withdrawal was supposed to buy, finally collected.
 
 ### What WP-2 0.1.0 deliberately left out
 
@@ -120,7 +127,8 @@ column is needed, and none was added.
 
 All three products consume `@quynhonsemiconductor/*` from **GitHub Packages**, not as
 workspace links — `solodesk`'s `CLAUDE.md` states this explicitly, and its `.npmrc`
-confirms it. So `platform-runtime@0.1.0` and `identity-drizzle@0.1.0` cannot be
+confirms it. So `platform-runtime@0.1.0` and `identity-drizzle@0.1.0` (since
+withdrawn — §0.0) cannot be
 installed by any consumer until release-please publishes them.
 
 `solodesk`'s adoption was written and **typechecked clean** against a temporary local
@@ -189,6 +197,52 @@ and the `returning` clause (2 of 3 fail, pass again on restore). **solodesk's e2
 suite was NOT run** — that machine has no `.env` and no running Postgres or Valkey,
 so `tsc --noEmit` is the ceiling there and the argon2/login/reset changes are
 typecheck-verified only.
+
+---
+
+## 0.2 WP-3 was measured and is not needed
+
+`platform-email` was carried as pending work on the strength of "~700 lines across
+9 files". That number counts lines that EXIST TWICE, not lines that are THE SAME —
+the same measurement error that produced WP-2, made once more.
+
+Diffed file by file, rova against opshub:
+
+| File | rova lines | differing |
+|---|---|---|
+| `email-delivery.service.ts` | 85 | **6** |
+| `email.provider.ts` | 69 | 61 |
+| `providers/dev.provider.ts` | 40 | 40 |
+| `providers/ses.provider.ts` | 96 | 115 |
+| `providers/resend.provider.ts` | 100 | 121 |
+| `email.service.ts` | 95 | 119 |
+| `email-scheduler.service.ts` | 82 | 125 |
+| `templates/index.ts` | 239 | 422 |
+| `providers/shared.ts` | — | rova only |
+
+**Exactly one file is duplicated.** Everything else diverges by as much as or more
+than its own length — a diff larger than the file means the two share a name and
+little else. `templates/index.ts` at 422 differing lines over 239 is not duplication
+at all; §4's own WP-3 steps already said to leave templates in the products because
+they are product vocabulary.
+
+The provider abstraction was the part worth extracting, and it is the most divergent:
+`dev.provider.ts` differs on 40 of 40 lines. Sharing it would mean parameterising
+what differs, which is precisely the shape WP-2 was withdrawn for — and the heuristic
+that came out of that withdrawal applies unchanged: **if making something shareable
+requires adding configuration, it probably should not be shared as code.**
+
+ADMISSION-TEST.md settles the rest. Two products sending differently-worded emails is
+neither a security defect nor a cross-repo contract break. It is the case the test
+exists to keep out.
+
+**What would change this.** `IEmailProvider` — the interface alone, not the
+implementations — is a genuine contract and would be worth sharing at a third
+consumer. Learning needs email and would otherwise become that third divergent copy,
+so the decision is worth reopening THEN, on the interface only, with these numbers
+re-measured against three products rather than two.
+
+**Not done, deliberately:** no package, no extraction, no parameterisation.
 
 ---
 
@@ -271,6 +325,11 @@ Domain modules (`projects`, `assets`, `qms`, `catalog-inventory`, …) · author
 ---
 
 ## 3. `@quynhonsemiconductor/identity-drizzle`
+
+> **SUPERSEDED — this package was withdrawn and deleted. See §0.0.**
+> Kept because the design and the measurements that killed it are the useful part:
+> the parameterisation it needed is the shape to recognise next time. Do not build
+> from this section.
 
 Three products independently wrote adapters against `identity`'s own ports.
 
@@ -366,6 +425,9 @@ Steps:
 
 ### WP-2 — `identity-drizzle`
 
+> **SUPERSEDED — withdrawn, see §0.0.** The port-conformance kit in `identity` 7.1.0
+> replaced it, and rova now runs that kit against its real adapter.
+
 **New package** `@quynhonsemiconductor/identity-drizzle`, 0.1.0. Contents from §3.4.
 
 Steps:
@@ -386,6 +448,11 @@ Steps:
 **Risk: this is the highest-risk package here.** It touches the auth path of three live products. One owner, one product at a time, staging soak between each.
 
 ### WP-3 — `platform-email`
+
+> **SUPERSEDED — measured and not needed, see §0.2.** The "~700 lines" below counts
+> lines that exist twice, not lines that are the same. Diffed, exactly one file of
+> nine is duplicated. Kept for the steps, which remain the right shape IF a third
+> consumer ever justifies reopening it — on the interface only.
 
 **New package**, 0.1.0. The ~700-line email subsystem from §2.3.
 
@@ -422,14 +489,14 @@ Decide explicitly: converge on the package version, or delete it from the packag
 ```
 WP-0  perf fixes           ── independent, do now
 WP-1  platform-runtime     ── low risk, proves the model
-WP-2  identity-drizzle     ── after WP-1; highest risk; one product at a time
-WP-3  platform-email       ── after WP-1
+WP-2  identity-drizzle     ── WITHDRAWN (§0.0); conformance kit instead
+WP-3  platform-email       ── NOT NEEDED (§0.2); revisit at a third consumer
 WP-6  guard decision       ── any time; it is a decision
 WP-5  audit/notifications  ── after Learning exists
 WP-4  convergence          ── reassess later
 ```
 
-Learning consumes `platform-runtime`, `identity-drizzle`, and `platform-email` from its first commit, so it never becomes the fourth divergent copy of anything.
+Learning consumes `platform-runtime` and the `identity` package (including its port-conformance kit) from its first commit. It does NOT consume `identity-drizzle` or `platform-email` — neither exists, and §0.0 and §0.2 record why. Email is where Learning could still become a third divergent copy, which is the trigger for reopening §0.2 on the interface alone.
 
 ---
 
@@ -438,8 +505,9 @@ Learning consumes `platform-runtime`, `identity-drizzle`, and `platform-email` f
 | Package | Change | Version |
 |---|---|---|
 | `platform-runtime` | New | 0.1.0 → 1.0.0 at three consumers |
-| `identity-drizzle` | New | 0.1.0 → 1.0.0 at four consumers |
-| `platform-email` | New | 0.1.0 → 1.0.0 at three consumers |
+| ~~`identity-drizzle`~~ | **Withdrawn** | never published; §0.0 |
+| ~~`platform-email`~~ | **Not needed** | not built; §0.2 |
+| `identity` | port-conformance kit | 7.1.0 |
 | `platform-cache` | `enableAutoPipelining` | patch |
 | `identity`, `platform-http`, `observability` | none required | unchanged |
 

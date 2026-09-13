@@ -6,6 +6,10 @@
  * renders the wire-error envelope, cursor & offset pagination helpers, the
  * AsyncLocalStorage request-context service, the HTTP logging & idempotency
  * interceptors, and the Valkey-backed rate-limit guard + tiers.
+ *
+ * Also carries `sanitizeString` / `sanitizeObject` — XSS input stripping applied ahead of
+ * validation. Shared rather than per-product because divergence there is a security
+ * defect (see docs/ADMISSION-TEST.md).
  */
 export * from './errors';
 export * from './http';

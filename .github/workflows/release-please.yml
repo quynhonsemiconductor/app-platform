@@ -18,4 +18,4 @@ jobs:
       config_file: release-please-config.json
       manifest_file: .release-please-manifest.json
     secrets:
-      RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      QNSC_AUTOMATION_PRIVATE_KEY: ${{ secrets.QNSC_AUTOMATION_PRIVATE_KEY }}

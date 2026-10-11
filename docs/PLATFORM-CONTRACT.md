@@ -227,6 +227,7 @@ required variable that is missing is a **startup error that names the variable**
 |            | `AZURE_FEDERATED_TOKEN_FILE`                                                                    | —                                             | path of the projected ServiceAccount token: workload identity federation, no stored secret. Wins over a client secret whenever it is set                                                                                     |
 |            | `AZURE_CLIENT_SECRET`                                                                           | —                                             | local testing only; **refused when `NODE_ENV=production`**                                                                                                                                                                   |
 |            | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT`, `MAIL_SMTP_FROM`                                            | `localhost`, `1025`, `noreply@localhost.test` | `smtp` only (Mailpit); non-production                                                                                                                                                                                        |
+|            | `MAIL_SMOKE_TO`                                                                                 | — (required by the smoke test)                | read only by `platform-mail-smoke`, never by the app: one address in `@qnsc.vn`                                                                                                                                              |
 | Storage    | `S3_*`                                                                                          |                                               | Product-owned (R2 through the S3 API) with per-product names (`S3_ATTACHMENTS_BUCKET`, …). **Not part of the contract until WP-17** (decided 2026-10-10, Q4)                                                                 |
 | AI         | `LITELLM_BASE_URL`, `LITELLM_API_KEY`                                                           | —                                             | [§15](#15-ai)                                                                                                                                                                                                                |
 
@@ -576,6 +577,36 @@ Applications**; no tenant-wide `Mail.Send`.
   trigger (about 1,000 external emails a day, a Microsoft sending restriction, or a marketing need).
 - Templates and rendering are the product's. The platform receives finished HTML and text.
 - No bounce or complaint processing yet; non-delivery reports land in each product mailbox.
+
+### Per-environment mail policy
+
+Decided for **every** product (2026-10-11):
+
+| Environment           | Transport                       | Mailbox                                                                           | Who receives it                                                                          |
+| --------------------- | ------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **dev / local**       | `MAIL_TRANSPORT=smtp` → Mailpit | none                                                                              | **nobody**: Mailpit keeps every message; nothing is delivered                            |
+| **staging** (if kept) | `graph`                         | its **own** `noreply-<product>-staging@qnsc.vn`, with its own Exchange RBAC scope | restricted to `@qnsc.vn` by an **Exchange transport rule**; no customer address delivers |
+| **prod**              | `graph`                         | `noreply-<product>@qnsc.vn`                                                       | real recipients; a **post-deploy smoke test** after every deploy                         |
+
+**A non-prod app never uses a prod mailbox.** Staging and dev have no scope on the production mailbox,
+so the attempt is a `403`, not a delivered email; and the production mailbox's scope names only the
+production app.
+
+> **Mailpit is a mailbox for secrets, not a toy.** It stores every message in clear — password-reset
+> and verification **links included** — and has **no login** unless you add one. Whoever can open its web
+> UI can take over any account whose link it holds. **Never expose it publicly:** no Cloudflare Tunnel
+> route, no public Ingress or `NodePort`, no port published on a shared host. Reach it from inside the
+> cluster or with `kubectl port-forward`. It is for dev and local only.
+
+- **Post-deploy smoke test (prod, and staging when it is kept).** After every deploy a step runs
+  `platform-mail-smoke` inside the product image (a Kubernetes post-install/post-upgrade Job, or a CI
+  step that `exec`s into a pod). It builds the sender from the same environment as the app, sends **one**
+  message directly (not through the queue, so it proves the Graph path even when no worker runs) to
+  `MAIL_SMOKE_TO`, and exits `0` only on success. `MAIL_SMOKE_TO` is required and its domain must be
+  exactly `qnsc.vn`: the smoke test never emails anyone else. It refuses `smtp` in production. Exit
+  codes tell the failures apart: `2` configuration, `3` authentication, `4` **403 — the Exchange
+  scope is wrong**, `5` throttled, `6` sender mailbox not found, `1` anything else. It prints the
+  code, the status and the provider's request id, never a token or a body.
 
 ### `platform-mail` (WP-8)
 

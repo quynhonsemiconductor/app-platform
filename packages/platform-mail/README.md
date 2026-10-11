@@ -11,6 +11,7 @@ limit, and never sending the same message twice.
 | `graph` transport, `smtp` transport (non-production)    | which mailbox is yours, and its Exchange RBAC       |
 | `mail.send` handler: idempotency, pacing, retry         | when to email at all (in-app first, digests)        |
 | `/testing`: in-memory sender, conformance suites        | bounce handling (later ADR), marketing (never here) |
+| `platform-mail-smoke`: the post-deploy check            | where it runs (a Job or a CI step), and to whom     |
 
 Email decision (APP-PLATFORM-PLAN APD-13): **all** mail goes through Microsoft Graph from the
 product's own shared mailbox. Cloudflare Email Service and Resend are future transports behind this
@@ -66,6 +67,26 @@ Configuration comes from the environment only; there are no options besides it.
 - `smtp` **refuses to load when `NODE_ENV=production`**: the factory throws, and the module itself
   throws at `require` time (the check runs before `nodemailer` is loaded). The package root does not
   export it.
+
+## Environments
+
+The decided policy for every product:
+
+| Environment           | Transport                       | Mailbox                                                                           | Who receives it                                                                          |
+| --------------------- | ------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **dev / local**       | `MAIL_TRANSPORT=smtp` → Mailpit | none                                                                              | **nobody**: Mailpit keeps every message; nothing is delivered                            |
+| **staging** (if kept) | `graph`                         | its **own** `noreply-<product>-staging@qnsc.vn`, with its own Exchange RBAC scope | restricted to `@qnsc.vn` by an **Exchange transport rule**; no customer address delivers |
+| **prod**              | `graph`                         | `noreply-<product>@qnsc.vn`                                                       | real recipients; a **post-deploy smoke test** after every deploy                         |
+
+**A non-prod app never uses a prod mailbox.** Staging and dev have no scope on the production mailbox,
+so the attempt is a `403`, not a delivered email; and the production mailbox's scope names only the
+production app.
+
+> **Mailpit is a mailbox for secrets, not a toy.** It stores every message in clear — password-reset
+> and verification **links included** — and has **no login** unless you add one. Whoever can open its web
+> UI can take over any account whose link it holds. **Never expose it publicly:** no Cloudflare Tunnel
+> route, no public Ingress or `NodePort`, no port published on a shared host. Reach it from inside the
+> cluster or with `kubectl port-forward`. It is for dev and local only.
 
 ## Sending
 
@@ -395,6 +416,131 @@ done
 In the cluster (workload identity, no secret): `kubectl exec` into a pod of the product and run the
 second snippet with `MAIL_TRANSPORT=graph` and `NODE_ENV=production`; the credential is the projected
 token at `AZURE_FEDERATED_TOKEN_FILE`.
+
+## Post-deploy smoke test
+
+A green `/readyz` does not mean the product can send mail: it never talks to Exchange. A wrong
+mailbox, a missing federated token, a management scope that was never assigned, an app without the
+role — each stays invisible until the first password reset fails. `platform-mail-smoke` finds out
+right after the deploy.
+
+```bash
+MAIL_SMOKE_TO=platform-ops@qnsc.vn SERVICE_VERSION=1.4.2 platform-mail-smoke
+# platform-mail-smoke: OK transport=graph id=<Microsoft's request id>
+```
+
+- It builds the sender from **the same environment as the app** (`MAIL_TRANSPORT`,
+  `MAIL_GRAPH_SENDER`, the workload-identity token) and sends **one** message with category
+  `ops.smoke` and a subject carrying the version (`SERVICE_VERSION`) and a timestamp.
+- **`MAIL_SMOKE_TO` is required and its domain must be exactly `qnsc.vn`.** A missing one, another
+  domain, a subdomain, a list or a display name is refused (exit 2) and nothing is sent: the smoke test
+  never emails a customer.
+- It **bypasses the queue** (a direct `send()`), so it proves the Graph path even when no worker, no
+  database and no Valkey are running.
+- It **refuses `smtp` when `NODE_ENV=production`**, exactly like the app.
+- It gives up after 60 s: a deploy step must never hang.
+- It prints **one line**: the code, the status and the provider's request id. Never a token, a
+  message body, a recipient or the provider's free text. (A `config` failure also prints the error's
+  own text, which names a variable and never its value.)
+
+| Exit | Meaning                                                                                                                     | What to look at                                                                             |
+| ---- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `0`  | one message was accepted                                                                                                    | —                                                                                           |
+| `1`  | any other failure: provider down (5xx), timeout, network, a rejected message                                                | Microsoft 365 service health; retry the job                                                 |
+| `2`  | **configuration**: a variable is missing or refused (`MAIL_SMOKE_TO`, `smtp` in production, a client secret in production…) | the message names the variable                                                              |
+| `3`  | **authentication**: no token could be obtained, or Graph answered 401                                                       | workload identity: the ServiceAccount, the federated credential, `AZURE_CLIENT_ID`          |
+| `4`  | **forbidden (403)**: the app may not send from this mailbox                                                                 | **the Exchange RBAC scope** (management scope and role assignment) for this app and mailbox |
+| `5`  | throttled (429) even after the transport's own retries                                                                      | the mailbox's quota; wait, then retry                                                       |
+| `6`  | the sender mailbox does not exist (404)                                                                                     | `MAIL_GRAPH_SENDER`                                                                         |
+
+### Kubernetes: a Helm post-install / post-upgrade hook
+
+A Job in the product's own image, in the same namespace and ServiceAccount as the app (the ServiceAccount
+carries the federated credential), with the same environment:
+
+```yaml
+# templates/mail-smoke-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-mail-smoke
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Argo CD renders Helm hooks as its own sync hooks; there use these instead:
+    # argocd.argoproj.io/hook: PostSync
+    # argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 0 # a failure is a finding, not something to retry until it passes
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccountName }} # the SAME one the app uses
+      containers:
+        - name: mail-smoke
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}" # the product image
+          command: ['node', 'node_modules/@quynhonsemiconductor/platform-mail/dist/smoke/cli.js']
+          envFrom: # exactly what the app gets: MAIL_TRANSPORT, MAIL_GRAPH_SENDER, AZURE_*
+            - configMapRef: { name: {{ .Release.Name }}-config }
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: AZURE_FEDERATED_TOKEN_FILE, value: /var/run/secrets/azure/tokens/azure-identity-token }
+            - { name: SERVICE_VERSION, value: {{ .Values.image.tag | quote }} }
+            - { name: MAIL_SMOKE_TO, value: platform-ops@qnsc.vn }
+          volumeMounts:
+            - { name: azure-identity-token, mountPath: /var/run/secrets/azure/tokens, readOnly: true }
+      volumes:
+        - name: azure-identity-token # the projected ServiceAccount token (workload identity)
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: api://AzureADTokenExchange
+                  expirationSeconds: 3600
+                  path: azure-identity-token
+```
+
+The path in `command` is where your image installs the package; `npx platform-mail-smoke` works too if
+the image has `node_modules/.bin` on its path. A non-zero exit fails the Job, and so the hook, and so
+the release: read the exit code with `kubectl get pod -l job-name=… -o jsonpath='{..exitCode}'` and the
+table above. `helm upgrade --wait` makes Helm wait for the hook.
+
+### GitHub Actions: after the deploy
+
+Assumes the job already has `kubectl` access to the cluster, however the deploy job gets it:
+
+```yaml
+smoke-mail:
+  needs: deploy
+  runs-on: ubuntu-latest
+  steps:
+    - name: Wait for the rollout
+      run: kubectl -n rova rollout status deploy/rova-api --timeout=300s
+
+    - name: Mail smoke test
+      run: |
+        set +e
+        kubectl -n rova exec deploy/rova-api -- \
+          env MAIL_SMOKE_TO=platform-ops@qnsc.vn \
+          node node_modules/@quynhonsemiconductor/platform-mail/dist/smoke/cli.js
+        code=$?
+        case "$code" in
+          0) exit 0 ;;
+          2) echo "::error::mail smoke test: configuration (see the line above)" ;;
+          3) echo "::error::mail smoke test: authentication - check workload identity" ;;
+          4) echo "::error::mail smoke test: 403 - the Exchange RBAC scope is wrong for this mailbox" ;;
+          5) echo "::error::mail smoke test: throttled - retry later" ;;
+          6) echo "::error::mail smoke test: the sender mailbox does not exist" ;;
+          *) echo "::error::mail smoke test failed (exit $code)" ;;
+        esac
+        exit "$code"
+```
+
+`kubectl exec` returns the container command's exit code, and the pod already has the app's environment
+and federated token, so nothing is copied. Run it for **prod** after every deploy, and for **staging**
+when staging is kept; never against dev (there is no mailbox to prove).
 
 ## Testing
 

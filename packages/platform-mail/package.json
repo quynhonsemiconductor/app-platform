@@ -5,6 +5,9 @@
   "license": "UNLICENSED",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "platform-mail-smoke": "dist/smoke/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -58,3 +58,11 @@ export {
   type MailQueue,
   type MailTelemetry,
 } from './jobs';
+export {
+  SMOKE_CATEGORY,
+  SMOKE_DOMAIN,
+  SMOKE_EXIT,
+  SMOKE_TIMEOUT_MS,
+  runSmoke,
+  type SmokeDeps,
+} from './smoke/smoke';

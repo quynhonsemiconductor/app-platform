@@ -154,8 +154,14 @@ async function hasSession(auth: Identity, request: Request): Promise<boolean> {
   try {
     const getSession = (auth.api as unknown as Record<string, unknown>)['getSession'] as (input: {
       headers: Headers;
+      query: { disableRefresh: boolean };
     }) => Promise<unknown>;
-    return (await getSession({ headers: request.headers })) !== null;
+    // `disableRefresh`: this is a question, not a request. A refresh here would update the session and
+    // discard the Set-Cookie it produces, and the handler's own lookup would then find nothing due and
+    // never send the client the refreshed cookie.
+    return (
+      (await getSession({ headers: request.headers, query: { disableRefresh: true } })) !== null
+    );
   } catch {
     return false;
   }

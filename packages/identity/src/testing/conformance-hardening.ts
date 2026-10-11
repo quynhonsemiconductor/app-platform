@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { createAuthClient } from 'better-auth/client';
 import { createServer } from 'node:http';
 import { hash as argon2hash } from '@node-rs/argon2';
-import { revokeAllSessions, SessionStoreUnavailableError } from '../create-identity';
+import {
+  revokeAllSessions,
+  revokeUserSessions,
+  SessionStoreUnavailableError,
+  setUserBanned,
+} from '../create-identity';
 import { DEFAULTS } from '../defaults';
 import { signDeviceValue } from '../known-device';
 import { lockoutKeys } from '../lockout';
@@ -2344,6 +2349,27 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       }
     }, 60_000);
 
+    it('the session lookup that decides whether to open a transaction does not refresh the session', async () => {
+      const { client, id } = await newOwner();
+      // a session that is due its daily refresh, served from Postgres, with no cookie-cache cookie
+      await stack.pool.query(
+        `update identity.session set created_at = created_at - interval '2 days',
+                updated_at = updated_at - interval '2 days', expires_at = expires_at - interval '2 days'
+          where user_id = $1`,
+        [id],
+      );
+      await stack.flushCache();
+      client.setCookies(
+        Object.fromEntries(
+          Object.entries(client.cookies).filter(([name]) => !name.endsWith('session_data')),
+        ),
+      );
+      const res = await client.post(`${API}/organization/create`, { name: 'Acme', slug: slugOf() });
+      expect(res.status, res.body).toBe(200);
+      // the refresh happens once, in the handler, and its Set-Cookie reaches the client
+      expect(res.setCookie.some((line) => /session_token=/.test(line))).toBe(true);
+    });
+
     it('setActiveOrganization is inside the create: when it fails, no organization is left (HTTP and server side)', async () => {
       const { client } = await newOwner();
       await stack.pool.query(`
@@ -2515,5 +2541,338 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
           drop trigger if exists slow_member_t on identity.member;`);
       }
     }, 60_000);
+  });
+
+  describe('revokeUserSessions and setUserBanned: service-side controls over one user', () => {
+    let idp: MockIdp;
+    let stack: Stack;
+    t.beforeAll(async () => {
+      idp = await startMockIdp();
+      stack = await startStack(infra, {
+        presets: ['public', 'staff'],
+        staff: { authority: idp.base },
+      });
+    });
+    t.afterAll(async () => {
+      await stack?.stop();
+      await idp?.stop();
+    });
+
+    const staffEmail = () => `sso-${randomUUID().slice(0, 6)}@${STAFF_DOMAIN}`;
+    const idOf = async (email: string) =>
+      (
+        await stack.pool.query<{ id: string }>(`select id from identity."user" where email = $1`, [
+          email,
+        ])
+      ).rows[0]!.id;
+    const tokensOf = async (userId: string) =>
+      (
+        await stack.pool.query<{ token: string }>(
+          `select token from identity.session where user_id = $1`,
+          [userId],
+        )
+      ).rows.map((r) => r.token);
+    const alive = async (c: ReturnType<Stack['client']>) =>
+      (await c.get(`${API}/get-session?disableCookieCache=true`)).json() !== null;
+    const updatedAt = async (userId: string) =>
+      (
+        await stack.pool.query<{ t: Date }>(
+          `select updated_at as t from identity."user" where id = $1`,
+          [userId],
+        )
+      ).rows[0]!.t;
+    const banRow = async (userId: string) =>
+      (
+        await stack.pool.query<{ banned: boolean; ban_reason: string | null }>(
+          `select banned, ban_reason from identity."user" where id = $1`,
+          [userId],
+        )
+      ).rows[0]!;
+    /** A verified password user with `n` extra signed-in browsers. */
+    const user = async (n = 2) => {
+      const email = uniqueEmail('target');
+      const password = strongPassword();
+      await verifiedUser(stack, email, password, expect);
+      const clients = [];
+      for (let i = 0; i < n; i += 1) {
+        const c = stack.client();
+        expect((await signIn(c, email, password)).status).toBe(200);
+        clients.push(c);
+      }
+      return { email, password, id: await idOf(email), clients };
+    };
+    const staffIdentity = (email: string, oid: string) => ({
+      sub: 's',
+      oid,
+      tid: TEST_TENANT,
+      email,
+      name: 'Staff',
+    });
+
+    it('revokeUserSessions ends every session of that user in Postgres AND Valkey, and of nobody else', async () => {
+      const target = await user(2);
+      const bystander = await user(1);
+      const tokens = await tokensOf(target.id);
+      expect(tokens.length).toBeGreaterThanOrEqual(2);
+      for (const token of tokens) expect(await stack.get(token)).not.toBeNull();
+      const before = await updatedAt(target.id);
+
+      const count = await revokeUserSessions(stack.auth, target.id);
+
+      expect(count).toBe(tokens.length);
+      expect(await tokensOf(target.id)).toEqual([]);
+      for (const token of tokens) expect(await stack.get(token)).toBeNull();
+      expect(await stack.get(`active-sessions-${target.id}`)).toBeNull();
+      for (const c of target.clients) expect(await alive(c)).toBe(false);
+      expect(await alive(bystander.clients[0]!)).toBe(true);
+      expect((await tokensOf(bystander.id)).length).toBeGreaterThan(0);
+      // the remembered devices die with it: the epoch the known-device cookie is bound to moved
+      expect((await updatedAt(target.id)).getTime()).toBeGreaterThan(before.getTime());
+      // idempotent, and an unknown user is simply nobody
+      expect(await revokeUserSessions(stack.auth, target.id)).toBe(0);
+      expect(await revokeUserSessions(stack.auth, randomUUID())).toBe(0);
+    });
+
+    it('emits sessions.revoked with the user id and a count, and nothing personal', async () => {
+      const target = await user(1);
+      const held = (await tokensOf(target.id)).length;
+      const before = stack.events.length;
+      await revokeUserSessions(stack.auth, target.id);
+      const events = stack.events.slice(before).filter((e) => e.name === 'sessions.revoked');
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ userId: target.id, detail: { count: held } });
+      expect(JSON.stringify(events).includes(target.email)).toBe(false);
+    });
+
+    it('setUserBanned(true): the sessions go, nobody can sign in again (password AND Microsoft), the reason is stored; unbanning restores it', async () => {
+      const email = staffEmail();
+      const oid = randomUUID();
+      const staff = await microsoftSignIn(stack, idp, staffIdentity(email, oid));
+      expect(await alive(staff.client)).toBe(true);
+      const id = await idOf(email);
+      const target = await user(2);
+
+      await setUserBanned(stack.auth, id, true, 'offboarded');
+      await setUserBanned(stack.auth, target.id, true);
+
+      expect(await alive(staff.client)).toBe(false);
+      for (const c of target.clients) expect(await alive(c)).toBe(false);
+      expect(await tokensOf(id)).toEqual([]);
+      expect(await tokensOf(target.id)).toEqual([]);
+      expect(await banRow(id)).toEqual({ banned: true, ban_reason: 'offboarded' });
+
+      const again = await microsoftSignIn(stack, idp, staffIdentity(email, oid));
+      expect(again.callback.setCookie.some((l) => /session_token=/.test(l))).toBe(false);
+      expect(await alive(again.client)).toBe(false);
+      const blocked = stack.client();
+      expect((await signIn(blocked, target.email, target.password)).status).toBe(403);
+      expect(await alive(blocked)).toBe(false);
+      expect(await tokensOf(target.id)).toEqual([]);
+      expect(stack.events.some((e) => e.name === 'admin.user_banned' && e.userId === id)).toBe(
+        true,
+      );
+
+      await setUserBanned(stack.auth, id, false);
+      await setUserBanned(stack.auth, target.id, false);
+      const back = await microsoftSignIn(stack, idp, staffIdentity(email, oid));
+      expect(await alive(back.client)).toBe(true);
+      const again2 = stack.client();
+      expect((await signIn(again2, target.email, target.password)).status).toBe(200);
+      expect(await banRow(id)).toEqual({ banned: false, ban_reason: null });
+    });
+
+    it('setUserBanned bounds the reason, and refuses an unknown user', async () => {
+      const target = await user(1);
+      await setUserBanned(stack.auth, target.id, true, 'x'.repeat(900));
+      expect((await banRow(target.id)).ban_reason).toHaveLength(500);
+      await expect(setUserBanned(stack.auth, randomUUID(), true)).rejects.toThrow(/no such user/);
+    });
+
+    it('both refuse while the cache is unavailable, before changing anything; unbanning does not need it', async () => {
+      const down = await startStack(infra, { appValkeyUrl: 'redis://127.0.0.1:1' });
+      try {
+        const email = uniqueEmail('outage');
+        const password = strongPassword();
+        await verifiedUser(down, email, password, expect);
+        const c = down.client();
+        expect((await signIn(c, email, password)).status).toBe(200);
+        const id = (
+          await down.pool.query<{ id: string }>(`select id from identity."user" where email = $1`, [
+            email,
+          ])
+        ).rows[0]!.id;
+        const sessions = async () =>
+          Number(
+            (
+              await down.pool.query(
+                `select count(*)::int as n from identity.session where user_id = $1`,
+                [id],
+              )
+            ).rows[0].n,
+          );
+        const before = await sessions();
+        expect(before).toBeGreaterThan(0);
+
+        await expect(revokeUserSessions(down.auth, id)).rejects.toBeInstanceOf(
+          SessionStoreUnavailableError,
+        );
+        await expect(setUserBanned(down.auth, id, true)).rejects.toBeInstanceOf(
+          SessionStoreUnavailableError,
+        );
+        expect(await sessions()).toBe(before);
+        const flag = await down.pool.query(`select banned from identity."user" where id = $1`, [
+          id,
+        ]);
+        expect(flag.rows[0].banned).toBe(false); // the ban was NOT applied behind the cache's back
+
+        await down.pool.query(`update identity."user" set banned = true where id = $1`, [id]);
+        await setUserBanned(down.auth, id, false); // no session is touched: no cache needed
+        const after = await down.pool.query(`select banned from identity."user" where id = $1`, [
+          id,
+        ]);
+        expect(after.rows[0].banned).toBe(false);
+      } finally {
+        await down.stop();
+      }
+    });
+
+    it('a cache that fails DURING the run leaves the rows for a re-run; a ban stays in place', async () => {
+      const target = await user(2);
+      const sessions = async () => (await tokensOf(target.id)).length;
+      const before = await sessions();
+      const original = stack.cache.del.bind(stack.cache);
+      stack.cache.del = (async () => {
+        throw new Error('cache write failed');
+      }) as typeof stack.cache.del;
+      try {
+        await expect(revokeUserSessions(stack.auth, target.id)).rejects.toBeInstanceOf(
+          SessionStoreUnavailableError,
+        );
+        expect(await sessions()).toBe(before);
+        await expect(setUserBanned(stack.auth, target.id, true, 'flaky')).rejects.toBeInstanceOf(
+          SessionStoreUnavailableError,
+        );
+      } finally {
+        stack.cache.del = original;
+      }
+      // the door is shut even though the sessions could not be ended yet
+      expect((await banRow(target.id)).banned).toBe(true);
+      expect(await sessions()).toBe(before);
+      expect(await revokeUserSessions(stack.auth, target.id)).toBe(before);
+      expect(await sessions()).toBe(0);
+      for (const c of target.clients) expect(await alive(c)).toBe(false);
+    });
+
+    it('mail is optional when no preset sends any: a staff-only instance boots and signs in without it', async () => {
+      const staffOnly = await startStack(infra, {
+        presets: ['staff'],
+        staff: { authority: idp.base },
+        withoutMail: true,
+      });
+      try {
+        const { client } = await microsoftSignIn(
+          staffOnly,
+          idp,
+          staffIdentity(staffEmail(), randomUUID()),
+        );
+        expect((await client.get(`${API}/get-session`)).json()).not.toBeNull();
+        // there is no verification mail to send: Better Auth answers a client error, never a 500
+        const anonymous = await staffOnly
+          .client()
+          .post(`${API}/send-verification-email`, { email: staffEmail() });
+        expect(anonymous.status, anonymous.body).toBeGreaterThanOrEqual(400);
+        expect(anonymous.status).toBeLessThan(500);
+        const signedIn = await client.post(`${API}/send-verification-email`, {
+          email: staffEmail(),
+        });
+        expect(signedIn.status, signedIn.body).toBeGreaterThanOrEqual(400);
+        expect(signedIn.status).toBeLessThan(500);
+      } finally {
+        await staffOnly.stop();
+      }
+    });
+
+    it('a sign-in already in flight when the ban runs mints a session that dies on first use', async () => {
+      const target = await user(0);
+      const id = target.id;
+      await stack.pool.query(`
+        create or replace function hold_race_session() returns trigger language plpgsql as $$
+        begin
+          if exists (select 1 from identity."user" u where u.id = new.user_id and u.email like 'target-%') then
+            perform pg_sleep(1.5);
+          end if;
+          return new;
+        end $$;
+        create trigger hold_race_session_t before insert on identity.session
+          for each row execute function hold_race_session();`);
+      try {
+        const racer = stack.client();
+        // Better Auth has checked `banned` (false) and is about to write the session row...
+        const signingIn = signIn(racer, target.email, target.password);
+        await new Promise((r) => setTimeout(r, 600));
+        // ...when the ban and its revoke run: there is no session to revoke yet
+        await setUserBanned(stack.auth, id, true, 'race');
+        expect((await signingIn).status).toBe(200); // the row is written after the ban
+        expect((await tokensOf(id)).length).toBe(1);
+        expect(await alive(racer)).toBe(false); // first use: refused, and the row is deleted
+        expect(await tokensOf(id)).toEqual([]);
+      } finally {
+        await stack.pool.query(`drop trigger if exists hold_race_session_t on identity.session`);
+      }
+    });
+
+    it('a malformed userId is a plain TypeError at once, never a database error', async () => {
+      for (const bad of [
+        'not-a-uuid',
+        '',
+        "x'; drop table identity.session; --",
+        '1',
+        42 as unknown as string,
+      ]) {
+        await expect(revokeUserSessions(stack.auth, bad)).rejects.toThrow(/userId must be a UUID/);
+        await expect(setUserBanned(stack.auth, bad, true)).rejects.toThrow(/userId must be a UUID/);
+        await expect(setUserBanned(stack.auth, bad, false)).rejects.toThrow(
+          /userId must be a UUID/,
+        );
+      }
+      try {
+        await revokeUserSessions(stack.auth, 'not-a-uuid');
+      } catch (error) {
+        expect((error as Error).name).toBe('TypeError');
+        expect((error as Error).message.includes('not-a-uuid')).toBe(false);
+      }
+    });
+
+    it('also deletes a cached session whose Postgres row is already gone (the per-user list is a second source)', async () => {
+      const target = await user(1);
+      const tokens = await tokensOf(target.id);
+      expect(tokens.length).toBeGreaterThan(0);
+      // what a revoke that ran while the cache was degraded leaves behind: rows gone, cached copies alive
+      await stack.pool.query(`delete from identity.session where user_id = $1`, [target.id]);
+      for (const token of tokens) expect(await stack.get(token)).not.toBeNull();
+      expect(await alive(target.clients[0]!)).toBe(true); // served from Valkey
+
+      const count = await revokeUserSessions(stack.auth, target.id);
+
+      expect(count).toBe(tokens.length);
+      for (const token of tokens) expect(await stack.get(token)).toBeNull();
+      expect(await stack.get(`active-sessions-${target.id}`)).toBeNull();
+      expect(await alive(target.clients[0]!)).toBe(false);
+    });
+
+    it('revokeAllSessions rejects, it does not throw synchronously', async () => {
+      const bogus = {} as unknown as typeof stack.auth;
+      let promise: Promise<number> | undefined;
+      expect(() => {
+        promise = revokeAllSessions(bogus);
+      }).not.toThrow();
+      await expect(promise).rejects.toThrow(/createIdentity/);
+    });
+
+    it('the public preset without mail is a boot error that names mail', async () => {
+      await expect(startStack(infra, { presets: ['public'], withoutMail: true })).rejects.toThrow(
+        /mail/,
+      );
+    });
   });
 }

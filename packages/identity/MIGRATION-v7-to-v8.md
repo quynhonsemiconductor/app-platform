@@ -9,18 +9,19 @@ was retired on 2026-10-10). Renovate never auto-merges this major, so each produ
 
 ## What is removed
 
-| 7.x                                                                   | 8.0.0                                                                                           |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `JwtStrategy`, `JwtAuthGuard`, `AUTH_CONTEXT`, `JWT_STRATEGY_OPTIONS` | `SessionGuard` (global) + `@Public()`, `@CurrentSession()`, `@CurrentUser()` from `/nest`       |
-| `AuthService` (rotation, theft detection, logout, switch-workspace)   | Better Auth sessions; revoke via `auth.api.revokeSession(s)`; see "Behaviour changes"           |
-| `access-token`, `refresh-token`, `AuthTokenCache` (denylist)          | Session revocation is a database update, effective on the next request (staff: no cache)        |
-| `BffService`, `BffSessionStore`, `bff-options`                        | `HttpOnly` session cookie set by Better Auth                                                    |
-| `EntraVerifier`, `EntraOidcClient`                                    | `staff` preset: Microsoft provider, tenant-checked                                              |
-| `oidc/` broker, `ConnectionRegistry`, `SSO_CONNECTION_REPOSITORY`     | `organizations` preset: Better Auth `sso` plugin (providers per organization, verified domains) |
-| `ClaimsProvider`, claims in the token                                 | Nothing: the product looks permissions up on each request (rova already does)                   |
-| `SsoProvisioningHook`                                                 | `hooks.onSsoProvisioned`, `hooks.ssoRole`                                                       |
-| `repository-ports`, `service-ports`, port-conformance kit             | `/testing` conformance kit over the secure defaults                                             |
-| Peers `@nestjs/jwt`, `@nestjs/passport`, `passport`, `passport-jwt`   | Drop them if nothing else uses them                                                             |
+| 7.x                                                                   | 8.0.0                                                                                               |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `JwtStrategy`, `JwtAuthGuard`, `AUTH_CONTEXT`, `JWT_STRATEGY_OPTIONS` | `SessionGuard` (global) + `@Public()`, `@CurrentSession()`, `@CurrentUser()` from `/nest`           |
+| `AuthService` (rotation, theft detection, logout, switch-workspace)   | Better Auth sessions; revoke via `auth.api.revokeSession(s)`; see "Behaviour changes"               |
+| `access-token`, `refresh-token`, `AuthTokenCache` (denylist)          | Session revocation is a database update, effective on the next request (staff: no cache)            |
+| `revokeAllForEmployee`, `revokeUser` (offboarding)                    | `revokeUserSessions(auth, userId)` and `setUserBanned(auth, userId, banned, reason?)`, service side |
+| `BffService`, `BffSessionStore`, `bff-options`                        | `HttpOnly` session cookie set by Better Auth                                                        |
+| `EntraVerifier`, `EntraOidcClient`                                    | `staff` preset: Microsoft provider, tenant-checked                                                  |
+| `oidc/` broker, `ConnectionRegistry`, `SSO_CONNECTION_REPOSITORY`     | `organizations` preset: Better Auth `sso` plugin (providers per organization, verified domains)     |
+| `ClaimsProvider`, claims in the token                                 | Nothing: the product looks permissions up on each request (rova already does)                       |
+| `SsoProvisioningHook`                                                 | `hooks.onSsoProvisioned`, `hooks.ssoRole`                                                           |
+| `repository-ports`, `service-ports`, port-conformance kit             | `/testing` conformance kit over the secure defaults                                                 |
+| Peers `@nestjs/jwt`, `@nestjs/passport`, `passport`, `passport-jwt`   | Drop them if nothing else uses them                                                                 |
 
 ## What you add
 
@@ -28,7 +29,7 @@ was retired on 2026-10-10). Renovate never auto-merges this major, so each produ
    `drizzle-orm`, `pg`, `fastify`. Do not depend on `better-auth` yourself.
 2. **Environment:** `BETTER_AUTH_SECRET` (32+ chars) and, with the `organizations` preset, `IDENTITY_ENCRYPTION_KEY`
    (32 random bytes, base64) — both from Key Vault through External Secrets. Remove the v7 JWT key and BFF secrets.
-3. **Email and jobs:** a `JobEnqueue` binding (`platform-jobs`) and your `AuthEmailTemplates`. Auth emails are enqueued.
+3. **Email and jobs:** a `JobEnqueue` binding (`platform-jobs`) and your `AuthEmailTemplates`. Auth emails are enqueued. **Only the `public` preset sends mail**: a `staff` or `organizations` only product leaves `mail` out (a boot error says so if `public` is configured without it).
 4. **Tables** (below) and one `createIdentity()` call (README).
 5. **Entra:** the staff app registration must be **single-tenant**, emit the `email` optional claim, and have
    `https://<api>/api/auth/callback/microsoft` as a redirect URI. Decide `staff.allowGuests` (rova: `true`, opshub: `false`).

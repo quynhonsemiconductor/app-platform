@@ -52,6 +52,8 @@ export interface StackOptions {
   registeredQueues?: string[];
   /** Give the APP its own pool of this size (assertions keep using `stack.pool`). For tests about connections. */
   poolMax?: number;
+  /** Leave `mail` out of the options, as a staff-only product can. */
+  withoutMail?: boolean;
 }
 
 export interface Stack {
@@ -156,13 +158,17 @@ export async function startStack(
         baseURL: APP_ORIGIN,
         trustedOrigins: [APP_ORIGIN, ...(options.extraTrustedOrigins ?? [])],
         presets,
-        mail: {
-          jobs,
-          templates: {
-            verifyEmail: ({ url }) => ({ subject: 'Verify', html: url, text: url }),
-            resetPassword: ({ url }) => ({ subject: 'Reset', html: url, text: url }),
-          },
-        },
+        ...(options.withoutMail
+          ? {}
+          : {
+              mail: {
+                jobs,
+                templates: {
+                  verifyEmail: ({ url }) => ({ subject: 'Verify', html: url, text: url }),
+                  resetPassword: ({ url }) => ({ subject: 'Reset', html: url, text: url }),
+                },
+              },
+            }),
         ...(presets.includes('staff')
           ? {
               staff: {

@@ -8,11 +8,13 @@ import { purgeWith, replaceUnverifiedAccount, type AccountContext } from './acco
 import { DEFAULTS, type Preset } from './defaults';
 import {
   consoleLogger,
+  emitSafely,
   errorFields,
   noopSink,
   type IdentityLogger,
   type SecurityEventSink,
 } from './events';
+import { bannedSessionGuard } from './banned-guard';
 import { accountLockout } from './lockout';
 import { perEmailLimiter } from './mail-limit';
 import { AuthMail } from './mail-port';
@@ -69,8 +71,12 @@ export interface IdentityOptions {
   /** Static list. Provider origins for SSO are added by the package, after the SSRF check. */
   trustedOrigins: string[];
   presets: Preset[];
-  /** Auth emails are enqueued, never awaited (APP-PLATFORM-PLAN.md §4.3 case 1). */
-  mail: { jobs: JobEnqueue; templates: AuthEmailTemplates };
+  /**
+   * Auth emails are enqueued, never awaited (APP-PLATFORM-PLAN.md §4.3 case 1). **Required with the
+   * `public` preset** (verification and password-reset mail); optional when no configured preset sends
+   * any (`staff`, `organizations`): leaving it out there is the honest configuration.
+   */
+  mail?: { jobs: JobEnqueue; templates: AuthEmailTemplates };
   /**
    * May any signed-in user create an organization? Default `false`: organizations are created by
    * the product (an admin tool, onboarding of a partner). Open creation lets a stranger become an
@@ -111,6 +117,24 @@ function config(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`identity: ${message}`);
 }
 
+// Stand-in for `mail` when no configured preset sends any (it is required with `public`). Nothing calls
+// it; if something ever does, it fails loudly instead of dropping a message.
+const noMail: { jobs: JobEnqueue; templates: AuthEmailTemplates } = {
+  jobs: {
+    send: () => {
+      throw new Error('identity: `mail` is not configured, and no configured preset sends mail');
+    },
+  },
+  templates: {
+    verifyEmail: () => {
+      throw new Error('identity: `mail` is not configured');
+    },
+    resetPassword: () => {
+      throw new Error('identity: `mail` is not configured');
+    },
+  },
+};
+
 // What a product handed us, for helpers that take the built instance (purgeUnverifiedAccounts).
 const internals = new WeakMap<
   object,
@@ -118,6 +142,8 @@ const internals = new WeakMap<
     getContext: () => Promise<AccountContext>;
     sink: SecurityEventSink;
     cache: CacheService;
+    /** Forget that a user was believed not banned (see `banned-guard.ts`). */
+    forgetBan: (userId: string) => void;
     /** How many times the session store (Valkey) has failed so far; see `revokeAllSessions`. */
     degradedCount: () => number;
   }
@@ -143,6 +169,10 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
   config(o.presets.length > 0, 'at least one preset is required');
   config(o.trustedOrigins.length > 0, 'trustedOrigins must not be empty');
   config(!staffPreset || o.staff, 'the staff preset needs `staff` (tenant, client, domains)');
+  config(
+    !publicPreset || o.mail,
+    'the public preset sends verification and password-reset mail: `mail` (jobs and templates) is required',
+  );
   const secret = env[DEFAULTS.secretEnv];
   config(
     secret && secret.length >= MIN_SECRET_LENGTH,
@@ -165,8 +195,8 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     o.onStorageDegraded?.(operation, error);
   });
   const mail = new AuthMail(
-    o.mail.jobs,
-    o.mail.templates,
+    o.mail?.jobs ?? noMail.jobs,
+    o.mail?.templates ?? noMail.templates,
     perEmailLimiter(storage),
     o.logger ?? consoleLogger,
   );
@@ -202,6 +232,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
   const classifier = staffPreset ? staffClassifier(staffPolicy) : undefined;
   const staffBecame = classifier ? staffBecameHooks(staffPolicy, classifier) : undefined;
   const refreshGuard = classifier ? staffRefreshGuard(staffPolicy, classifier) : undefined;
+  const bannedGuard = bannedSessionGuard();
 
   const options = {
     appName: o.product,
@@ -253,8 +284,14 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     emailVerification: {
       sendOnSignUp: publicPreset,
       sendOnSignIn: publicPreset,
-      sendVerificationEmail: (data: { user: User; url: string; token: string }) =>
-        mail.sendVerification(data),
+      // Only with `mail`. Left UNSET when no preset sends any, so Better Auth answers
+      // `/send-verification-email` with a 4xx ("not enabled") instead of a 500 from a placeholder.
+      ...(o.mail
+        ? {
+            sendVerificationEmail: (data: { user: User; url: string; token: string }) =>
+              mail.sendVerification(data),
+          }
+        : {}),
     },
     socialProviders: {
       ...(staffPreset
@@ -315,6 +352,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       admin({ allowImpersonatingAdmins: false }),
       ...(publicPreset ? [twoFactor({ issuer: o.product })] : []),
       ...(refreshGuard ? [refreshGuard] : []),
+      bannedGuard,
       accountLockout(sink),
       companyDomainSignUpGuard(isReserved),
       securityEvents(sink, onSinkError),
@@ -325,6 +363,10 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
   auth = betterAuth(options) as unknown as Identity;
   // Guard `internalAdapter.findSession` as soon as the instance's context exists, not at the first
   // request: a product may call it directly (a socket gateway) before any request has run.
+  void (auth.$context as Promise<object>).then(
+    (context) => bannedGuard.install(context),
+    () => undefined,
+  );
   if (refreshGuard) {
     void (auth.$context as Promise<object>).then(
       (context) => refreshGuard.install(context),
@@ -342,7 +384,13 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     withCallbackErrorCodes(withTimingFloor(handler, AUTH_BASE_PATH)),
     o.logger ?? consoleLogger,
   );
-  internals.set(auth, { getContext, sink, cache: o.cache, degradedCount: () => degraded });
+  internals.set(auth, {
+    getContext,
+    sink,
+    cache: o.cache,
+    forgetBan: bannedGuard.forget,
+    degradedCount: () => degraded,
+  });
   return auth;
 }
 
@@ -373,6 +421,117 @@ export class SessionStoreUnavailableError extends Error {
   override readonly name = 'SessionStoreUnavailableError';
 }
 
+type Internal = NonNullable<ReturnType<typeof identityInternals>>;
+type PurgeContext = {
+  options: {
+    secondaryStorage?: {
+      get(key: string): Promise<unknown>;
+      delete(key: string): Promise<void>;
+    };
+  };
+  adapter: {
+    findMany(args: {
+      model: string;
+      limit: number;
+      where?: Array<{ field: string; value: unknown }>;
+    }): Promise<Array<{ token?: unknown }>>;
+  };
+  internalAdapter: {
+    deleteSessions(tokens: string[]): Promise<unknown>;
+    findUserById(id: string): Promise<{ id: string } | null>;
+    updateUser(id: string, data: Record<string, unknown>): Promise<unknown>;
+  };
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Ids are UUIDs (`uuidv7()` for everything identity creates). Checked up front so that a malformed id
+ * is a plain error here and never reaches PostgreSQL, whose `invalid input syntax for type uuid` would
+ * surface as a raw driver error quoting the value.
+ */
+function assertUserId(userId: unknown, operation: string): asserts userId is string {
+  if (typeof userId !== 'string' || !UUID.test(userId)) {
+    throw new TypeError(`identity: ${operation}: userId must be a UUID`);
+  }
+}
+
+function internalOf(auth: Identity, operation: string): Internal {
+  const internal = internals.get(auth);
+  if (!internal) throw new Error(`identity: ${operation} needs an instance from createIdentity()`);
+  return internal;
+}
+
+function sessionStoreUnavailable(operation: string, detail: string) {
+  return new SessionStoreUnavailableError(
+    `identity: ${operation}: the session cache is not available (${detail}). Cached sessions would survive and come back when it recovers, so nothing more was revoked; run it again when the cache is healthy.`,
+  );
+}
+
+/**
+ * Delete sessions from the cache FIRST, verified, then from Postgres, in batches of 500: of one user
+ * (`userId`) or of everyone. Stops, leaving the rows of the failing batch for a re-run, if the cache
+ * fails. Returns how many sessions it ended.
+ */
+async function purgeSessions(
+  internal: Internal,
+  operation: string,
+  userId?: string,
+): Promise<number> {
+  if (!internal.cache.isAvailable) throw sessionStoreUnavailable(operation, 'not connected');
+  const ctx = (await internal.getContext()) as unknown as PurgeContext;
+  const where = userId === undefined ? {} : { where: [{ field: 'userId', value: userId }] };
+  let revoked = 0;
+  let previous = '';
+  for (;;) {
+    const rows = await ctx.adapter.findMany({ model: 'session', limit: 500, ...where });
+    const tokens = rows.map((r) => r.token).filter((t): t is string => typeof t === 'string');
+    // The database decides when it is done; a batch that did not go away would loop forever.
+    if (tokens.length === 0 || tokens[0] === previous) break;
+    previous = tokens[0]!;
+    // The cache first, and verified: a failed delete is swallowed by the storage (it counts it), and
+    // the rows must stay in Postgres so that a re-run finds them.
+    const failuresBefore = internal.degradedCount();
+    await Promise.all(tokens.map((token) => ctx.options.secondaryStorage?.delete(token)));
+    if (internal.degradedCount() !== failuresBefore || !internal.cache.isAvailable) {
+      throw sessionStoreUnavailable(operation, `${revoked} revoked before it failed`);
+    }
+    await ctx.internalAdapter.deleteSessions(tokens);
+    revoked += tokens.length;
+  }
+  if (userId !== undefined) {
+    // The per-user list Better Auth keeps next to the sessions is a SECOND source of tokens: a session
+    // whose Postgres row is already gone (a revoke that ran while the cache was degraded) can still be
+    // served from Valkey. Delete those copies too, verified, and count what actually existed.
+    const storage = ctx.options.secondaryStorage;
+    const listKey = `active-sessions-${userId}`;
+    const failuresBefore = internal.degradedCount();
+    const raw = await storage?.get(listKey);
+    const listed = new Set<string>();
+    try {
+      const entries: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (Array.isArray(entries)) {
+        for (const entry of entries) {
+          const token = (entry as { token?: unknown } | null)?.token;
+          if (typeof token === 'string') listed.add(token);
+        }
+      }
+    } catch {
+      /* an unreadable list is deleted below */
+    }
+    for (const token of listed) {
+      if ((await storage?.get(token)) == null) continue; // nothing cached under it
+      await storage?.delete(token);
+      revoked += 1;
+    }
+    await storage?.delete(listKey);
+    if (internal.degradedCount() !== failuresBefore || !internal.cache.isAvailable) {
+      throw sessionStoreUnavailable(operation, `${revoked} revoked before it failed`);
+    }
+  }
+  return revoked;
+}
+
 /**
  * Revoke EVERY session of every user, in the database and in the cache. Call it when the session
  * policy of a running system changes: adding the `staff` preset, or moving from `public + staff` to
@@ -385,40 +544,75 @@ export class SessionStoreUnavailableError extends Error {
  * fails during the run. Re-run it when the cache is healthy: what it already revoked stays revoked.
  */
 export async function revokeAllSessions(auth: Identity): Promise<number> {
-  const internal = internals.get(auth);
-  if (!internal)
-    throw new Error('identity: revokeAllSessions needs an instance from createIdentity()');
-  const unavailable = (detail: string) =>
-    new SessionStoreUnavailableError(
-      `identity: revokeAllSessions: the session cache is not available (${detail}). Cached sessions would survive and come back when it recovers, so nothing more was revoked; run it again when the cache is healthy.`,
-    );
-  if (!internal.cache.isAvailable) throw unavailable('not connected');
-  const ctx = (await internal.getContext()) as unknown as {
-    options: { secondaryStorage?: { delete(key: string): Promise<void> } };
-    adapter: {
-      findMany(args: { model: string; limit: number }): Promise<Array<{ token?: unknown }>>;
-    };
-    internalAdapter: { deleteSessions(tokens: string[]): Promise<unknown> };
-  };
-  let revoked = 0;
-  let previous = '';
-  for (;;) {
-    const rows = await ctx.adapter.findMany({ model: 'session', limit: 500 });
-    const tokens = rows.map((r) => r.token).filter((t): t is string => typeof t === 'string');
-    // The database decides when it is done; a batch that did not go away would loop forever.
-    if (tokens.length === 0 || tokens[0] === previous) break;
-    previous = tokens[0]!;
-    // The cache first, and verified: a failed delete is swallowed by the storage (it counts it), and
-    // the rows must stay in Postgres so that a re-run finds them.
-    const failuresBefore = internal.degradedCount();
-    await Promise.all(tokens.map((token) => ctx.options.secondaryStorage?.delete(token)));
-    if (internal.degradedCount() !== failuresBefore || !internal.cache.isAvailable) {
-      throw unavailable(`${revoked} revoked before it failed`);
-    }
-    await ctx.internalAdapter.deleteSessions(tokens);
-    revoked += tokens.length;
+  return purgeSessions(internalOf(auth, 'revokeAllSessions'), 'revokeAllSessions');
+}
+
+/**
+ * Revoke every session of ONE user, service side (no admin session needed): offboarding, a suspected
+ * compromise. Deletes them in the cache and in Postgres and ends the user's remembered devices (the
+ * known-device cookie of a password user). Effective on the next request, also for the staff preset,
+ * which has no cookie cache; with the public cookie cache a session can still be believed for up to
+ * 5 minutes. Returns how many sessions it ended (0 for an unknown user). Safe to re-run.
+ *
+ * Same rule as {@link revokeAllSessions}: **refuses while the cache is unavailable**
+ * ({@link SessionStoreUnavailableError}, before deleting anything), and stops leaving the rows for a
+ * re-run if the cache fails during the run.
+ */
+export async function revokeUserSessions(auth: Identity, userId: string): Promise<number> {
+  assertUserId(userId, 'revokeUserSessions');
+  const internal = internalOf(auth, 'revokeUserSessions');
+  const revoked = await purgeSessions(internal, 'revokeUserSessions', userId);
+  const ctx = (await internal.getContext()) as unknown as PurgeContext;
+  // Moving `user.updatedAt` is what invalidates the known-device cookies (README, lockout).
+  if (await ctx.internalAdapter.findUserById(userId)) {
+    await ctx.internalAdapter.updateUser(userId, { updatedAt: new Date() });
   }
+  await emitSafely(internal.sink, { name: 'sessions.revoked', userId, detail: { count: revoked } });
   return revoked;
+}
+
+/**
+ * Ban or unban a user, service side (no admin session needed). A banned user cannot sign in (Better
+ * Auth's admin plugin refuses the session, for every provider) and every session they hold is ended
+ * as {@link revokeUserSessions} does. `reason` is stored in `user.ban_reason` as given (at most 500
+ * characters): keep personal data out of it.
+ *
+ * **Cookie cache:** with the `public` preset's cookie cache (5 minutes), a banned user's session COOKIE can
+ * still be believed for up to that window, because the cache answers before the session is looked up;
+ * the session itself is gone at once and a new request that reaches the store is refused. The `staff`
+ * preset has no cookie cache. A session minted by a sign-in already in flight when the ban ran is refused
+ * on its first use (the user is checked when a session is read, at most 30 s stale per process).
+ *
+ * Banning **refuses while the cache is unavailable**, before changing anything. If the cache then
+ * fails DURING the revoke, the ban is already in place (the user cannot sign in again) and
+ * {@link SessionStoreUnavailableError} is thrown: call {@link revokeUserSessions} when the cache is
+ * healthy. Unbanning touches no session and does not need the cache. Throws for an unknown user.
+ */
+export async function setUserBanned(
+  auth: Identity,
+  userId: string,
+  banned: boolean,
+  reason?: string,
+): Promise<void> {
+  assertUserId(userId, 'setUserBanned');
+  const internal = internalOf(auth, 'setUserBanned');
+  if (banned && !internal.cache.isAvailable) {
+    throw sessionStoreUnavailable('setUserBanned', 'not connected');
+  }
+  const ctx = (await internal.getContext()) as unknown as PurgeContext;
+  if (!(await ctx.internalAdapter.findUserById(userId))) {
+    throw new Error('identity: setUserBanned: no such user');
+  }
+  await ctx.internalAdapter.updateUser(userId, {
+    banned,
+    banReason: banned ? (reason?.slice(0, 500) ?? null) : null,
+    banExpires: null,
+    updatedAt: new Date(),
+  });
+  internal.forgetBan(userId);
+  if (!banned) return;
+  await emitSafely(internal.sink, { name: 'admin.user_banned', userId });
+  await revokeUserSessions(auth, userId);
 }
 
 export function identityInternals(auth: Identity) {

@@ -167,10 +167,9 @@ the product's own database. External, slow, failure-prone or many-recipient work
   marketing or newsletters through M365** (Microsoft's terms; domain reputation). System alerts
   (Proxmox, PBS, Grafana, Healthchecks) do not use product mailboxes.
 - **Mail per environment (all products):** dev/local sends through `smtp` to Mailpit (nothing is
-  delivered; Mailpit is internal only — it holds reset links and has no login); staging, if kept, uses
-  Graph with its own `noreply-<product>-staging@` mailbox and scope, restricted to `@qnsc.vn` by an
-  Exchange transport rule; prod uses Graph from `noreply-<product>@` and runs a post-deploy smoke test
-  (`platform-mail-smoke`). A non-prod app never uses a prod mailbox.
+  delivered; Mailpit is internal only — it holds reset links and has no login); prod uses Graph from
+  `noreply-<product>@` and runs a post-deploy smoke test (`platform-mail-smoke`). There is no staging.
+  A non-prod app never uses a prod mailbox.
 - One worker deployment per product (same image as the API, `ROLE=worker`) running all queues.
 - SSE through Cloudflare Tunnel and Envoy Gateway: heartbeat every 30 s; the SSE route **must**
   disable Envoy's request timeout (gitops, §7).

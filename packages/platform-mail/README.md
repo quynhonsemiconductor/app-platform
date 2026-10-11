@@ -72,15 +72,14 @@ Configuration comes from the environment only; there are no options besides it.
 
 The decided policy for every product:
 
-| Environment           | Transport                       | Mailbox                                                                           | Who receives it                                                                          |
-| --------------------- | ------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| **dev / local**       | `MAIL_TRANSPORT=smtp` → Mailpit | none                                                                              | **nobody**: Mailpit keeps every message; nothing is delivered                            |
-| **staging** (if kept) | `graph`                         | its **own** `noreply-<product>-staging@qnsc.vn`, with its own Exchange RBAC scope | restricted to `@qnsc.vn` by an **Exchange transport rule**; no customer address delivers |
-| **prod**              | `graph`                         | `noreply-<product>@qnsc.vn`                                                       | real recipients; a **post-deploy smoke test** after every deploy                         |
+| Environment     | Transport                       | Mailbox                     | Who receives it                                                  |
+| --------------- | ------------------------------- | --------------------------- | ---------------------------------------------------------------- |
+| **dev / local** | `MAIL_TRANSPORT=smtp` → Mailpit | none                        | **nobody**: Mailpit keeps every message; nothing is delivered    |
+| **prod**        | `graph`                         | `noreply-<product>@qnsc.vn` | real recipients; a **post-deploy smoke test** after every deploy |
 
-**A non-prod app never uses a prod mailbox.** Staging and dev have no scope on the production mailbox,
-so the attempt is a `403`, not a delivered email; and the production mailbox's scope names only the
-production app.
+**A non-prod app never uses a prod mailbox.** There is no staging: dev sends through Mailpit and has no
+mailbox at all, and the production mailbox's Exchange scope names only the production app, so any other
+app that tries it gets a `403`, not a delivered email.
 
 > **Mailpit is a mailbox for secrets, not a toy.** It stores every message in clear — password-reset
 > and verification **links included** — and has **no login** unless you add one. Whoever can open its web
@@ -539,8 +538,7 @@ smoke-mail:
 ```
 
 `kubectl exec` returns the container command's exit code, and the pod already has the app's environment
-and federated token, so nothing is copied. Run it for **prod** after every deploy, and for **staging**
-when staging is kept; never against dev (there is no mailbox to prove).
+and federated token, so nothing is copied. Run it for **prod** after every deploy; never against dev (there is no mailbox to prove).
 
 ## Testing
 

@@ -68,7 +68,7 @@ export const auth = createIdentity({
   baseURL: env.PUBLIC_API_URL,
   trustedOrigins: [env.WEB_ORIGIN],
   presets: ['public', 'staff', 'organizations'],
-  mail: { jobs, templates }, // platform-jobs / platform-mail; templates are the product's
+  mail: { jobs, templates }, // platform-jobs / platform-mail; required with `public`, optional without (staff, organizations)
   staff: { tenantId, clientId, clientSecret, domains: ['qnsc.vn'], allowGuests: false },
   google: { clientId, clientSecret },
   hooks: { onUserCreated, onSsoProvisioned, ssoRole },
@@ -130,7 +130,7 @@ those change. Every response of 400 or above also carries contract §7's envelop
   unrecognised 4xx is 422). The mounted routes keep Better Auth's statuses (that 4xx is 400) because Better Auth's clients
   expect them. The same condition can therefore be a 400 on `/api/auth/*` and a 422 from your controller.
 
-Better Auth's router no longer prints errors on raw stderr (`# SERVER_ERROR`, which carried the driver's message): identity makes it rethrow what it cannot answer, and logs one structured line instead (`identity.auth_handler_threw`, or `identity.auth_server_error` with the status and Better Auth's code for a 5xx it raised itself).
+Better Auth's router no longer prints errors on raw stderr (`# SERVER_ERROR`, which carried the driver's message): identity makes it rethrow what it cannot answer, and logs one structured line instead (`identity.auth_handler_threw`, or `identity.auth_server_error` with the status and Better Auth's code for a 5xx it raised itself). **Dashboards and alerts keyed on the old COMMIT-failure line (message `Error`, `source: better-auth`) must change to the `code` field `identity.auth_handler_threw`** (same `error`, `cause`, `errorCode`, `correlationId` fields).
 
 A 500 from Better Auth is logged with the error's **class and code** (`error: "DrizzleQueryError"`, `cause`, `errorCode`:
 the SQLSTATE) and the request's `correlationId`, never its message, which a database error fills with the statement or the row.
@@ -196,6 +196,36 @@ current adapter at the start of every request, so the context's adapter is wrapp
 transaction while an organization is being created; a server-side call runs the same `runWithAdapter` the handler does, so
 it never takes a second connection (it holds one, also with a pool of one). A transaction is only opened for a request
 whose session resolves: anonymous requests acquire no connection.
+
+### Per-user controls: `revokeUserSessions`, `setUserBanned`
+
+Service-side, no admin session needed (the admin endpoints of the admin plugin need one): offboarding, a suspected compromise.
+
+```ts
+import { revokeUserSessions, setUserBanned } from '@quynhonsemiconductor/identity';
+
+await revokeUserSessions(auth, userId); // -> how many sessions it ended (0 for an unknown user)
+await setUserBanned(auth, userId, true, 'offboarded'); // ban + end every session
+await setUserBanned(auth, userId, false); // unban
+```
+
+- Both delete the user's sessions in **Valkey and Postgres** (the per-user session list included) and move `user.updatedAt`,
+  which ends the user's remembered devices (the known-device cookie of a password user). They are effective on the next
+  request; with the public cookie cache a session can still be believed for up to 5 minutes (the staff preset has none). They
+  emit `sessions.revoked` (and `admin.user_banned`) with the user id and a count, nothing personal.
+- **Cookie cache.** With the `public` preset's cookie cache (5 minutes) a banned user's session cookie can still be
+  believed for up to that window, because the cache answers before the session is looked up; the session itself is gone at
+  once. The `staff` preset has no cookie cache. A sign-in that was already in flight when the ban ran mints a session that is
+  refused on its first use: the user is checked whenever a session is read (at most 30 s stale per process).
+- `userId` must be a UUID: anything else is a `TypeError` at once, never a database error quoting it.
+- A **banned user cannot sign in**, with any provider (Better Auth's admin plugin refuses the session). `reason` is stored in
+  `user.ban_reason` as given (at most 500 characters): keep personal data out of it. `setUserBanned` throws for an unknown user.
+- **They refuse while the cache is unavailable** (`SessionStoreUnavailableError`, before changing anything), the same rule as
+  `revokeAllSessions` and for the same reason: Valkey is read first and its deletes are silent no-ops while it is down, so rows
+  deleted from Postgres alone would leave sessions that come back when it recovers. If the cache fails _during_ the run the rows
+  of the failing batch are kept for a re-run. For a ban that means the user is already unable to sign in and
+  `SessionStoreUnavailableError` is thrown: call `revokeUserSessions` when the cache is healthy. **Unbanning touches no session and
+  does not need the cache.**
 
 ### Tables
 

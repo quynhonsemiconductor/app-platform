@@ -58,6 +58,9 @@ export type LogFields = Record<string, string | number | boolean>;
 /** Logged at ERROR when Better Auth's handler threw instead of answering; the request got a 500. */
 export const AUTH_HANDLER_THREW = 'identity.auth_handler_threw';
 
+/** Logged at ERROR when Better Auth's handler ANSWERED with a 5xx (an `APIError` it raised itself). */
+export const AUTH_SERVER_ERROR = 'identity.auth_server_error';
+
 /**
  * What may be said about an error in a log line: its class and the SQLSTATE or code it carries, the
  * same for its cause (a Drizzle error wraps the driver's), and the request's correlation id. Never

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import Redis from 'ioredis';
-import type { Pool } from 'pg';
+import { Pool } from 'pg';
 import { CacheService } from '@quynhonsemiconductor/platform-cache';
 import { requestContextStorage } from '@quynhonsemiconductor/observability';
 import { CORRELATION_ID_HEADER, resolveCorrelationId } from '@quynhonsemiconductor/platform-http';
@@ -50,11 +50,15 @@ export interface StackOptions {
   appValkeyUrl?: string;
   /** Queues the job stand-in accepts (as `platform-jobs` accepts only defined ones). Default: all. */
   registeredQueues?: string[];
+  /** Give the APP its own pool of this size (assertions keep using `stack.pool`). For tests about connections. */
+  poolMax?: number;
 }
 
 export interface Stack {
   auth: Identity;
   pool: Pool;
+  /** The pool the app itself uses: `pool`, unless `poolMax` gave it its own. */
+  appPool: Pool;
   db: DbExecutor;
   cache: CacheService;
   jobs: TestJobs;
@@ -98,7 +102,17 @@ export async function startStack(
     if (statement.trim()) await database.pool.query(statement);
   }
   await database.pool.query(TEST_JOBS_DDL);
-  const db = createDatabase(database.pool, { schema: referenceSchema });
+  // Same server, own pool. `pg` keeps the password on `options` NON-ENUMERABLE (so it cannot be
+  // logged), which a spread loses: read it explicitly.
+  const poolOptions = (database.pool as unknown as { options: Record<string, unknown> }).options;
+  const appPool = options.poolMax
+    ? new Pool({
+        ...poolOptions,
+        password: poolOptions['password'] as string,
+        max: options.poolMax,
+      })
+    : database.pool;
+  const db = createDatabase(appPool, { schema: referenceSchema });
 
   const valkey = await infra.valkey();
   const cache = new CacheService({
@@ -209,6 +223,7 @@ export async function startStack(
   return {
     auth,
     pool: database.pool,
+    appPool,
     db,
     cache,
     jobs,
@@ -236,6 +251,7 @@ export async function startStack(
     async stop() {
       raw.disconnect();
       await cache.onApplicationShutdown();
+      if (appPool !== database.pool) await appPool.end().catch(() => undefined);
       await database.stop?.();
     },
   };

@@ -39,6 +39,11 @@ import {
 } from './staff-session';
 import { withCallbackErrorCodes } from './callback-errors';
 import { withErrorEnvelope } from './error-envelope';
+import {
+  makeCreateOrganizationAtomic,
+  prepareAtomicOrganizationCreate,
+  withAtomicOrganizationCreate,
+} from './organization-atomic';
 import { withTimingFloor } from './timing';
 import { withTxCapture } from './tx-context';
 
@@ -208,6 +213,11 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     // fetch-time check (public hosts only) covers discovery.
     trustedOrigins: [...o.trustedOrigins],
     telemetry: { enabled: false },
+    // Better Auth's router prints an error it cannot answer to raw stderr (`# SERVER_ERROR`, with the
+    // driver's message: statements, ids). With `throw` it rethrows instead, and `withErrorEnvelope` logs it
+    // as class, cause and SQLSTATE through the injected logger and answers the hybrid 500. Errors it CAN
+    // answer (`APIError`) are answered as before.
+    onAPIError: { throw: true },
     // Impersonation is OFF in 8.0.0 (review S8). It returns in 8.1 with a required reason, a 1 h limit
     // and an audit record; until then the endpoints do not exist.
     disabledPaths: ['/admin/impersonate-user', '/admin/stop-impersonating'],
@@ -321,8 +331,15 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       () => undefined,
     );
   }
+  // The organization and its owner commit together (identity#206), for both entry points.
+  let handler = auth.handler;
+  if (orgPreset) {
+    prepareAtomicOrganizationCreate(auth);
+    makeCreateOrganizationAtomic(auth);
+    handler = withAtomicOrganizationCreate(handler, auth, AUTH_BASE_PATH);
+  }
   auth.handler = withErrorEnvelope(
-    withCallbackErrorCodes(withTimingFloor(auth.handler, AUTH_BASE_PATH)),
+    withCallbackErrorCodes(withTimingFloor(handler, AUTH_BASE_PATH)),
     o.logger ?? consoleLogger,
   );
   internals.set(auth, { getContext, sink, cache: o.cache, degradedCount: () => degraded });

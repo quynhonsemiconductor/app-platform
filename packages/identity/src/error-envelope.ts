@@ -1,5 +1,11 @@
 import { requestCorrelationId, validCorrelationId } from './correlation';
-import { AUTH_HANDLER_THREW, consoleLogger, errorFields, type IdentityLogger } from './events';
+import {
+  AUTH_HANDLER_THREW,
+  AUTH_SERVER_ERROR,
+  consoleLogger,
+  errorFields,
+  type IdentityLogger,
+} from './events';
 
 /**
  * The platform error envelope (contract section 7) ADDED to what Better Auth's handler answers.
@@ -109,9 +115,11 @@ export function withErrorEnvelope(
 ): (request: Request) => Promise<Response> {
   return async (request) => {
     let response: Response;
+    let threw = false;
     try {
       response = await handler(request);
     } catch (error) {
+      threw = true;
       // Better Auth's router answers its own errors; a throw that gets this far is a bug somewhere
       // around it. Say so (class and code, never the message) before answering, not after.
       logger.error(`${AUTH_HANDLER_THREW}: the authentication handler threw`, {
@@ -121,6 +129,17 @@ export function withErrorEnvelope(
       response = new Response(null, { status: 500 });
     }
     if (response.status < 400) return response;
+    if (!threw && response.status >= 500) {
+      // Better Auth's router no longer logs these itself (identity makes it rethrow what it cannot answer,
+      // so nothing is printed raw on stderr), so the line that says what failed is this one: the status
+      // and Better Auth's own error code, never a message.
+      logger.error(`${AUTH_SERVER_ERROR}: the authentication handler answered ${response.status}`, {
+        code: AUTH_SERVER_ERROR,
+        status: response.status,
+        ...(await bodyCode(response)),
+        ...errorFields(undefined),
+      });
+    }
     const original =
       response.status >= 500
         ? ''
@@ -135,4 +154,14 @@ export function withErrorEnvelope(
     headers.set('content-type', 'application/json; charset=utf-8');
     return new Response(JSON.stringify(body), { status: response.status, headers });
   };
+}
+
+/** The machine code Better Auth put in the body of an error it raised, if it is a plain one. */
+async function bodyCode(response: Response): Promise<{ errorCode?: string }> {
+  try {
+    const { code } = JSON.parse(await response.clone().text()) as { code?: unknown };
+    return typeof code === 'string' && MACHINE_CODE.test(code) ? { errorCode: code } : {};
+  } catch {
+    return {};
+  }
 }

@@ -130,6 +130,8 @@ those change. Every response of 400 or above also carries contract §7's envelop
   unrecognised 4xx is 422). The mounted routes keep Better Auth's statuses (that 4xx is 400) because Better Auth's clients
   expect them. The same condition can therefore be a 400 on `/api/auth/*` and a 422 from your controller.
 
+Better Auth's router no longer prints errors on raw stderr (`# SERVER_ERROR`, which carried the driver's message): identity makes it rethrow what it cannot answer, and logs one structured line instead (`identity.auth_handler_threw`, or `identity.auth_server_error` with the status and Better Auth's code for a 5xx it raised itself).
+
 A 500 from Better Auth is logged with the error's **class and code** (`error: "DrizzleQueryError"`, `cause`, `errorCode`:
 the SQLSTATE) and the request's `correlationId`, never its message, which a database error fills with the statement or the row.
 
@@ -185,8 +187,15 @@ console.log(`revoked ${await revokeAllSessions(auth)} sessions`);
 ```
 
 Organization creation is closed (`allowOrganizationCreation`, default `false`): organizations are created by the product,
-because an organization owner can register an SSO provider. `trustedOrigins` is exactly the list you pass; provider
-origins are never added to it.
+because an organization owner can register an SSO provider.
+**Creating an organization is atomic** (identity#206): the organization row and its owner's `member` row are written in one
+transaction, through `auth.api.createOrganization` and through `POST /api/auth/organization/create` alike, so a failure of
+the second (a grant, a deadlock, a throwing hook) leaves no organization behind and its slug stays free; over HTTP the
+answer is the usual hybrid `500`. `setActiveOrganization` is inside the same transaction. Better Auth's handler resets the
+current adapter at the start of every request, so the context's adapter is wrapped in a thin proxy that follows the
+transaction while an organization is being created; a server-side call runs the same `runWithAdapter` the handler does, so
+it never takes a second connection (it holds one, also with a pool of one). A transaction is only opened for a request
+whose session resolves: anonymous requests acquire no connection.
 
 ### Tables
 

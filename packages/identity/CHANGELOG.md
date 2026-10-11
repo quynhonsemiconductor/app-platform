@@ -1,5 +1,18 @@
 # Changelog
 
+## [8.1.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.0.1...identity-v8.1.0) (2026-10-11)
+
+
+### ✨ Features
+
+* **identity:** hooks.onStaffSignIn, the Entra claims of every Microsoft staff sign-in ([#214](https://github.com/quynhonsemiconductor/app-platform/issues/214)) ([e1653f1](https://github.com/quynhonsemiconductor/app-platform/commit/e1653f18529dba14413fd624ca8fb32ce1a67ff5))
+* **identity:** revokeUserSessions and setUserBanned, service side; mail optional without public ([#215](https://github.com/quynhonsemiconductor/app-platform/issues/215)) ([70cde65](https://github.com/quynhonsemiconductor/app-platform/commit/70cde6584cca3e88b86bb0084342993440fbfb1e))
+
+
+### 🐛 Bug Fixes
+
+* **identity:** create an organization and its owner in one transaction ([#211](https://github.com/quynhonsemiconductor/app-platform/issues/211)) ([6c358b3](https://github.com/quynhonsemiconductor/app-platform/commit/6c358b3ab0d2727933954fe9fe7f08f595a90b02))
+
 ## [8.0.1](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.0.0...identity-v8.0.1) (2026-10-10)
 
 

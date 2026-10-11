@@ -32,6 +32,7 @@ export {
 export { mailIdempotencyKey } from './mail-port';
 export { registerIdentityJobs } from './jobs';
 export { isEntraGuest, type GoogleOptions, type StaffOptions } from './providers';
+export type { StaffSignInClaims } from './callback-errors';
 export type { SsoHooks } from './sso';
 export {
   noopSink,

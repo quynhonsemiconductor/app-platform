@@ -71,7 +71,7 @@ export const auth = createIdentity({
   mail: { jobs, templates }, // platform-jobs / platform-mail; required with `public`, optional without (staff, organizations)
   staff: { tenantId, clientId, clientSecret, domains: ['qnsc.vn'], allowGuests: false },
   google: { clientId, clientSecret },
-  hooks: { onUserCreated, onSsoProvisioned, ssoRole },
+  hooks: { onUserCreated, onStaffSignIn, onSsoProvisioned, ssoRole },
   events, // security events -> observabilitySecurityEvents(logger) / audit
   logger, // Better Auth warnings and errors -> identityLoggerFrom(logger)
 });
@@ -196,6 +196,25 @@ current adapter at the start of every request, so the context's adapter is wrapp
 transaction while an organization is being created; a server-side call runs the same `runWithAdapter` the handler does, so
 it never takes a second connection (it holds one, also with a pool of one). A transaction is only opened for a request
 whose session resolves: anonymous requests acquire no connection.
+
+### Entra claims at sign-in: `hooks.onStaffSignIn`
+
+`onStaffSignIn(user, { oid, tid, email, guest, roles })` runs on **every** Microsoft staff sign-in, after the user exists (created or
+linked) and **before the session is returned**.
+
+- `roles` is the Entra **App Roles** claim validated as `string[]`: `[]` when the token carries none (or a claim of the wrong
+  shape), entries that are not non-empty strings are dropped, duplicates removed.
+- `guest` says whether the token is for a **B2B guest** of the tenant (`acct = 1`, an `idp` other than the issuer, or `#EXT#` in the
+  UPN). It can only be `true` when `staff.allowGuests` is set; otherwise guests are refused before the hook.
+- **A throw refuses the sign-in**: the browser is redirected back with `?error=STAFF_SIGN_IN_REFUSED`, no session row, cookie or
+  cache entry exists (the user and the linked account stay; the next sign-in retries), and the product's error message is on
+  neither the wire nor the logs: one `identity.staff_sign_in_refused` line carries the error's class and code only.
+- **It cannot be skipped.** The Microsoft provider takes the authorization-code flow only: the id_token sign-in
+  (`signInSocial({ idToken })`) is disabled, because it accepts any token valid for the client id with no nonce and would mint
+  a session around the hook. And if a Microsoft session is ever about to be created with no claims recorded for the request, or
+  for a user who does not hold the token's `oid`, it is refused, not minted.
+- It is never called for a refused sign-in (another tenant, a B2B guest when `allowGuests` is false, an address off
+  `staff.domains`), for password or Google sign-in, for SSO, or for `/test-login`.
 
 ### Per-user controls: `revokeUserSessions`, `setUserBanned`
 

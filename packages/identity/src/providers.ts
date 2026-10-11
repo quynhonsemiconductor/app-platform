@@ -1,6 +1,6 @@
 import { decodeJwt } from 'jose';
 import { google } from 'better-auth/social-providers';
-import { refuseCallbackWith } from './callback-errors';
+import { refuseCallbackWith, rememberStaffSignIn, validRoles } from './callback-errors';
 import { emailInDomains } from './domains';
 
 export interface StaffOptions {
@@ -75,6 +75,10 @@ export function microsoftProvider(
     disableDefaultScope: true,
     scope: ['openid', 'profile', 'email'],
     disableProfilePhoto: true,
+    // Authorization-code flow only. The id_token sign-in (`signInSocial({ idToken })`) takes ANY token that
+    // is valid for this client id, with no nonce binding, and never runs the claims through the product's
+    // `onStaffSignIn`: it would mint a session around the hook.
+    disableIdTokenSignIn: true,
     getUserInfo: async (token: { idToken?: string | undefined }) => {
       if (!token.idToken) return null;
       const claims = decodeJwt(token.idToken) as Record<string, unknown>;
@@ -99,6 +103,15 @@ export function microsoftProvider(
         // Tenant membership is the verification: Entra issues no `email_verified`.
         await hooks.onVerifiedEmail(email);
       }
+      // Every check has passed: keep what the token said for the product's `onStaffSignIn`, which runs
+      // when this sign-in's session is created (staff-session.ts), once the user exists.
+      rememberStaffSignIn({
+        oid,
+        tid: staff.tenantId,
+        email,
+        guest,
+        roles: validRoles(claims['roles']),
+      });
       return {
         user: {
           id: oid,

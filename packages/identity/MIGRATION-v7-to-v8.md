@@ -9,19 +9,19 @@ was retired on 2026-10-10). Renovate never auto-merges this major, so each produ
 
 ## What is removed
 
-| 7.x                                                                   | 8.0.0                                                                                               |
-| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `JwtStrategy`, `JwtAuthGuard`, `AUTH_CONTEXT`, `JWT_STRATEGY_OPTIONS` | `SessionGuard` (global) + `@Public()`, `@CurrentSession()`, `@CurrentUser()` from `/nest`           |
-| `AuthService` (rotation, theft detection, logout, switch-workspace)   | Better Auth sessions; revoke via `auth.api.revokeSession(s)`; see "Behaviour changes"               |
-| `access-token`, `refresh-token`, `AuthTokenCache` (denylist)          | Session revocation is a database update, effective on the next request (staff: no cache)            |
-| `revokeAllForEmployee`, `revokeUser` (offboarding)                    | `revokeUserSessions(auth, userId)` and `setUserBanned(auth, userId, banned, reason?)`, service side |
-| `BffService`, `BffSessionStore`, `bff-options`                        | `HttpOnly` session cookie set by Better Auth                                                        |
-| `EntraVerifier`, `EntraOidcClient`                                    | `staff` preset: Microsoft provider, tenant-checked                                                  |
-| `oidc/` broker, `ConnectionRegistry`, `SSO_CONNECTION_REPOSITORY`     | `organizations` preset: Better Auth `sso` plugin (providers per organization, verified domains)     |
-| `ClaimsProvider`, claims in the token                                 | Nothing: the product looks permissions up on each request (rova already does)                       |
-| `SsoProvisioningHook`                                                 | `hooks.onSsoProvisioned`, `hooks.ssoRole`                                                           |
-| `repository-ports`, `service-ports`, port-conformance kit             | `/testing` conformance kit over the secure defaults                                                 |
-| Peers `@nestjs/jwt`, `@nestjs/passport`, `passport`, `passport-jwt`   | Drop them if nothing else uses them                                                                 |
+| 7.x                                                                   | 8.0.0                                                                                                          |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `JwtStrategy`, `JwtAuthGuard`, `AUTH_CONTEXT`, `JWT_STRATEGY_OPTIONS` | `SessionGuard` (global) + `@Public()`, `@CurrentSession()`, `@CurrentUser()` from `/nest`                      |
+| `AuthService` (rotation, theft detection, logout, switch-workspace)   | Better Auth sessions; revoke via `auth.api.revokeSession(s)`; see "Behaviour changes"                          |
+| `access-token`, `refresh-token`, `AuthTokenCache` (denylist)          | Session revocation is a database update, effective on the next request (staff: no cache)                       |
+| `revokeAllForEmployee`, `revokeUser` (offboarding)                    | `revokeUserSessions(auth, userId)` and `setUserBanned(auth, userId, banned, reason?)`, service side            |
+| `BffService`, `BffSessionStore`, `bff-options`                        | `HttpOnly` session cookie set by Better Auth                                                                   |
+| `EntraVerifier`, `EntraOidcClient`                                    | `staff` preset: Microsoft provider, tenant-checked                                                             |
+| `oidc/` broker, `ConnectionRegistry`, `SSO_CONNECTION_REPOSITORY`     | `organizations` preset: Better Auth `sso` plugin (providers per organization, verified domains)                |
+| `ClaimsProvider`, claims in the token                                 | Nothing: the product looks permissions up on each request (rova already does)                                  |
+| `SsoProvisioningHook`                                                 | `hooks.onSsoProvisioned`, `hooks.ssoRole` (organization SSO); `hooks.onStaffSignIn` (Entra staff: roles claim) |
+| `repository-ports`, `service-ports`, port-conformance kit             | `/testing` conformance kit over the secure defaults                                                            |
+| Peers `@nestjs/jwt`, `@nestjs/passport`, `passport`, `passport-jwt`   | Drop them if nothing else uses them                                                                            |
 
 ## What you add
 

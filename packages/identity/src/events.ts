@@ -58,6 +58,12 @@ export type LogFields = Record<string, string | number | boolean>;
 /** Logged at ERROR when Better Auth's handler threw instead of answering; the request got a 500. */
 export const AUTH_HANDLER_THREW = 'identity.auth_handler_threw';
 
+/**
+ * Logged at ERROR when a Microsoft staff sign-in is refused because the product's `onStaffSignIn` threw,
+ * or because it could not be run for this session. Fields: the error's class, cause and code; never its message.
+ */
+export const STAFF_SIGN_IN_REFUSED = 'identity.staff_sign_in_refused';
+
 /** Logged at ERROR when Better Auth's handler ANSWERED with a 5xx (an `APIError` it raised itself). */
 export const AUTH_SERVER_ERROR = 'identity.auth_server_error';
 

@@ -6,7 +6,53 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * specific code from `getUserInfo` to the response of the same request, so the browser lands on
  * `?error=ACCOUNT_LINK_REQUIRED` and the product can tell the user what to do.
  */
-const store = new AsyncLocalStorage<{ code?: string }>();
+const store = new AsyncLocalStorage<{ code?: string; staffSignIn?: StaffSignInClaims }>();
+
+/**
+ * What the Microsoft id_token of a staff sign-in said, validated. `roles` is the Entra App Roles claim:
+ * always an array of strings, empty when the token carries none.
+ */
+export interface StaffSignInClaims {
+  /** The Entra object id: the stable identity of the person in the tenant. */
+  oid: string;
+  tid: string;
+  email: string;
+  /**
+   * Whether the token is for a B2B GUEST of the tenant (Entra marks guests with `acct = 1`, an `idp`
+   * that is not the issuer, or `#EXT#` in the user principal name). Only ever `true` when the product
+   * set `staff.allowGuests`; otherwise guests are refused before the hook.
+   */
+  guest: boolean;
+  roles: string[];
+}
+
+/** An App Roles claim as a bounded, de-duplicated `string[]`; anything that is not an array of strings is `[]`. */
+export function validRoles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const roles = new Set<string>();
+  for (const role of value) {
+    if (typeof role === 'string' && role.length > 0 && role.length <= 256) roles.add(role);
+    if (roles.size >= 200) break;
+  }
+  return [...roles];
+}
+
+/**
+ * Called from inside the Microsoft provider's `getUserInfo`, once the token has passed every check:
+ * keeps the claims for the rest of THIS request, until the session of this sign-in is created.
+ */
+export function rememberStaffSignIn(claims: StaffSignInClaims): void {
+  const slot = store.getStore();
+  if (slot) slot.staffSignIn = claims;
+}
+
+/** The claims of the staff sign-in running in this request, once: taking them clears them. */
+export function takeStaffSignIn(): StaffSignInClaims | undefined {
+  const slot = store.getStore();
+  const claims = slot?.staffSignIn;
+  if (slot) delete slot.staffSignIn;
+  return claims;
+}
 
 /** Called from inside a provider's `getUserInfo`: refuse this sign-in with `code`. */
 export function refuseCallbackWith(code: string): void {

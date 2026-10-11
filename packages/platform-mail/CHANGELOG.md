@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.2...platform-mail-v0.1.3) (2026-10-11)
+
+
+### ✨ Features
+
+* **platform-mail:** post-deploy smoke test and per-environment mail policy ([#213](https://github.com/quynhonsemiconductor/app-platform/issues/213)) ([5806371](https://github.com/quynhonsemiconductor/app-platform/commit/58063715f11316744666373a6da9b236beab514c))
+
 ## [0.1.2](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.1...platform-mail-v0.1.2) (2026-10-10)
 
 

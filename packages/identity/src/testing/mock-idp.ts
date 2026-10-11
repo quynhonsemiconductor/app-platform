@@ -40,6 +40,14 @@ export interface MockIdp {
   base: string;
   /** The identity the NEXT authorisation will sign in. */
   loginAs(identity: IdpIdentity): void;
+  /**
+   * A validly signed Entra-shaped id_token for `identity`, as if the IdP had issued it to `clientId`
+   * for the tenant `tenant`. For tests about the id_token sign-in, which must be refused.
+   */
+  mintIdToken(
+    identity: IdpIdentity,
+    options: { clientId: string; tenant: string },
+  ): Promise<string>;
   /** Requests received, in order, for assertions about what Better Auth asked for. */
   readonly requests: Array<{ method: string; path: string; form?: Record<string, string> }>;
   stop(): Promise<void>;
@@ -206,6 +214,22 @@ export async function startMockIdp(): Promise<MockIdp> {
     base,
     loginAs(identity) {
       next = identity;
+    },
+    async mintIdToken(identity, { clientId, tenant }) {
+      const now = Math.floor(Date.now() / 1000);
+      return sign(privateKey, {
+        iss: `${base}/${identity.tid ?? tenant}/v2.0`,
+        aud: clientId,
+        sub: identity.sub,
+        oid: identity.oid ?? identity.sub,
+        tid: identity.tid ?? tenant,
+        ...(identity.email ? { email: identity.email } : {}),
+        name: identity.name,
+        preferred_username: identity.email,
+        ...identity.claims,
+        iat: now,
+        exp: now + 600,
+      });
     },
     requests,
     stop: () => new Promise<void>((resolve) => server.close(() => resolve())),

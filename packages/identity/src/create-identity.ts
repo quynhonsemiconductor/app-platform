@@ -39,7 +39,7 @@ import {
   staffRefreshGuard,
   staffSessionHooks,
 } from './staff-session';
-import { withCallbackErrorCodes } from './callback-errors';
+import { withCallbackErrorCodes, type StaffSignInClaims } from './callback-errors';
 import { withErrorEnvelope } from './error-envelope';
 import {
   makeCreateOrganizationAtomic,
@@ -87,7 +87,17 @@ export interface IdentityOptions {
   staff?: StaffOptions;
   /** Optional with the `public` preset. */
   google?: GoogleOptions;
-  hooks?: SsoHooks & { onUserCreated?: (user: User) => Promise<void> | void };
+  hooks?: SsoHooks & {
+    onUserCreated?: (user: User) => Promise<void> | void;
+    /**
+     * Runs on EVERY Microsoft staff sign-in, after the user exists (created or linked) and before the
+     * session is returned. `claims.roles` is the Entra App Roles claim, validated as `string[]`
+     * (`[]` when the token carries none). A throw FAILS the sign-in and no session is minted, so a
+     * product can reconcile its roles here and trust that nobody signs in with stale ones. Refused
+     * sign-ins (another tenant, a guest, an address off `staff.domains`) never reach it.
+     */
+    onStaffSignIn?: (user: User, claims: StaffSignInClaims) => Promise<void> | void;
+  };
   /** Security events (`observability` metrics, the audit table). Default: dropped. */
   events?: SecurityEventSink;
   /** Better Auth's warnings and errors (`observability` logger). Default: Better Auth's own console output. */
@@ -330,7 +340,16 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       database: { generateId: () => uuidv7() },
     },
     databaseHooks: {
-      ...(staffPreset ? { session: staffSessionHooks({ staffDomains, getContext }) as never } : {}),
+      ...(staffPreset
+        ? {
+            session: staffSessionHooks({
+              staffDomains,
+              getContext,
+              onStaffSignIn: o.hooks?.onStaffSignIn as never,
+              logger: o.logger ?? consoleLogger,
+            }) as never,
+          }
+        : {}),
       ...(staffPreset ? { account: staffBecame!.account as never } : {}),
       user: {
         create: {

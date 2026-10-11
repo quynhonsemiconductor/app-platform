@@ -15,6 +15,7 @@ import { verifiedUser, signIn } from './flows';
 import {
   API,
   STAFF_DOMAIN,
+  OTHER_TENANT,
   TEST_TENANT,
   startStack,
   strongPassword,
@@ -2873,6 +2874,268 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       await expect(startStack(infra, { presets: ['public'], withoutMail: true })).rejects.toThrow(
         /mail/,
       );
+    });
+  });
+
+  describe('hooks.onStaffSignIn: the Entra claims reach the product on every Microsoft staff sign-in', () => {
+    type Call = {
+      userId: string;
+      email: string;
+      claims: { oid: string; tid: string; email: string; guest: boolean; roles: string[] };
+      userRows: number;
+      accountRows: number;
+    };
+    let idp: MockIdp;
+    let stack: Stack;
+    const calls: Call[] = [];
+    let behaviour: 'ok' | 'throw' = 'ok';
+
+    t.beforeAll(async () => {
+      idp = await startMockIdp();
+      stack = await startStack(infra, {
+        presets: ['public', 'staff'],
+        staff: { authority: idp.base },
+        hooks: {
+          onStaffSignIn: async (user, claims) => {
+            // what the product can rely on when the hook runs: the user and the Microsoft account exist
+            const users = await stack.pool.query(`select 1 from identity."user" where id = $1`, [
+              user.id,
+            ]);
+            const accounts = await stack.pool.query(
+              `select 1 from identity.account where user_id = $1 and provider_id = 'microsoft' and account_id = $2`,
+              [user.id, claims.oid],
+            );
+            calls.push({
+              userId: user.id,
+              email: user.email,
+              claims,
+              userRows: users.rowCount ?? 0,
+              accountRows: accounts.rowCount ?? 0,
+            });
+            if (behaviour === 'throw') throw new Error('role sync failed');
+          },
+        },
+      });
+    });
+    t.afterAll(async () => {
+      await stack?.stop();
+      await idp?.stop();
+    });
+    const reset = () => {
+      calls.length = 0;
+      behaviour = 'ok';
+    };
+
+    const staffEmail = () => `sso-${randomUUID().slice(0, 6)}@${STAFF_DOMAIN}`;
+    const signInWith = (identity: Partial<Parameters<MockIdp['loginAs']>[0]> & { email: string }) =>
+      microsoftSignIn(stack, idp, {
+        sub: 's',
+        oid: randomUUID(),
+        tid: TEST_TENANT,
+        name: 'Staff',
+        ...identity,
+      });
+    const hasSession = async (client: ReturnType<Stack['client']>) =>
+      (await client.get(`${API}/get-session`)).json() !== null;
+    const sessionRows = async (email: string) =>
+      Number(
+        (
+          await stack.pool.query(
+            `select count(*)::int as n from identity.session s join identity."user" u on u.id = s.user_id where u.email = $1`,
+            [email],
+          )
+        ).rows[0].n,
+      );
+
+    it('is called once with the user, the oid, the tenant, the email and the roles, after the user and account exist, and the session is returned', async () => {
+      reset();
+      const email = staffEmail();
+      const oid = randomUUID();
+      const { client } = await signInWith({ email, oid, claims: { roles: ['admin', 'hr'] } });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.claims).toEqual({
+        oid,
+        tid: TEST_TENANT,
+        email,
+        guest: false,
+        roles: ['admin', 'hr'],
+      });
+      expect(calls[0]!.email).toBe(email);
+      expect(calls[0]!.userRows).toBe(1);
+      expect(calls[0]!.accountRows).toBe(1);
+      expect(await hasSession(client)).toBe(true);
+    });
+
+    it('runs on EVERY sign-in, with the roles of that token', async () => {
+      reset();
+      const email = staffEmail();
+      const oid = randomUUID();
+      await signInWith({ email, oid, claims: { roles: ['admin'] } });
+      await signInWith({ email, oid, claims: { roles: ['hr', 'auditor'] } });
+      await signInWith({ email, oid });
+      expect(calls.map((c) => c.claims.roles)).toEqual([['admin'], ['hr', 'auditor'], []]);
+      expect(new Set(calls.map((c) => c.userId)).size).toBe(1);
+    });
+
+    it('validates roles as string[]: absent is [], a string or an object is [], other entries are dropped, duplicates are removed', async () => {
+      reset();
+      const cases: Array<[unknown, string[]]> = [
+        [undefined, []],
+        ['admin', []],
+        [{ admin: true }, []],
+        [
+          ['hr', 1, null, '', 'hr', {}, ['x'], 'auditor'],
+          ['hr', 'auditor'],
+        ],
+      ];
+      for (const [roles, expected] of cases) {
+        calls.length = 0;
+        await signInWith({
+          email: staffEmail(),
+          ...(roles === undefined ? {} : { claims: { roles } }),
+        });
+        expect(calls[0]!.claims.roles, JSON.stringify(roles)).toEqual(expected);
+      }
+    });
+
+    it('a throw FAILS the sign-in as a redirect with STAFF_SIGN_IN_REFUSED: no session row, cookie or Valkey entry, and nothing the product wrote leaks', async () => {
+      reset();
+      const email = staffEmail();
+      const oid = randomUUID();
+      behaviour = 'throw';
+      const before = stack.logs.length;
+      const { client, callback } = await signInWith({ email, oid, claims: { roles: ['admin'] } });
+      expect(calls).toHaveLength(1);
+      // the browser is sent back with an error code it can show, not given a raw 500
+      expect(callback.status).toBeGreaterThanOrEqual(300);
+      expect(callback.status).toBeLessThan(400);
+      expect(callback.location ?? '').toContain('error=STAFF_SIGN_IN_REFUSED');
+      expect(callback.setCookie.some((line) => /session_token=/.test(line))).toBe(false);
+      expect(Object.keys(client.cookies).some((name) => name.endsWith('session_token'))).toBe(
+        false,
+      );
+      expect(await hasSession(client)).toBe(false);
+      expect(await sessionRows(email)).toBe(0);
+      const userId = (
+        await stack.pool.query<{ id: string }>(`select id from identity."user" where email = $1`, [
+          email,
+        ])
+      ).rows[0]!.id;
+      expect(await stack.get(`active-sessions-${userId}`)).toBeNull();
+      // one error line, the class and no message: the product's text is nowhere
+      const lines = stack.logs
+        .slice(before)
+        .filter((l) => l.fields?.['code'] === 'identity.staff_sign_in_refused');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]!.fields).toMatchObject({ error: 'Error' });
+      expect(JSON.stringify(stack.logs.slice(before))).not.toContain('role sync failed');
+      expect(`${callback.location}${callback.body}`).not.toContain('role sync failed');
+      behaviour = 'ok';
+      const retry = await signInWith({ email, oid, claims: { roles: ['admin'] } });
+      expect(await hasSession(retry.client)).toBe(true);
+      expect(await sessionRows(email)).toBe(1);
+    });
+
+    it('the id_token sign-in is disabled: a valid token sent server side mints nothing and runs no hook (code flow only)', async () => {
+      reset();
+      const email = staffEmail();
+      const idToken = await idp.mintIdToken(
+        {
+          sub: 's',
+          oid: randomUUID(),
+          tid: TEST_TENANT,
+          email,
+          name: 'Replay',
+          claims: { roles: ['admin'] },
+        },
+        { clientId: 'conformance-client', tenant: TEST_TENANT },
+      );
+      const signInSocial = (
+        stack.auth.api as unknown as {
+          signInSocial(input: { body: Record<string, unknown> }): Promise<unknown>;
+        }
+      ).signInSocial;
+      await expect(
+        signInSocial({ body: { provider: 'microsoft', idToken: { token: idToken } } }),
+      ).rejects.toBeDefined();
+      // and over HTTP
+      const res = await stack
+        .client()
+        .post(`${API}/sign-in/social`, { provider: 'microsoft', idToken: { token: idToken } });
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(calls).toHaveLength(0);
+      expect(await sessionRows(email)).toBe(0);
+    });
+
+    it('is never called for a refused sign-in (another tenant, a B2B guest, an address off the staff domain)', async () => {
+      reset();
+      const other = await signInWith({
+        email: staffEmail(),
+        tid: OTHER_TENANT,
+        claims: { roles: ['admin'] },
+      });
+      const guest = await signInWith({
+        email: `guest-${randomUUID().slice(0, 6)}@elsewhere.example`,
+        claims: { acct: 1, roles: ['admin'] },
+      });
+      const offDomain = await signInWith({
+        email: `member-${randomUUID().slice(0, 6)}@elsewhere.example`,
+        claims: { roles: ['admin'] },
+      });
+      expect(calls).toHaveLength(0);
+      for (const { client } of [other, guest, offDomain])
+        expect(await hasSession(client)).toBe(false);
+    });
+
+    it('is not called for a password sign-in', async () => {
+      reset();
+      const email = uniqueEmail('visitor');
+      const password = strongPassword();
+      await verifiedUser(stack, email, password, expect);
+      const c = stack.client();
+      expect((await signIn(c, email, password)).status).toBe(200);
+      expect(calls).toHaveLength(0);
+    });
+    it('tells the product whether the token is for a B2B guest (with allowGuests), and refuses guests otherwise', async () => {
+      reset();
+      const guestStack = await startStack(infra, {
+        presets: ['public', 'staff'],
+        staff: { authority: idp.base, allowGuests: true },
+        hooks: {
+          onStaffSignIn: (user, claims) => {
+            calls.push({
+              userId: user.id,
+              email: user.email,
+              claims,
+              userRows: 1,
+              accountRows: 1,
+            });
+          },
+        },
+      });
+      try {
+        const member = await microsoftSignIn(guestStack, idp, {
+          sub: 'm',
+          oid: randomUUID(),
+          tid: TEST_TENANT,
+          email: staffEmail(),
+          name: 'Member',
+        });
+        const guest = await microsoftSignIn(guestStack, idp, {
+          sub: 'g',
+          oid: randomUUID(),
+          tid: TEST_TENANT,
+          email: `vendor-${randomUUID().slice(0, 6)}@elsewhere.example`,
+          name: 'Vendor',
+          claims: { acct: 1 },
+        });
+        expect(calls.map((c) => c.claims.guest)).toEqual([false, true]);
+        for (const { client } of [member, guest]) {
+          expect((await client.get(`${API}/get-session`)).json()).not.toBeNull();
+        }
+      } finally {
+        await guestStack.stop();
+      }
     });
   });
 }

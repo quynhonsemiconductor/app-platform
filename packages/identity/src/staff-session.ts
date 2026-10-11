@@ -1,8 +1,11 @@
 import { hasRequestState } from '@better-auth/core/context';
 import { createAuthMiddleware, setShouldSkipSessionRefresh } from 'better-auth/api';
 import type { BetterAuthPlugin } from 'better-auth';
+import { APIError } from 'better-auth/api';
+import { takeStaffSignIn, type StaffSignInClaims } from './callback-errors';
 import { DEFAULTS } from './defaults';
 import { domainIn, emailDomain } from './domains';
+import { consoleLogger, errorFields, STAFF_SIGN_IN_REFUSED, type IdentityLogger } from './events';
 import type { AccountContext } from './accounts';
 
 /**
@@ -21,10 +24,13 @@ import type { AccountContext } from './accounts';
 type Row = Record<string, unknown>;
 
 interface HookContext {
+  /** The endpoint being served (`/callback/:id`) and its route parameters. */
+  path?: string;
+  params?: Record<string, unknown>;
   context?: {
     internalAdapter: {
-      findUserById(id: string): Promise<{ email: string } | null>;
-      findAccounts(userId: string): Promise<Array<{ providerId: string }>>;
+      findUserById(id: string): Promise<{ id: string; email: string } | null>;
+      findAccounts(userId: string): Promise<Array<{ providerId: string; accountId?: string }>>;
       deleteSessions(tokens: string[]): Promise<unknown>;
     };
     adapter: {
@@ -43,8 +49,17 @@ interface HookContext {
   getSignedCookie?: (name: string, secret: string) => Promise<string | null | undefined>;
 }
 
+/** The product's hook for a Microsoft staff sign-in (see `IdentityOptions.hooks.onStaffSignIn`). */
+export type StaffSignInHook = (
+  user: Record<string, unknown> & { id: string; email: string },
+  claims: StaffSignInClaims,
+) => Promise<void> | void;
+
 export interface StaffSessionPolicy {
   staffDomains: readonly string[];
+  onStaffSignIn?: StaffSignInHook | undefined;
+  /** Where a refused staff sign-in is logged (class and code of the cause, never a message). */
+  logger?: IdentityLogger | undefined;
   /** Used when a hook runs outside a request (no endpoint context). */
   getContext: () => Promise<AccountContext>;
 }
@@ -65,12 +80,69 @@ export function staffSessionHooks(policy: StaffSessionPolicy) {
     return !!user && domainIn(emailDomain(user.email), policy.staffDomains);
   }
 
+  /** The sign-in is refused: the browser is redirected with `?error=STAFF_SIGN_IN_REFUSED`, no session is written. */
+  function refuse(cause?: unknown): never {
+    (policy.logger ?? consoleLogger).error(
+      `${STAFF_SIGN_IN_REFUSED}: a staff sign-in was refused`,
+      {
+        code: STAFF_SIGN_IN_REFUSED,
+        ...errorFields(cause),
+      },
+    );
+    throw APIError.from('FORBIDDEN', {
+      code: 'STAFF_SIGN_IN_REFUSED',
+      message: 'This sign-in could not be completed.',
+    });
+  }
+
+  async function runStaffSignIn(
+    userId: string,
+    claims: StaffSignInClaims,
+    context: HookContext | null,
+  ): Promise<void> {
+    const hook = policy.onStaffSignIn;
+    if (!hook) return;
+    const ia =
+      context?.context?.internalAdapter ??
+      ((await policy.getContext()).internalAdapter as unknown as NonNullable<
+        HookContext['context']
+      >['internalAdapter']);
+    const [user, accounts] = await Promise.all([ia.findUserById(userId), ia.findAccounts(userId)]);
+    // This session must be the one of the person the token was for: their Microsoft account holds that
+    // oid. If it does not, something is wrong, and the product's hook is NOT run for a person it was not
+    // meant for: fail closed.
+    const owns = accounts.some(
+      (a) =>
+        a.providerId === 'microsoft' && (a as { accountId?: unknown }).accountId === claims.oid,
+    );
+    if (!user || !owns) refuse();
+    try {
+      await hook(user as unknown as Parameters<StaffSignInHook>[0], claims);
+    } catch (error) {
+      // Only the class and code are logged, and nothing the product wrote reaches the wire.
+      refuse(error);
+    }
+  }
+
+  /** Whether this session is being created by the Microsoft OAuth callback. */
+  const isMicrosoftCallback = (context: HookContext | null): boolean =>
+    (context?.path ?? '').startsWith('/callback/') && context?.params?.['id'] === 'microsoft';
+
   const earliest = (a: Date, b: Date): Date => (a.getTime() <= b.getTime() ? a : b);
 
   return {
     create: {
       before: async (session: Row, context: HookContext | null) => {
         const userId = session['userId'];
+        // A Microsoft staff sign-in: the user exists (created or linked a moment ago) and this is the
+        // session that would sign them in. A throw from the product's hook fails the sign-in, and no
+        // session row is written.
+        const signIn = takeStaffSignIn();
+        if (signIn && typeof userId === 'string') await runStaffSignIn(userId, signIn, context);
+        // FAIL CLOSED: a Microsoft session with no claims recorded for this request did not come through
+        // the provider's checks and cannot be given to the product's hook (a server-side
+        // `callbackOAuth`, say). With a hook configured it is refused rather than minted around it.
+        else if (policy.onStaffSignIn && isMicrosoftCallback(context)) refuse();
         if (typeof userId !== 'string' || !(await isStaff(userId, context))) return;
         const requested =
           session['expiresAt'] instanceof Date

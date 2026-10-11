@@ -157,7 +157,9 @@ jobs:
       matrix:
         include:
           # `pnpm` is the version each product's own CI pins. Keep it in step with them.
-          - { product: rova, pnpm: '10.33.2', unit_tests: true }
+          # For a product whose package.json has `packageManager`, it must be EQUAL: pnpm/action-setup
+          # fails ("Multiple versions of pnpm specified") when the two differ. rova: 11.28.5 (rova#663).
+          - { product: rova, pnpm: '11.28.5', unit_tests: true }
           - { product: opshub, pnpm: '10.33.2', unit_tests: true }
     steps:
       # Read-only App (contents: read), never the write-capable automation App in a pull-request

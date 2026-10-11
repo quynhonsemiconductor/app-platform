@@ -17,6 +17,7 @@ import {
 import { bannedSessionGuard } from './banned-guard';
 import { accountLockout } from './lockout';
 import { perEmailLimiter } from './mail-limit';
+import { oauthRateLimitRules, type OAuthRateLimit } from './rate-limit';
 import { AuthMail } from './mail-port';
 import { argon2Password } from './password';
 import { companyDomainSignUpGuard, securityEvents, ssoRegistrationGuard } from './plugins';
@@ -83,6 +84,30 @@ export interface IdentityOptions {
    * organization owner and so register an SSO provider.
    */
   allowOrganizationCreation?: boolean;
+  /**
+   * Rate limit, per client address and per path, of `/sign-in/social` and `/callback/*`: the endpoints
+   * that only start or finish a redirect to the identity provider and take no credential. Default
+   * 120 requests per 60 s (`DEFAULTS.rateLimit.oauth`), sized for about a hundred staff behind one
+   * address in the same minute; raise it for a larger office, lower it for a smaller one. The strict
+   * limit of the credential endpoints (`/sign-in/email`, `/sign-up/*`: 3 per 10 s) is NOT affected,
+   * and cannot be changed here. See README, "Client IP and rate limits".
+   */
+  oauthRateLimit?: OAuthRateLimit;
+  /**
+   * Name the cookies `__Host-<product>.*` instead of `__Secure-<product>.*`. Opt-in.
+   *
+   * A `__Secure-` cookie only has to be `Secure`, so any app on `*.qnsc.vn` can set
+   * `__Secure-<product>.session_token` with `Domain=qnsc.vn` and the browser will send it here
+   * (cookie tossing: fixing a victim's session id). A `__Host-` cookie cannot carry a `Domain` at all:
+   * the browser refuses to store one from a sibling host, and ours is `Secure`, `Path=/`, host-only.
+   * It covers every identity cookie (session, session cache, known-device, 2FA, OAuth state).
+   *
+   * Requires an https `baseURL`. Switching it on signs everyone out and forgets every known device
+   * (the names change; the known-device HMAC covers the name). `SameSite` stays `Lax` either way:
+   * `Strict` would drop the cookie on the provider's redirect back to `/callback/*`, the one request
+   * every OAuth sign-in lands on.
+   */
+  hostCookies?: boolean;
   /** Required with the `staff` preset. */
   staff?: StaffOptions;
   /** Optional with the `public` preset. */
@@ -189,6 +214,11 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     `${DEFAULTS.secretEnv} must be set (32+ characters)`,
   );
   config(!production || o.baseURL.startsWith('https://'), 'baseURL must be https in production');
+  const hostCookies = o.hostCookies === true;
+  config(
+    !hostCookies || o.baseURL.startsWith('https://'),
+    'hostCookies needs an https baseURL: a __Host- cookie must be Secure, and a browser refuses it over http',
+  );
   config(!(production && internal.unsafeTestNetwork), 'unsafeTestNetwork is refused in production');
   const ring = orgPreset ? parseKeyring(env[DEFAULTS.encryptionKeyEnv]) : undefined;
 
@@ -277,7 +307,12 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       : { level: 'error' },
     database: ring ? withEncryptedSsoSecrets(database, ring) : database,
     secondaryStorage: storage,
-    rateLimit: { enabled: true, storage: 'secondary-storage' },
+    rateLimit: {
+      enabled: true,
+      storage: 'secondary-storage',
+      // Better Auth's own rules stay for everything else (3 / 10 s on the credential endpoints).
+      customRules: oauthRateLimitRules(o.oauthRateLimit),
+    },
     emailAndPassword: publicPreset
       ? {
           enabled: true,
@@ -330,8 +365,13 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       accountLinking: { enabled: true, trustedProviders: [] },
     },
     advanced: {
-      useSecureCookies: true,
-      cookiePrefix: o.product,
+      // Default: `__Secure-<product>.*`. With `hostCookies`: `__Host-<product>.*`. Better Auth only
+      // knows the first prefix, so the second is made the cookie prefix itself and the automatic
+      // `__Secure-` is turned off (a name cannot carry both). `Secure` is then set explicitly,
+      // and Domain stays unset (cross-subdomain cookies are never enabled).
+      useSecureCookies: !hostCookies,
+      cookiePrefix: hostCookies ? `${DEFAULTS.cookies.hostPrefix}${o.product}` : o.product,
+      ...(hostCookies ? { defaultCookieAttributes: { secure: true, path: '/' } } : {}),
       // EXPLICIT, never left to the default: Better Auth turns the origin/callback-URL check off
       // whenever NODE_ENV === 'test' (WP-9, D6).
       disableOriginCheck: false,

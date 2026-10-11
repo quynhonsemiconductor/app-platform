@@ -60,6 +60,32 @@ export const DEFAULTS = Object.freeze({
       accountWindowSeconds: 3600,
     }),
   }),
+  /**
+   * Better Auth limits `/sign-in*` to 3 requests per 10 s per client address, and that is right for
+   * the endpoints that take a credential. It is wrong for the two that only START or FINISH a
+   * redirect to an identity provider: `/sign-in/social` takes no credential (it answers with the
+   * provider's URL) and `/callback/*` is the provider handing the browser back. An office behind one
+   * NAT shares one address, so its whole morning rush of staff sign-ins shares one bucket and the
+   * fourth person gets a 429. These two get their own, larger, per-address-per-path limit. What
+   * guards guessing is not here but in the device lockout (`lockout`), which keys on the account.
+   * Credential endpoints (`/sign-in/email`, `/sign-up/*`, …) keep Better Auth's strict rule.
+   *
+   * Sized for ~100 staff behind one address signing in within the same minute: each sign-in is one
+   * request on each of the two paths, and each path has its own bucket.
+   */
+  rateLimit: Object.freeze({
+    oauth: Object.freeze({
+      windowSeconds: 60,
+      max: 120,
+      paths: Object.freeze(['/sign-in/social', '/callback/*'] as const),
+    }),
+  }),
+  /**
+   * Cookie name prefixes. `__Secure-` (default) only requires `Secure`; any `*.qnsc.vn` app can still set
+   * such a cookie with `Domain=qnsc.vn` and have it sent here (cookie tossing). `__Host-` (opt-in, `hostCookies`)
+   * is host-only by construction: `Secure`, `Path=/`, and the browser refuses it with a `Domain` attribute.
+   */
+  cookies: Object.freeze({ securePrefix: '__Secure-', hostPrefix: '__Host-' }),
   /** Reset requests and verification re-sends, per email address; over the limit is silent (D14). */
   mailPerEmail: Object.freeze({ max: 3, windowSeconds: 3600 }),
   /** Responses that must not reveal whether an address has an account take at least this long. */

@@ -1889,7 +1889,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       expect(failure).toBeDefined(); // it used to be one line saying "Error"
       expect(String(failure!.fields?.['cause'])).toMatch(/Error$/); // the driver's class
       expect(failure!.fields).toMatchObject({
-        source: 'better-auth',
+        code: 'identity.auth_handler_threw',
         error: 'DrizzleQueryError',
         errorCode: 'P0001', // what the forced trigger raised
         correlationId: id,
@@ -1909,6 +1909,30 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
         .slice(before)
         .find((l) => l.level === 'error' && l.fields?.['error'] === 'AuthTransactionAbortedError');
       expect(failure?.fields).toMatchObject({ cause: 'DrizzleQueryError', errorCode: '25P02' });
+    });
+
+    it('nothing is printed on raw stderr for a failed request: Better Auth’s `# SERVER_ERROR` (with the driver’s message) is replaced by one structured line', async () => {
+      const email = `boom-commit-${randomUUID().slice(0, 8)}@users.identity.test`;
+      const printed: string[] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => void printed.push(args.map(String).join(' '));
+      const before = stack.logs.length;
+      try {
+        const res = await stack
+          .client()
+          .post(`${API}/sign-up/email`, { email, password: strongPassword(), name: 'x' });
+        expect(res.status).toBe(500);
+      } finally {
+        console.error = original;
+      }
+      expect(printed.join('\n')).not.toMatch(/SERVER_ERROR|forced|Failed query|params/);
+      const lines = stack.logs.slice(before).filter((l) => l.level === 'error');
+      expect(lines).toHaveLength(1); // one line, not a second raw copy
+      expect(lines[0]!.fields).toMatchObject({
+        code: 'identity.auth_handler_threw',
+        error: 'DrizzleQueryError',
+        errorCode: 'P0001',
+      });
     });
 
     it('a healthy sign-up is unaffected: 200, the user, the job', async () => {
@@ -2139,5 +2163,357 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
         }
       });
     });
+  });
+
+  describe('identity#206: creating an organization is atomic (the organization and its owner, or neither)', () => {
+    let stack: Stack;
+    t.beforeAll(async () => {
+      stack = await startStack(infra, {
+        presets: ['public', 'organizations'],
+        allowOrganizationCreation: true,
+      });
+    });
+    t.afterAll(() => stack?.stop());
+
+    type OrgApi = {
+      createOrganization(input: {
+        body: Record<string, unknown>;
+        headers?: Headers;
+      }): Promise<unknown>;
+    };
+    const cookieHeaders = (c: { cookies: Record<string, string> }) =>
+      new Headers({
+        cookie: Object.entries(c.cookies)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('; '),
+      });
+    const orgs = async (slug: string) =>
+      (
+        await stack.pool.query<{ id: string; owners: number; members: number }>(
+          `select o.id,
+                  (select count(*)::int from identity.member m where m.organization_id = o.id and m.role = 'owner') as owners,
+                  (select count(*)::int from identity.member m where m.organization_id = o.id) as members
+             from identity.organization o where o.slug = $1`,
+          [slug],
+        )
+      ).rows;
+    const failMemberInserts = () =>
+      stack.pool.query(`
+        create or replace function boom_member() returns trigger language plpgsql as $$
+        begin raise exception 'forced member failure'; end $$;
+        create trigger boom_member_t before insert on identity.member
+          for each row execute function boom_member();`);
+    const healMemberInserts = () =>
+      stack.pool.query(`drop trigger if exists boom_member_t on identity.member`);
+    const slugOf = () => `org-${randomUUID().slice(0, 8)}`;
+    const alive = async (c: ReturnType<Stack['client']>) =>
+      (await c.get(`${API}/get-session?disableCookieCache=true`)).json() !== null;
+    const newOwner = async () => {
+      const email = uniqueEmail('founder');
+      const client = await verifiedUser(stack, email, strongPassword(), expect);
+      const id = (
+        await stack.pool.query<{ id: string }>(`select id from identity."user" where email = $1`, [
+          email,
+        ])
+      ).rows[0]!.id;
+      return { client, id };
+    };
+
+    it('happy path over HTTP: 200, the organization and exactly one owner', async () => {
+      const { client, id } = await newOwner();
+      const slug = slugOf();
+      const res = await client.post(`${API}/organization/create`, { name: 'Acme', slug });
+      expect(res.status, res.body).toBe(200);
+      expect(res.json<{ slug: string }>().slug).toBe(slug);
+      const rows = await orgs(slug);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ owners: 1, members: 1 });
+      const owner = await stack.pool.query(
+        `select 1 from identity.member where organization_id = $1 and user_id = $2 and role = 'owner'`,
+        [rows[0]!.id, id],
+      );
+      expect(owner.rowCount).toBe(1);
+    });
+
+    it('happy path server side (auth.api.createOrganization, how a product creates one): resolves, same result', async () => {
+      const { id } = await newOwner();
+      const slug = slugOf();
+      const created = (await (stack.auth.api as unknown as OrgApi).createOrganization({
+        body: { name: 'Acme', slug, userId: id },
+      })) as { slug: string };
+      expect(created.slug).toBe(slug);
+      expect(await orgs(slug)).toMatchObject([{ owners: 1, members: 1 }]);
+    });
+
+    it('a failed owner insert over HTTP: 500 in the hybrid body, NO organization, and the slug is reusable', async () => {
+      const { client } = await newOwner();
+      const slug = slugOf();
+      const corr = `req-${randomUUID().slice(0, 8)}`;
+      await failMemberInserts();
+      try {
+        const res = await client.post(
+          `${API}/organization/create`,
+          { name: 'Acme', slug },
+          { 'x-correlation-id': corr },
+        );
+        expect(res.status).toBe(500);
+        const body = JSON.parse(res.body) as { code: string; error: { correlationId: string } };
+        expect(body.code).toBe('INTERNAL_ERROR');
+        expect(body.error.correlationId).toBe(corr);
+        expect(res.body).not.toMatch(/forced|member|insert/i);
+        expect(await orgs(slug)).toHaveLength(0); // before: one organization with no member
+      } finally {
+        await healMemberInserts();
+      }
+      const retry = await client.post(`${API}/organization/create`, { name: 'Acme', slug });
+      expect(retry.status, retry.body).toBe(200); // before: 400 ORGANIZATION_ALREADY_EXISTS
+      expect(await orgs(slug)).toMatchObject([{ owners: 1, members: 1 }]);
+    });
+
+    it('a failed owner insert server side: the call rejects, NO organization, the slug is reusable', async () => {
+      const { id } = await newOwner();
+      const slug = slugOf();
+      await failMemberInserts();
+      try {
+        await expect(
+          (stack.auth.api as unknown as OrgApi).createOrganization({
+            body: { name: 'Acme', slug, userId: id },
+          }),
+        ).rejects.toBeDefined();
+        expect(await orgs(slug)).toHaveLength(0);
+      } finally {
+        await healMemberInserts();
+      }
+      await (stack.auth.api as unknown as OrgApi).createOrganization({
+        body: { name: 'Acme', slug, userId: id },
+      });
+      expect(await orgs(slug)).toMatchObject([{ owners: 1, members: 1 }]);
+    });
+
+    it('the failure is logged with the error class and SQLSTATE, and nothing of the request', async () => {
+      const { client } = await newOwner();
+      const slug = slugOf();
+      const before = stack.logs.length;
+      await failMemberInserts();
+      try {
+        await client.post(`${API}/organization/create`, { name: 'Acme', slug });
+      } finally {
+        await healMemberInserts();
+      }
+      const lines = stack.logs.slice(before);
+      expect(lines.some((l) => l.level === 'error' && l.fields?.['errorCode'] === 'P0001')).toBe(
+        true,
+      );
+      expect(JSON.stringify(lines)).not.toMatch(/forced member failure|Acme/);
+      expect(JSON.stringify(lines).includes(slug)).toBe(false);
+    });
+    it('server side with a session on a pool of ONE connection: the create (setActive included) does not deadlock and is in the transaction', async () => {
+      const one = await startStack(infra, {
+        presets: ['public', 'organizations'],
+        allowOrganizationCreation: true,
+        poolMax: 1,
+      });
+      try {
+        const email = uniqueEmail('founder');
+        const client = await verifiedUser(one, email, strongPassword(), expect);
+        const slug = slugOf();
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('createOrganization hung on a pool of one')), 10_000),
+        );
+        const created = (await Promise.race([
+          (one.auth.api as unknown as OrgApi).createOrganization({
+            body: { name: 'Acme', slug },
+            headers: cookieHeaders(client),
+          }),
+          timeout,
+        ])) as { id: string };
+        const active = await one.pool.query(
+          `select 1 from identity.session s join identity."user" u on u.id = s.user_id
+            where u.email = $1 and s.active_organization_id = $2`,
+          [email, created.id],
+        );
+        expect(active.rowCount).toBeGreaterThan(0); // setActiveOrganization ran
+        const rows = await one.pool.query(
+          `select (select count(*)::int from identity.member m where m.organization_id = o.id) as members
+             from identity.organization o where o.slug = $1`,
+          [slug],
+        );
+        expect(rows.rows).toEqual([{ members: 1 }]);
+      } finally {
+        await one.stop();
+      }
+    }, 60_000);
+
+    it('setActiveOrganization is inside the create: when it fails, no organization is left (HTTP and server side)', async () => {
+      const { client } = await newOwner();
+      await stack.pool.query(`
+        create or replace function boom_active() returns trigger language plpgsql as $$
+        begin
+          if new.active_organization_id is not null then raise exception 'forced active failure'; end if;
+          return new;
+        end $$;
+        create trigger boom_active_t before update on identity.session
+          for each row execute function boom_active();`);
+      const viaApi = slugOf();
+      const viaHttp = slugOf();
+      try {
+        await expect(
+          (stack.auth.api as unknown as OrgApi).createOrganization({
+            body: { name: 'Acme', slug: viaApi },
+            headers: cookieHeaders(client),
+          }),
+        ).rejects.toBeDefined();
+        const res = await client.post(`${API}/organization/create`, {
+          name: 'Acme',
+          slug: viaHttp,
+        });
+        expect(res.status).toBeGreaterThanOrEqual(400);
+        expect(await orgs(viaApi)).toHaveLength(0);
+        expect(await orgs(viaHttp)).toHaveLength(0);
+      } finally {
+        await stack.pool.query(`drop trigger if exists boom_active_t on identity.session`);
+      }
+    });
+
+    it('an ANONYMOUS POST /organization/create acquires no connection (20 of them), and a forged cookie none either', async () => {
+      const few = await startStack(infra, {
+        presets: ['public', 'organizations'],
+        allowOrganizationCreation: true,
+        poolMax: 2,
+      });
+      try {
+        const pool = few.appPool as unknown as { connect: (...a: unknown[]) => unknown };
+        const original = pool.connect;
+        let acquired = 0;
+        pool.connect = function (this: unknown, ...args: unknown[]) {
+          acquired += 1;
+          return original.apply(this, args);
+        };
+        try {
+          for (let i = 0; i < 20; i += 1) {
+            const res = await few
+              .client()
+              .post(`${API}/organization/create`, { name: 'Acme', slug: slugOf() });
+            expect(res.status).toBe(401);
+          }
+          const forged = few.client();
+          forged.setCookies({ '__Secure-conformance.session_token': 'nope.nope' });
+          expect(
+            (await forged.post(`${API}/organization/create`, { name: 'A', slug: slugOf() })).status,
+          ).toBe(401);
+          expect(acquired).toBe(0);
+          // control: an authenticated create does use the transaction
+          const owner = await verifiedUser(few, uniqueEmail('founder'), strongPassword(), expect);
+          acquired = 0;
+          expect(
+            (await owner.post(`${API}/organization/create`, { name: 'A', slug: slugOf() })).status,
+          ).toBe(200);
+          expect(acquired).toBeGreaterThan(0);
+        } finally {
+          pool.connect = original;
+        }
+      } finally {
+        await few.stop();
+      }
+    }, 60_000);
+
+    it('a slow create does not hold anybody else: concurrent sign-in, update-user and another create run in their own transactions and survive its rollback', async () => {
+      const slow = await newOwner();
+      const other = await newOwner();
+      const profile = await newOwner();
+      const visitorEmail = uniqueEmail('visitor');
+      const visitorPassword = strongPassword();
+      await verifiedUser(stack, visitorEmail, visitorPassword, expect);
+      await stack.pool.query(`
+        create table if not exists txlog (kind text, txid bigint, at timestamptz default clock_timestamp());
+        create or replace function log_tx() returns trigger language plpgsql as $$
+        begin insert into txlog (kind, txid) values (tg_argv[0], txid_current()); return new; end $$;
+        create or replace function slow_member() returns trigger language plpgsql as $$
+        begin
+          if exists (select 1 from identity.organization o where o.id = new.organization_id and o.slug like 'slow-%') then
+            insert into txlog (kind, txid) values ('slow-member', txid_current());
+            perform pg_sleep(2);
+            raise exception 'forced slow failure';
+          end if;
+          return new;
+        end $$;
+        create trigger log_org_t before insert on identity.organization for each row execute function log_tx('org');
+        create trigger log_session_t before insert on identity.session for each row execute function log_tx('session');
+        create trigger log_user_t before update on identity."user" for each row execute function log_tx('user');
+        create trigger slow_member_t before insert on identity.member for each row execute function slow_member();`);
+      const slowSlug = `slow-${randomUUID().slice(0, 8)}`;
+      const otherSlug = slugOf();
+      const marker = `renamed-${randomUUID().slice(0, 6)}`;
+      const finished: string[] = [];
+      try {
+        const slowCreate = slow.client
+          .post(`${API}/organization/create`, { name: 'Slow', slug: slowSlug })
+          .then((r) => {
+            finished.push('slow');
+            return r;
+          });
+        await new Promise((r) => setTimeout(r, 500)); // the slow create is now inside its transaction
+        const fired = new Date(); // the slow create's own writes are logged before this instant
+        // its transaction id, read from outside while it sleeps (what it logs is rolled back with it)
+        const sleeping = await stack.pool.query<{ xid: string }>(
+          `select backend_xid::text as xid from pg_stat_activity where wait_event = 'PgSleep' limit 1`,
+        );
+        expect(sleeping.rowCount).toBe(1);
+        const slowXid = BigInt(sleeping.rows[0]!.xid);
+        const visitor = stack.client();
+        const started = Date.now();
+        const results = await Promise.all([
+          signIn(visitor, visitorEmail, visitorPassword).then((r) => (finished.push('sign-in'), r)),
+          profile.client
+            .post(`${API}/update-user`, { name: marker })
+            .then((r) => (finished.push('update-user'), r)),
+          other.client
+            .post(`${API}/organization/create`, { name: 'Other', slug: otherSlug })
+            .then((r) => (finished.push('other-create'), r)),
+        ]);
+        const elapsed = Date.now() - started;
+        for (const r of results) expect(r.status, r.body).toBe(200);
+        expect(elapsed).toBeLessThan(1800); // none of them waited for the 2 s the slow one sleeps
+        const slowResult = await slowCreate;
+        expect(slowResult.status).toBe(500);
+        expect(finished.indexOf('slow')).toBe(finished.length - 1); // the others returned first
+
+        const log = (
+          await stack.pool.query<{ kind: string; txid: string }>(
+            `select kind, txid::text from txlog where at >= $1 or kind = 'slow-member'`,
+            [fired],
+          )
+        ).rows;
+        const others = log.filter((l) => l.kind !== 'slow-member');
+        expect(others.length).toBeGreaterThanOrEqual(3); // org, session and user writes of the others
+        expect(new Set(others.map((l) => l.kind))).toEqual(new Set(['org', 'session', 'user']));
+        for (const l of others) {
+          expect(BigInt(l.txid) & 0xffffffffn, l.kind).not.toBe(slowXid);
+        }
+        // and each of them in a transaction of its own: the other create's rows (org) share a
+        // transaction with neither the sign-in's session row nor update-user's write
+        const txOf = (kind: string) =>
+          new Set(others.filter((l) => l.kind === kind).map((l) => l.txid));
+        for (const kind of ['session', 'user']) {
+          for (const txid of txOf(kind))
+            expect(txOf('org').has(txid), `${kind} vs org`).toBe(false);
+        }
+
+        // after the slow create rolled back, everything the others wrote is there
+        expect(await orgs(slowSlug)).toHaveLength(0);
+        expect(await orgs(otherSlug)).toMatchObject([{ owners: 1, members: 1 }]);
+        expect(await alive(visitor)).toBe(true);
+        const renamed = await stack.pool.query(`select 1 from identity."user" where name = $1`, [
+          marker,
+        ]);
+        expect(renamed.rowCount).toBe(1);
+      } finally {
+        await stack.pool.query(`
+          drop trigger if exists log_org_t on identity.organization;
+          drop trigger if exists log_session_t on identity.session;
+          drop trigger if exists log_user_t on identity."user";
+          drop trigger if exists slow_member_t on identity.member;`);
+      }
+    }, 60_000);
   });
 }

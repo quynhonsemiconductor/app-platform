@@ -15,6 +15,10 @@ export function reservedDomainCheck(options: {
 }): ReservedDomainCheck {
   return async (email) => {
     const domain = emailDomain(email);
+    // An address that has an `@` but no domain we can name (two `@`, or nothing after it) is not
+    // something to hand to a password or a consumer provider: reserved, fail closed. (Before the staff
+    // match became exact, `jane@qnsc.vn@evil.example` read as `qnsc.vn` and was reserved by accident.)
+    if (domain === '' && email.includes('@')) return true;
     if (domainIn(domain, options.staffDomains)) return true;
     if (!options.withSso) return false;
     const providers = (await (

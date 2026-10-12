@@ -178,6 +178,27 @@ export function staffDomainsConformance(t: TestApi, infra: ConformanceInfra): vo
       }
     });
 
+    it('an address with two @ signs is never accepted for password sign-up on the strength of what comes after the first one', async () => {
+      const stack = await open();
+      try {
+        const before = await rows(stack);
+        for (const email of [
+          `jane@${STAFF_DOMAIN}@evil.example`,
+          `jane@evil.example@${STAFF_DOMAIN}`,
+        ]) {
+          const response = await stack.client().post(`${API}/sign-up/email`, {
+            email,
+            password: strongPassword(),
+            name: 'x',
+          });
+          expect(response.status, email).toBeGreaterThanOrEqual(400);
+        }
+        expect(await rows(stack)).toEqual(before);
+      } finally {
+        await stack.stop();
+      }
+    });
+
     it('a "*." entry reserves the bare domain and its sub-domains for the company sign-in too', async () => {
       const stack = await open({ domains: [`*.${STAFF_DOMAIN}`] });
       try {
@@ -198,6 +219,8 @@ export function staffDomainsConformance(t: TestApi, infra: ConformanceInfra): vo
     it('staff.domains is checked at boot: a top-level wildcard, a bare "*", an address, a path or a non-string is a boot error naming the entry', async () => {
       for (const [entry, message] of [
         ['*.vn', /staff\.domains.*"\*\.vn".*top-level/],
+        ['*.com.vn', /staff\.domains.*"\*\.com\.vn".*public suffix/],
+        ['*.co.uk', /staff\.domains.*"\*\.co\.uk".*public suffix/],
         ['*', /staff\.domains.*"\*"/],
         ['jane@qnsc.vn', /staff\.domains.*"jane@qnsc\.vn"/],
         ['qnsc.vn/path', /staff\.domains.*"qnsc\.vn\/path"/],

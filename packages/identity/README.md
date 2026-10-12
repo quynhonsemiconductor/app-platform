@@ -208,12 +208,13 @@ linked) and **before the session is returned**.
   shape), entries that are not non-empty strings are dropped, duplicates removed.
 - `guest` says whether the token is for a **B2B guest** of the tenant (`acct = 1`, an `idp` other than the issuer, or `#EXT#` in the
   UPN). It can only be `true` when `staff.allowGuests` is set; otherwise guests are refused before the hook.
-- **A throw refuses the sign-in**: the browser is redirected back with `?error=STAFF_SIGN_IN_REFUSED`, no session row, cookie or
-  cache entry exists (the user and the linked account stay; the next sign-in retries). The hook is given the user, so it can
-  only run once the user exists: **a refusal by the hook is the one that leaves a user row**. Put every rule identity can
-  decide from the token (domain, tenant, guest) in `staff` options, where it is refused with nothing written, and keep only
-  what needs your data in the hook, and the product's error message is on
-  neither the wire nor the logs: one `identity.staff_sign_in_refused` line carries the error's class and code only.
+- **A throw refuses the sign-in**: the browser is redirected back with `?error=STAFF_SIGN_IN_REFUSED`, and no session row, cookie
+  or cache entry exists. The user and the linked account stay; the next sign-in retries. The hook is given the user, so it can
+  only run once the user exists: **a refusal by the hook is the one that leaves a user row**.
+- **Keep the hook for what needs your data.** Put every rule identity can decide from the token (domain, tenant, guest) in
+  `staff` options, where it is refused with nothing written.
+- **The product's error message is on neither the wire nor the logs.** One `identity.staff_sign_in_refused` line carries the
+  error's class and code only.
 - **It cannot be skipped.** The Microsoft provider takes the authorization-code flow only: the id_token sign-in
   (`signInSocial({ idToken })`) is disabled, because it accepts any token valid for the client id with no nonce and would mint
   a session around the hook. And if a Microsoft session is ever about to be created with no claims recorded for the request, or
@@ -487,7 +488,9 @@ Fixed in `DEFAULTS` and asserted by the conformance kit; a product cannot change
 - **Tenant and guests.** `tid` must equal the configured tenant. A tenant member is accepted only with an email on
   `staff.domains`, and **each entry matches exactly that domain**: `qnsc.vn` admits `jane@qnsc.vn`, not `jane@sub.qnsc.vn`
   (nor a look-alike such as `miqnsc.vn`, nor an address with two `@`). Sub-domains are an explicit opt-in:
-  `domains: ['qnsc.vn', '*.qnsc.vn']` (`*.qnsc.vn` alone does not admit `qnsc.vn`; a top-level `*.vn` is a boot error).
+  `domains: ['qnsc.vn', '*.qnsc.vn']` (`*.qnsc.vn` alone does not admit `qnsc.vn`). A wildcard on a top-level domain (`*.vn`) or a shared suffix (`*.com.vn`, `*.co.uk`,
+  `*.github.io`) is a boot error: it would admit every company under it. That check is a heuristic (a short list of shared
+  second levels and multi-tenant hosts), not the Public Suffix List; a wildcard is for a domain you own, and exact entries always work.
   Whatever is not staff stays **reserved** if it is under a staff domain: password and Google sign-up are refused for
   `sub.qnsc.vn` as for `qnsc.vn`, so a sub-domain you did not opt in has no way in rather than becoming a public account.
   Every one of these refusals, and the tenant and guest ones, happens in the Microsoft provider **before** Better Auth

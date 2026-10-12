@@ -49,8 +49,57 @@ export function staffDomainsProblem(domains: readonly unknown[]): string | undef
     if (wildcard && !host.includes('.')) {
       return `"${entry}" would admit a whole top-level domain; a "*." entry needs a registrable domain ("*.qnsc.vn")`;
     }
+    if (wildcard && isSharedSuffix(host)) {
+      return `"${entry}" would admit every registrant under a public suffix; a "*." entry needs a domain your company owns ("*.qnsc.vn"), and a shared suffix is not one`;
+    }
   }
   return undefined;
+}
+
+/**
+ * Second-level labels that registries hand out to everyone (`com.vn`, `co.uk`, `ac.jp`, `gov.au` ...): a
+ * wildcard on `x.vn` where `x` is one of these admits every company that registered a name under it.
+ */
+const SHARED_SECOND_LEVEL = new Set([
+  'com',
+  'net',
+  'org',
+  'edu',
+  'gov',
+  'ac',
+  'co',
+  'mil',
+  'or',
+  'ne',
+  'go',
+  'gob',
+  'gv',
+]);
+
+/** Hosting suffixes where every customer gets a sub-domain: `*.github.io` would admit all of them. */
+const SHARED_HOSTS = new Set([
+  'github.io',
+  'pages.dev',
+  'workers.dev',
+  'vercel.app',
+  'netlify.app',
+  'herokuapp.com',
+  'azurewebsites.net',
+  'blogspot.com',
+  'cloudfront.net',
+  'amazonaws.com',
+]);
+
+/**
+ * Is `host` (the part after `*.`) a suffix many unrelated parties register under? A HEURISTIC, not the
+ * Public Suffix List: two labels whose first is a shared second level (`com.vn`, `co.uk`), or one of a short
+ * list of multi-tenant hosting domains. It does not know every suffix (`*.s3.amazonaws.com`, a registry's
+ * private rule); a wildcard is for a domain the company owns, and the exact entries are always available.
+ */
+function isSharedSuffix(host: string): boolean {
+  const labels = host.split('.');
+  if (labels.length === 2 && SHARED_SECOND_LEVEL.has(labels[0]!)) return true;
+  return SHARED_HOSTS.has(host);
 }
 
 /** `staff.domains` as it is matched: trimmed, lower-cased, empty entries dropped. */

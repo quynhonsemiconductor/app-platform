@@ -76,12 +76,41 @@ describe('staff domains', () => {
         expect(staffDomainsProblem([entry])).toBeUndefined();
       },
     );
+    it('accepts a wildcard on a domain the company owns, even with a shared label elsewhere in it', () => {
+      for (const entry of [
+        '*.qnsc.vn',
+        '*.corp.qnsc.vn',
+        '*.com.qnsc.vn',
+        '*.qnsc.com.vn',
+        '*.qnsc.co.uk',
+      ]) {
+        expect(staffDomainsProblem([entry]), entry).toBeUndefined();
+      }
+    });
+    it('the exact form of a shared suffix is only an exact entry: "com.vn" is a domain name, not a wildcard', () => {
+      expect(staffDomainsProblem(['com.vn'])).toBeUndefined();
+      expect(staffDomainIn('a.com.vn', ['com.vn'])).toBe(false);
+    });
     it('accepts an empty list (the staff preset then admits nobody by address)', () => {
       expect(staffDomainsProblem([])).toBeUndefined();
     });
     it.each([
       ['*.vn', /top-level/],
       ['*.localhost', /top-level/],
+      ['*.com.vn', /public suffix/],
+      ['*.net.vn', /public suffix/],
+      ['*.org.vn', /public suffix/],
+      ['*.edu.vn', /public suffix/],
+      ['*.gov.vn', /public suffix/],
+      ['*.ac.vn', /public suffix/],
+      ['*.co.uk', /public suffix/],
+      ['*.ac.uk', /public suffix/],
+      ['*.gov.au', /public suffix/],
+      ['*.CO.UK', /public suffix/],
+      ['  *.com.vn  ', /public suffix/],
+      ['*.github.io', /public suffix/],
+      ['*.pages.dev', /public suffix/],
+      ['*.blogspot.com', /public suffix/],
       ['*', /not a domain/],
       ['*qnsc.vn', /not a domain/],
       ['qnsc.*', /not a domain/],

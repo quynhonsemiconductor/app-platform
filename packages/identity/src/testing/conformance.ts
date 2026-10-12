@@ -2,6 +2,7 @@ import { cookiesConformance } from './conformance-cookies';
 import { hardeningConformance } from './conformance-hardening';
 import { decisionsConformance } from './conformance-decisions';
 import { defaultsConformance } from './conformance-defaults';
+import { microsoftIdentityConformance } from './conformance-microsoft-identity';
 import { staffDomainsConformance } from './conformance-staff-domains';
 import type { ConformanceInfra } from './harness';
 import type { TestApi } from './support';
@@ -32,5 +33,8 @@ export function runIdentityConformance(t: TestApi, infra: ConformanceInfra): voi
   );
   t.describe('identity conformance: staff domains are exact (opshub#355)', () =>
     staffDomainsConformance(t, infra),
+  );
+  t.describe('identity conformance: one Microsoft identity per user (issue #228)', () =>
+    microsoftIdentityConformance(t, infra),
   );
 }

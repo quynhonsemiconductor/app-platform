@@ -271,6 +271,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     (await getContext()).internalAdapter.findUserByEmail(email.toLowerCase(), {
       includeAccounts: true,
     }) as Promise<{
+      user?: { id: string };
       accounts: Array<{ providerId: string; accountId: string }>;
     } | null>;
   const isReserved = reservedDomainCheck({
@@ -366,7 +367,27 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     },
     socialProviders: {
       ...(staffPreset
-        ? { microsoft: microsoftProvider(o.staff!, { onVerifiedEmail, lookup }) }
+        ? {
+            microsoft: microsoftProvider(o.staff!, {
+              onVerifiedEmail,
+              lookup,
+              emit: (event) => emitSafely(sink, event, onSinkError),
+              knownIdentity: async (oid) =>
+                Boolean(
+                  await (
+                    (
+                      await getContext()
+                    ).internalAdapter as unknown as {
+                      findAccountByKey(key: {
+                        providerId: string;
+                        accountId: string;
+                      }): Promise<unknown>;
+                    }
+                  ).findAccountByKey({ providerId: 'microsoft', accountId: oid }),
+                ),
+              logger: o.logger ?? consoleLogger,
+            }),
+          }
         : {}),
       ...(publicPreset && o.google
         ? { google: googleProvider(o.google, { onVerifiedEmail, isReserved }) }
@@ -527,6 +548,8 @@ type PurgeContext = {
     deleteSessions(tokens: string[]): Promise<unknown>;
     findUserById(id: string): Promise<{ id: string } | null>;
     updateUser(id: string, data: Record<string, unknown>): Promise<unknown>;
+    findAccounts(userId: string): Promise<Array<{ id: string; providerId: string }>>;
+    deleteAccount(id: string): Promise<unknown>;
   };
 };
 
@@ -700,6 +723,73 @@ export async function setUserBanned(
   if (!banned) return;
   await emitSafely(internal.sink, { name: 'admin.user_banned', userId });
   await revokeUserSessions(auth, userId);
+}
+
+/**
+ * Detach the Microsoft identity (or identities) from a user, service side: the explicit relink path.
+ *
+ * A Microsoft sign-in never links to an existing user that already holds a DIFFERENT Microsoft identity
+ * (`oid`); it is refused with `MICROSOFT_IDENTITY_CHANGED` and audited as
+ * `account.microsoft_link_refused`. When that is legitimate (a rehire or a recreated account that is the
+ * same person, a tenant migration), a product's administrator calls this from the admin UI, after
+ * deciding it IS the same person: it deletes the user's Microsoft account rows and revokes every session
+ * of the user, so the old identity can no longer sign in as them. The next Microsoft sign-in with that
+ * address then links the NEW identity to the same user (roles and history intact). To keep nothing of
+ * the old person, delete the user in the product instead.
+ *
+ * Returns how many Microsoft accounts it removed (0 for a user with none, or an unknown user: nothing
+ * changes and nothing is emitted). Emits `account.microsoft_unlinked` with the user id, the count and the
+ * optional `actorId` (who asked: the product's administrator, a string of at most 128 characters; record it,
+ * identity cannot know). **The product MUST gate who may call this**: it signs a person's old identity out and
+ * lets the next one in.
+ * Sessions are revoked FIRST, so a retry after a cache failure cannot leave the old identity's sessions alive.
+ * Like {@link revokeUserSessions} it **refuses while the cache is unavailable**
+ * ({@link SessionStoreUnavailableError}, before changing anything), because the sessions must end
+ * with the link. Password and Google accounts are not touched. The product decides who may call it.
+ */
+export async function unlinkMicrosoftAccount(
+  auth: Identity,
+  userId: string,
+  options: { actorId?: string } = {},
+): Promise<number> {
+  assertUserId(userId, 'unlinkMicrosoftAccount');
+  const actorId = options.actorId;
+  if (
+    actorId !== undefined &&
+    (typeof actorId !== 'string' ||
+      actorId.length === 0 ||
+      actorId.length > 128 ||
+      // eslint-disable-next-line no-control-regex
+      /[\u0000-\u001f\u007f]/.test(actorId))
+  ) {
+    throw new TypeError(
+      'identity: unlinkMicrosoftAccount: actorId must be a non-empty string of at most 128 characters',
+    );
+  }
+  const internal = internalOf(auth, 'unlinkMicrosoftAccount');
+  if (!internal.cache.isAvailable)
+    throw sessionStoreUnavailable('unlinkMicrosoftAccount', 'not connected');
+  const ctx = (await internal.getContext()) as unknown as PurgeContext;
+  if (!(await ctx.internalAdapter.findUserById(userId))) return 0;
+  const accounts = (await ctx.internalAdapter.findAccounts(userId)).filter(
+    (a) => a.providerId === 'microsoft',
+  );
+  if (accounts.length === 0) return 0;
+  // Sessions FIRST. If the cache fails here nothing has changed and a retry starts from the same state;
+  // done last, a retry would find no Microsoft account left, return 0 and leave the old identity's
+  // sessions alive.
+  await revokeUserSessions(auth, userId);
+  for (const account of accounts) await ctx.internalAdapter.deleteAccount(account.id);
+  await emitSafely(internal.sink, {
+    name: 'account.microsoft_unlinked',
+    userId,
+    detail: { count: accounts.length, ...(actorId === undefined ? {} : { actorId }) },
+  });
+  // The old identity could have signed in again between the revoke and the delete: end that session
+  // too. (If this one fails the accounts are gone already: call `revokeUserSessions` once the cache is
+  // healthy.)
+  await purgeSessions(internal, 'unlinkMicrosoftAccount', userId);
+  return accounts.length;
 }
 
 export function identityInternals(auth: Identity) {

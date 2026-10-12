@@ -2,7 +2,7 @@ import { decodeJwt } from 'jose';
 import { google } from 'better-auth/social-providers';
 import { refuseCallbackWith, rememberStaffSignIn, validRoles } from './callback-errors';
 import { normalizeStaffDomains, staffEmailIn } from './domains';
-import type { SecurityEvent } from './events';
+import type { IdentityLogger, SecurityEvent } from './events';
 
 export interface StaffOptions {
   /** The QNSC Entra tenant id. */
@@ -52,14 +52,29 @@ export type AccountLookup = (email: string) => Promise<{
   accounts: Array<{ providerId: string; accountId: string }>;
 } | null>;
 
+/** The claim a member's UPN is read from: `upn` if the app registration emits it, else `preferred_username`. */
+function upnClaim(claims: Record<string, unknown>): string | undefined {
+  return [claims['upn'], claims['preferred_username']].find(
+    (v): v is string => typeof v === 'string' && v.includes('@'),
+  );
+}
+
+/**
+ * The domain part of the UPN, lower-cased, for diagnosis: only when it looks like a host name (so nothing
+ * odd is ever logged), at most 100 characters. Never the part before the `@`.
+ */
+function upnSuffix(claims: Record<string, unknown>): string | undefined {
+  const upn = upnClaim(claims);
+  const suffix = upn?.split('@').pop()?.trim().toLowerCase();
+  return suffix && suffix.length <= 100 && /^[a-z0-9.-]+$/.test(suffix) ? suffix : undefined;
+}
+
 /** The member's user principal name: `upn` if the app registration emits it, else `preferred_username`. */
 function upnOnStaffDomain(
   claims: Record<string, unknown>,
   staffDomains: readonly string[],
 ): boolean {
-  const candidate = [claims['upn'], claims['preferred_username']].find(
-    (v): v is string => typeof v === 'string' && v.includes('@'),
-  );
+  const candidate = upnClaim(claims);
   return candidate !== undefined && staffEmailIn(candidate, staffDomains);
 }
 
@@ -105,6 +120,9 @@ export function microsoftProvider(
     onVerifiedEmail: VerifiedEmailHook;
     lookup: AccountLookup;
     emit?: (event: SecurityEvent) => Promise<void>;
+    /** Is there already an account for this Microsoft identity (`oid`)? Its owner is signed in normally. */
+    knownIdentity?: (oid: string) => Promise<boolean>;
+    logger?: IdentityLogger;
   },
 ) {
   const staffDomains = normalizeStaffDomains(staff.domains);
@@ -131,7 +149,26 @@ export function microsoftProvider(
       const guest = isEntraGuest(claims);
       if (guest && !(staff.allowGuests ?? false)) return null;
       if (!guest && !staffEmailIn(email, staffDomains)) return null;
-      if (!guest && requireUpn && !upnOnStaffDomain(claims, staffDomains)) return null;
+      if (!guest && requireUpn && !upnOnStaffDomain(claims, staffDomains)) {
+        // Names the problem the admin has to fix: the UPN SUFFIX (a domain, never the person), in the
+        // redirect code, an event and a log line. The `email` check above stays generic.
+        const suffix = upnSuffix(claims);
+        refuseCallbackWith('UPN_NOT_ON_STAFF_DOMAIN');
+        await hooks.emit?.({
+          name: 'staff.upn_refused',
+          detail: {
+            reason: suffix === undefined ? 'absent' : 'suffix_not_staff',
+            suffix: suffix ?? '',
+          },
+        });
+        hooks.logger?.warn(
+          suffix === undefined
+            ? 'A staff sign-in was refused: the id_token carries no UPN (upn / preferred_username).'
+            : `A staff sign-in was refused: its UPN suffix "${suffix}" is not on staff.domains. Add it, or set staff.requireUpnOnStaffDomain: false.`,
+          { code: 'identity.upn_not_on_staff_domain' },
+        );
+        return null;
+      }
 
       if (guest) {
         const existing = await hooks.lookup(email);
@@ -148,7 +185,13 @@ export function microsoftProvider(
         // identity to the user and sign it in as them. An existing user who already holds a Microsoft
         // identity is only ever signed in by THAT identity; a new one is refused (nothing written), and an
         // administrator relinks on purpose with `unlinkMicrosoftAccount`.
-        const existing = await hooks.lookup(email);
+        //
+        // EXCEPT an identity that already has its own account: Better Auth signs in the OWNER of
+        // (microsoft, oid) whatever address the token carries, so a known oid is never refused because
+        // its address now matches someone else's (the recycled-mailbox case works for the person who
+        // really is that oid).
+        const known = (await hooks.knownIdentity?.(oid)) === true;
+        const existing = known ? null : await hooks.lookup(email);
         const microsoft = existing?.accounts.filter((a) => a.providerId === 'microsoft') ?? [];
         if (existing && microsoft.length > 0 && !microsoft.some((a) => a.accountId === oid)) {
           refuseCallbackWith('MICROSOFT_IDENTITY_CHANGED');

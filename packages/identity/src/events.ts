@@ -15,7 +15,8 @@ export type SecurityEventName =
   | 'account.unverified_purged'
   | 'admin.user_banned'
   | 'account.microsoft_link_refused'
-  | 'account.microsoft_unlinked';
+  | 'account.microsoft_unlinked'
+  | 'staff.upn_refused';
 
 export interface SecurityEvent {
   name: SecurityEventName;

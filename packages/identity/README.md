@@ -11,6 +11,24 @@ permissions, UI, email text and cookie names stay in the product (`docs/ADMISSIO
 Decisions and evidence: [ADR 0002](../../docs/adr/0002-identity-v8-better-auth.md) (the WP-9 spike and the
 platform lead's decisions) and the identity v8 plan.
 
+## Behaviour changes on a minor upgrade (read before upgrading to 8.2)
+
+> **A staff member whose UPN is not on a `staff.domains` entry can no longer sign in.** `staff.requireUpnOnStaffDomain` is **on by
+> default** from 8.2: a member's `upn` (else `preferred_username`) must match an **exact** `staff.domains` entry (`*.` entries
+> match sub-domains). A member on `*.onmicrosoft.com`, a break-glass or service account, or any suffix you did not list is refused
+> after the upgrade, with `?error=UPN_NOT_ON_STAFF_DOMAIN`, a `staff.upn_refused` event and a warning that names the **UPN
+> suffix** (a domain, never the person), so the fix is one line:
+>
+> - add the suffix to `staff.domains` (preferred: it is a domain you verified in the tenant), or
+> - set `staff.requireUpnOnStaffDomain: false` (opt-out; say why in the code).
+>
+> **Check before you deploy:** list your members' UPN suffixes in Entra and compare with `staff.domains`.
+>
+> Also new in 8.2: a Microsoft sign-in is **refused** (`MICROSOFT_IDENTITY_CHANGED`) when its address matches a user that already
+> holds a _different_ Microsoft identity (recycled mailbox, edited `mail`); an administrator relinks on purpose with
+> `unlinkMicrosoftAccount` ([below](#per-user-controls-revokeusersessions-setuserbanned-unlinkmicrosoftaccount)). A Microsoft
+> identity that already has its own account is never refused for this.
+
 ## Migration from 7.x
 
 [MIGRATION-v7-to-v8.md](./MIGRATION-v7-to-v8.md) lists what is removed, what to add (dependencies, environment,
@@ -328,7 +346,7 @@ import {
 await revokeUserSessions(auth, userId); // -> how many sessions it ended (0 for an unknown user)
 await setUserBanned(auth, userId, true, 'offboarded'); // ban + end every session
 await setUserBanned(auth, userId, false); // unban
-await unlinkMicrosoftAccount(auth, userId); // -> how many Microsoft accounts it removed (0 for none)
+await unlinkMicrosoftAccount(auth, userId, { actorId: adminId }); // -> how many Microsoft accounts it removed (0 for none)
 ```
 
 - Both delete the user's sessions in **Valkey and Postgres** (the per-user session list included) and move `user.updatedAt`,
@@ -343,7 +361,11 @@ await unlinkMicrosoftAccount(auth, userId); // -> how many Microsoft accounts it
   matches already holds a different Microsoft `oid`. When your administrator has decided the new identity **is the same
   person**, call this from the admin UI: it deletes the user's Microsoft account rows and ends every session of the user (so the
   old identity cannot sign in as them any more), emits `account.microsoft_unlinked` (user id and a count), and the next Microsoft
-  sign-in with that address links the **new** identity to the **same** user, roles and history intact. The old identity is then
+  sign-in with that address links the **new** identity to the **same** user, roles and history intact. **Sessions are revoked first**, so a
+  retry after a cache failure cannot leave the old identity's sessions alive (if the final sweep fails the accounts are already gone:
+  call `revokeUserSessions` when the cache is healthy). Pass `{ actorId }` (the administrator, at most 128 characters) and it is on
+  the `account.microsoft_unlinked` event. **Identity cannot know who is calling: your product MUST gate who may call this** (an
+  admin role, ideally a second approver) and log the actor yourself. The old identity is then
   the one that is refused. To keep nothing of the previous person, delete the user in your product instead. Returns `0` (and
   emits nothing) for a user without a Microsoft account or an unknown one; password and Google accounts are not touched. Who may
   call it is the product's decision, and it should be logged there: identity has no admin role of its own.
@@ -549,7 +571,7 @@ or the error's message), then rethrows. **Alert on that code**: it is the only s
 Pass `logger` (`{ warn, error }`) to receive Better Auth's own warnings and errors, and `events` to receive the security
 events (`sign_in.success`/`failure` for password, social and SSO sign-ins, `account.locked`, `password.reset*`,
 `sessions.revoked`, `admin.user_banned`, `account.unverified_replaced`/`purged`,
-`account.microsoft_link_refused`, `account.microsoft_unlinked`). `/nest` has adapters for
+`account.microsoft_link_refused`, `account.microsoft_unlinked`, `staff.upn_refused`). `/nest` has adapters for
 `observability`: `observabilitySecurityEvents(logger)` (a counter `identity.security_events{event}` and a log line with ids
 only) and `identityLoggerFrom(pinoLogger)`. Events never contain an email address or a token.
 
@@ -608,12 +630,13 @@ Fixed in `DEFAULTS` and asserted by the conformance kit; a product cannot change
   address. A member whose address matches a user that **already holds a different Microsoft `oid`** is **refused** with
   `MICROSOFT_IDENTITY_CHANGED` (a redirect back with `?error=MICROSOFT_IDENTITY_CHANGED`; nothing is written, no second
   account, no session) and an `account.microsoft_link_refused` event with the user's id (never an address or an `oid`). The same
-  identity keeps signing in. A legitimate change (a rehire, a recreated account that _is_ the same person, a tenant migration)
+  identity keeps signing in, and so does **any Microsoft identity that already has an account of its own**, even when its address now
+  matches someone else's (the owner of `(microsoft, oid)` is signed in as that account, as Better Auth does). A legitimate change (a rehire, a recreated account that _is_ the same person, a tenant migration)
   is an explicit administrator operation: [`unlinkMicrosoftAccount`](#per-user-controls-revokeusersessions-setuserbanned).
-- **The member's UPN must be on a staff domain** (`staff.requireUpnOnStaffDomain`, default `true`). An Entra UPN suffix has to be
+- **The member's UPN must be on a staff domain** (`staff.requireUpnOnStaffDomain`, default `true`; a behaviour change, see the top of this file). An Entra UPN suffix has to be
   a domain the tenant has verified, so this holds a member to the company's own domain on a claim the `mail` attribute cannot
   stand in for. It reads `upn`, else `preferred_username` (present in v2 id_tokens under the `profile` scope, which identity
-  requests); with neither, or with one off every `staff.domains` entry, the member is refused with nothing written. Set it to
+  requests); with neither, or with one off every `staff.domains` entry, the member is refused with nothing written, with `?error=UPN_NOT_ON_STAFF_DOMAIN`, a `staff.upn_refused` event (`reason`: `suffix_not_staff` or `absent`; `suffix`: the UPN's domain) and a warning log line naming that suffix. The suffix is a domain, not an address: no local part is ever logged. Set it to
   `false` only if your members' UPNs are not on a staff domain (`*.onmicrosoft.com`) and say why. Guests are exempt (their UPN is
   `name_domain#EXT#@tenant`). This is not `xms_edov`: that needs the optional claim configured in the app registration, and it tells you the
   tenant owns the domain, not that the address belongs to this person.

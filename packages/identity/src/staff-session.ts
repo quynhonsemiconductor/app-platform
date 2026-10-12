@@ -1,4 +1,4 @@
-import { hasRequestState } from '@better-auth/core/context';
+import { hasRequestState, runWithTransaction } from '@better-auth/core/context';
 import { createAuthMiddleware, setShouldSkipSessionRefresh } from 'better-auth/api';
 import type { BetterAuthPlugin } from 'better-auth';
 import { APIError } from 'better-auth/api';
@@ -119,22 +119,35 @@ export function staffSessionHooks(policy: StaffSessionPolicy) {
   ): Promise<void> {
     if (!wasCreatedInThisRequest(userId)) return;
     try {
-      const ia =
-        context?.context?.internalAdapter ??
-        ((await policy.getContext()).internalAdapter as unknown as NonNullable<
-          HookContext['context']
-        >['internalAdapter']);
-      const [accounts, sessions] = await Promise.all([
-        ia.findAccounts(userId),
-        ia.listSessions(userId),
-      ]);
-      const only = accounts[0];
-      const onlyThisMicrosoftAccount =
-        accounts.length === 1 &&
-        only?.providerId === 'microsoft' &&
-        (claims === undefined || only.accountId === claims.oid);
-      if (!onlyThisMicrosoftAccount || sessions.length > 0) return;
-      await ia.deleteUser(userId);
+      const inner =
+        context?.context ??
+        ((await policy.getContext()) as unknown as NonNullable<HookContext['context']>);
+      const ia = inner.internalAdapter;
+      // ONE transaction for the check AND the delete. `deleteUser` removes the sessions, then the accounts,
+      // then the user in separate statements: outside a transaction a failure part-way (the user row last)
+      // leaves a BARE user (no account), which is worse than what we are cleaning up; and a session
+      // created between the check and the delete would be removed with the user. Inside it the check is
+      // repeated on the transaction's own snapshot, and a failure rolls everything back.
+      await runWithTransaction(
+        inner.adapter as unknown as Parameters<typeof runWithTransaction>[0],
+        async () => {
+          const [accounts, sessions, rows] = await Promise.all([
+            ia.findAccounts(userId),
+            ia.listSessions(userId),
+            inner.adapter.findMany({
+              model: 'session',
+              where: [{ field: 'userId', value: userId }],
+            }),
+          ]);
+          const only = accounts[0];
+          const onlyThisMicrosoftAccount =
+            accounts.length === 1 &&
+            only?.providerId === 'microsoft' &&
+            (claims === undefined || only.accountId === claims.oid);
+          if (!onlyThisMicrosoftAccount || sessions.length > 0 || rows.length > 0) return;
+          await ia.deleteUser(userId);
+        },
+      );
     } catch (error) {
       (policy.logger ?? consoleLogger).error(
         `${STAFF_SIGN_IN_REFUSED}: the user created by a refused staff sign-in could not be removed`,

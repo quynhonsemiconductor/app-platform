@@ -3067,6 +3067,47 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       expect(await tableRows('user', 'email', email)).toBe(1);
     });
 
+    it('a delete that fails PART-WAY rolls back: the user and its account are both still there (no bare user), and the sign-in is still refused', async () => {
+      reset();
+      const email = `boom-delete-${randomUUID().slice(0, 6)}@${STAFF_DOMAIN}`;
+      // The user row is the LAST thing deleted; make that statement fail, after the account is already gone.
+      await stack.pool.query(`
+        create or replace function boom_user_delete() returns trigger language plpgsql as $$
+        begin
+          if old.email like 'boom-delete-%' then raise exception 'forced user delete failure'; end if;
+          return old;
+        end $$;
+        drop trigger if exists boom_user_delete_t on identity."user";
+        create trigger boom_user_delete_t before delete on identity."user"
+          for each row execute function boom_user_delete();`);
+      try {
+        behaviour = 'throw';
+        const before = stack.logs.length;
+        const { callback } = await signInWith({ email, oid: randomUUID() });
+        expect(callback.location ?? '').toContain('error=STAFF_SIGN_IN_REFUSED');
+        const userId = calls[0]!.userId;
+        // all-or-nothing: the account delete was rolled back with the failed user delete
+        expect(await tableRows('user', 'email', email)).toBe(1);
+        expect(await tableRows('account', 'user_id', userId)).toBe(1);
+        expect(await sessionRows(email)).toBe(0);
+        expect(
+          stack.logs
+            .slice(before)
+            .some((l) => /could not be removed/.test(l.message) && l.level === 'error'),
+        ).toBe(true);
+        expect(JSON.stringify(stack.logs.slice(before))).not.toContain(
+          'forced user delete failure',
+        );
+      } finally {
+        await stack.pool.query(`drop trigger if exists boom_user_delete_t on identity."user"`);
+      }
+      // with the trigger gone the same person, once accepted, signs in (the leftover user is theirs)
+      behaviour = 'ok';
+      const retry = await signInWith({ email, oid: calls[0]!.claims.oid });
+      expect(await hasSession(retry.client)).toBe(true);
+      expect(await tableRows('user', 'email', email)).toBe(1);
+    });
+
     it('a refusal for a person who ALREADY has an account removes nothing: their user, their Microsoft account and their earlier session stay', async () => {
       reset();
       const email = staffEmail();

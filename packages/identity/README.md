@@ -298,8 +298,10 @@ linked) and **before the session is returned**.
   them if **this request created the user**, the user holds **nothing but this Microsoft account**, and has **no session**: a
   person the product refused leaves no row, so a later, legitimate sign-in of the same person is a first sign-in again (an
   offboarded person who is reinstated is not stuck behind a stale user). A user who was already there is never touched, nor is
-  one with another account or a session. It is best effort: if the delete fails, the failure is logged (class and code) and the
-  sign-in is refused all the same. Two limits: **`hooks.onUserCreated` already ran** for that user and nothing undoes what the
+  one with another account or a session. The check and the delete run in **one database transaction** (and the check is repeated inside it, on the database's own
+  rows, not only the cache), so a delete that fails part-way rolls back instead of leaving a bare user with no account, and a
+  session created in the meantime stops the delete. It is best effort: if the delete fails, the failure is logged (class and code)
+  and the sign-in is refused all the same. Two limits: **`hooks.onUserCreated` already ran** for that user and nothing undoes what the
   product did in it, so make it idempotent (or do the work in `onStaffSignIn`, where a refusal can still be observed); and
   between the check and the delete a concurrent sign-in of the same new person could, in theory, gain a session that the delete
   then removes with the user (the person signs in again).

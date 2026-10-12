@@ -6,7 +6,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * specific code from `getUserInfo` to the response of the same request, so the browser lands on
  * `?error=ACCOUNT_LINK_REQUIRED` and the product can tell the user what to do.
  */
-const store = new AsyncLocalStorage<{ code?: string; staffSignIn?: StaffSignInClaims }>();
+const store = new AsyncLocalStorage<{
+  code?: string;
+  staffSignIn?: StaffSignInClaims;
+  createdUsers?: Set<string>;
+}>();
 
 /**
  * What the Microsoft id_token of a staff sign-in said, validated. `roles` is the Entra App Roles claim:
@@ -52,6 +56,22 @@ export function takeStaffSignIn(): StaffSignInClaims | undefined {
   const claims = slot?.staffSignIn;
   if (slot) delete slot.staffSignIn;
   return claims;
+}
+
+/**
+ * Called from `databaseHooks.user.create.after`: this request created this user. Kept only for the
+ * request, so that a refused staff sign-in can tell "a user this very sign-in created" (and remove it)
+ * from "a user that was already there" (never touched).
+ */
+export function rememberCreatedUser(userId: string): void {
+  const slot = store.getStore();
+  if (!slot) return;
+  (slot.createdUsers ??= new Set()).add(userId);
+}
+
+/** Whether THIS request created `userId`. False outside a request handled by the identity handler. */
+export function wasCreatedInThisRequest(userId: string): boolean {
+  return store.getStore()?.createdUsers?.has(userId) === true;
 }
 
 /** Called from inside a provider's `getUserInfo`: refuse this sign-in with `code`. */

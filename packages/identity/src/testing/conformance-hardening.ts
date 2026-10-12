@@ -2888,6 +2888,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
     let idp: MockIdp;
     let stack: Stack;
     const calls: Call[] = [];
+    const created: string[] = [];
     let behaviour: 'ok' | 'throw' = 'ok';
 
     t.beforeAll(async () => {
@@ -2896,6 +2897,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
         presets: ['public', 'staff'],
         staff: { authority: idp.base },
         hooks: {
+          onUserCreated: (user) => void created.push(user.id),
           onStaffSignIn: async (user, claims) => {
             // what the product can rely on when the hook runs: the user and the Microsoft account exist
             const users = await stack.pool.query(`select 1 from identity."user" where id = $1`, [
@@ -2998,12 +3000,35 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       }
     });
 
-    it('a throw FAILS the sign-in as a redirect with STAFF_SIGN_IN_REFUSED: no session row, cookie or Valkey entry, and nothing the product wrote leaks', async () => {
+    const tableRows = async (table: string, where: string, value: string) =>
+      Number(
+        (
+          await stack.pool.query(
+            `select count(*)::int as n from identity."${table}" where ${where} = $1`,
+            [value],
+          )
+        ).rows[0].n,
+      );
+    const totals = async () => {
+      const count = async (table: string) =>
+        Number(
+          (await stack.pool.query(`select count(*)::int as n from identity."${table}"`)).rows[0].n,
+        );
+      return {
+        user: await count('user'),
+        account: await count('account'),
+        session: await count('session'),
+        verification: await count('verification'),
+      };
+    };
+
+    it('a throw FAILS the sign-in as a redirect with STAFF_SIGN_IN_REFUSED: no session row, cookie or Valkey entry, the user it created is removed, and nothing the product wrote leaks', async () => {
       reset();
       const email = staffEmail();
       const oid = randomUUID();
       behaviour = 'throw';
       const before = stack.logs.length;
+      const rowsBefore = await totals();
       const { client, callback } = await signInWith({ email, oid, claims: { roles: ['admin'] } });
       expect(calls).toHaveLength(1);
       // the browser is sent back with an error code it can show, not given a raw 500
@@ -3016,12 +3041,16 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       );
       expect(await hasSession(client)).toBe(false);
       expect(await sessionRows(email)).toBe(0);
-      const userId = (
-        await stack.pool.query<{ id: string }>(`select id from identity."user" where email = $1`, [
-          email,
-        ])
-      ).rows[0]!.id;
+      // Better Auth wrote the user and the Microsoft account before the session was refused; they are
+      // gone again, so the row counts of every table a sign-in writes to are what they were.
+      const userId = calls[0]!.userId;
+      expect(calls[0]!.userRows).toBe(1); // the hook did see them
+      expect(await tableRows('user', 'email', email)).toBe(0);
+      expect(await tableRows('account', 'user_id', userId)).toBe(0);
+      expect(await totals()).toEqual(rowsBefore);
       expect(await stack.get(`active-sessions-${userId}`)).toBeNull();
+      // the product's onUserCreated DID run for it, and nothing undoes that
+      expect(created).toContain(userId);
       // one error line, the class and no message: the product's text is nowhere
       const lines = stack.logs
         .slice(before)
@@ -3030,10 +3059,30 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       expect(lines[0]!.fields).toMatchObject({ error: 'Error' });
       expect(JSON.stringify(stack.logs.slice(before))).not.toContain('role sync failed');
       expect(`${callback.location}${callback.body}`).not.toContain('role sync failed');
+      // the same person, once the product can accept them, signs in as a first-time user
       behaviour = 'ok';
       const retry = await signInWith({ email, oid, claims: { roles: ['admin'] } });
       expect(await hasSession(retry.client)).toBe(true);
       expect(await sessionRows(email)).toBe(1);
+      expect(await tableRows('user', 'email', email)).toBe(1);
+    });
+
+    it('a refusal for a person who ALREADY has an account removes nothing: their user, their Microsoft account and their earlier session stay', async () => {
+      reset();
+      const email = staffEmail();
+      const oid = randomUUID();
+      const first = await signInWith({ email, oid });
+      expect(await hasSession(first.client)).toBe(true);
+      const rowsBefore = await totals();
+
+      behaviour = 'throw';
+      const second = await signInWith({ email, oid });
+      expect(second.callback.location ?? '').toContain('error=STAFF_SIGN_IN_REFUSED');
+      expect(await hasSession(second.client)).toBe(false);
+
+      expect(await totals()).toEqual(rowsBefore);
+      expect(await tableRows('user', 'email', email)).toBe(1);
+      expect(await hasSession(first.client)).toBe(true); // the first browser is still signed in
     });
 
     it('the id_token sign-in is disabled: a valid token sent server side mints nothing and runs no hook (code flow only)', async () => {

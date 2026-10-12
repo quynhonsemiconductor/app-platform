@@ -330,23 +330,40 @@ present.
 > Cloudflare's published ranges. **The signed edge address does not replace this**: it stops a forged
 > header, not a caller who bypasses the edge.
 
-**Behind a Cloudflare Worker or Pages Function** `cf-connecting-ip` at the API is not necessarily the
-visitor: a request across zones carries `2a06:98c0:3600::103` for every user (one rate-limit bucket and
-one `ip` in the log for the whole company), and a same-zone Worker is **unverified** (not observed
-here). A header the Worker sets (`x-client-ip`) is only a header to the API. The Worker therefore signs
-the address (`@quynhonsemiconductor/platform-http/edge`, `forwardToOrigin`; it forwards an allow-list of
-the visitor's headers and uses `redirect: 'manual'`, so the API's `/callback/*` 302 and its `Set-Cookie`
-reach the browser untouched): it strips inbound
-`x-qnsc-edge-*`, then sets `x-qnsc-edge-ip` (the address of `cf-connecting-ip`), `x-qnsc-edge-ts`
-(seconds) and `x-qnsc-edge-sig` = `base64url(HMAC-SHA256(EDGE_CLIENT_IP_SECRET, "ts|ip|METHOD|path"))`.
-The API accepts it only if the signature verifies in constant time for this request's method and path
-(query ignored), `|now - ts| <= 60 s`, and the value is a literal IP. Anything else is ignored and the
-order falls back to `cf-connecting-ip`. `EDGE_CLIENT_IP_SECRET_PREVIOUS` is accepted alongside the
-current one during a rotation; the secret is trimmed on both ends; secrets under 32 characters stop the
-application starting when `RateLimitGuard`, `IdempotencyInterceptor` or `HttpLoggingInterceptor` is
-registered (otherwise call `assertEdgeClientIpEnv()`); `clientIp()` answers once per request; refused
-headers are counted as `edge_client_ip.rejected{reason}`. A signature binds the request, not the
-sender: inside its minute the same request can be repeated, as the same visitor.
+**Behind a Cloudflare Worker or Pages Function.** What `cf-connecting-ip` holds depends on the path.
+Only the first case is something this platform has relied on; the others are from Cloudflare's
+documentation or unverified, and none was observed against a live Worker or Pages Function:
+
+- no Worker in the path: the visitor's address;
+- a **Worker** in the **same zone** as the API calling it with `fetch()`: documented by Cloudflare to
+  reflect `x-real-ip`, the visitor's address. **Unverified here.**
+- a **Pages Function**: **unverified, assume `2a06:98c0:3600::103`.** A Pages Function on a custom domain
+  probably runs in Pages' zone, not the API's, so its subrequest is cross-zone; community reports say the
+  API then sees that address;
+- a Worker or Pages Function calling an API in **another** zone: documented by Cloudflare: **the same
+  Cloudflare-internal address for every user** (`2a06:98c0:3600::103`).
+
+Assume the last address. Nothing fails: every user shares one rate-limit bucket and one `ip` in the log
+(the authentication library's 3-per-10-seconds credential limit becomes 3 per 10 seconds for the whole
+company). A header the Worker sets (`x-client-ip`, `x-forwarded-for`) is **not** a trusted source on its
+own: to the API it is only a header, settable by any caller that reaches it. Check a new deployment once:
+the `ip` of the request-summary log line must be the visitor's address.
+
+To keep the visitor's address behind a Worker or Pages Function, the Worker **signs** it
+(`@quynhonsemiconductor/platform-http/edge`, `forwardToOrigin`; it forwards an allow-list of the visitor's
+headers and uses `redirect: 'manual'`, so the API's `/callback/*` 302 and its `Set-Cookie` reach the
+browser untouched): it strips inbound `x-qnsc-edge-*`, then sets `x-qnsc-edge-ip` (the address of
+`cf-connecting-ip`), `x-qnsc-edge-ts` (seconds) and
+`x-qnsc-edge-sig` = `base64url(HMAC-SHA256(EDGE_CLIENT_IP_SECRET, "ts|ip|METHOD|path"))`. The API accepts
+it only if the signature verifies in constant time for this request's method and path (query ignored),
+`|now - ts| <= 60 s`, and the value is a literal IP. Anything else is ignored and the order falls back to
+`cf-connecting-ip`. `EDGE_CLIENT_IP_SECRET_PREVIOUS` is accepted alongside the current one during a
+rotation; the secret is trimmed on both ends; secrets under 32 characters stop the application starting
+when `RateLimitGuard`, `IdempotencyInterceptor` or `HttpLoggingInterceptor` is registered (otherwise call
+`assertEdgeClientIpEnv()`); `clientIp()` answers once per request; refused headers are counted as
+`edge_client_ip.rejected{reason}`. A signature binds the request, not the sender: inside its minute the
+same request can be repeated, as the same visitor. The alternative is to have the browser call the API
+directly.
 
 The same address MUST be used for the request log, rate-limit keys, the anonymous idempotency key and
 authentication-library rate limits (identity v8: Better Auth reads one header, `x-qnsc-client-ip`, which

@@ -27,6 +27,8 @@ type Account = { providerId: string; accountId?: string };
 function setup(options: {
   accounts?: Account[];
   sessions?: unknown[];
+  /** Session rows the DATABASE shows inside the transaction (the cache list may not). */
+  sessionRows?: unknown[];
   hook?: () => Promise<void> | void;
   deleteUser?: () => Promise<void>;
 }) {
@@ -36,19 +38,37 @@ function setup(options: {
     warn: (message, fields) => void logs.push({ message, fields }),
     error: (message, fields) => void logs.push({ message, fields }),
   };
+  const tx = { open: false, committed: 0, rolledBack: 0, deletedInside: [] as boolean[] };
+  const adapter = {
+    transaction: async <T>(work: (trx: unknown) => Promise<T>): Promise<T> => {
+      tx.open = true;
+      try {
+        const result = await work({});
+        tx.committed += 1;
+        return result;
+      } catch (error) {
+        tx.rolledBack += 1;
+        throw error;
+      } finally {
+        tx.open = false;
+      }
+    },
+    findMany: async () => options.sessionRows ?? [],
+  };
   const internalAdapter = {
     findUserById: async (id: string) => ({ id, email: claims.email }),
     findAccounts: async () => options.accounts ?? [{ providerId: 'microsoft', accountId: OID }],
     listSessions: async () => options.sessions ?? [],
     deleteSessions: async () => undefined,
     deleteUser: async (id: string) => {
+      tx.deletedInside.push(tx.open);
       if (options.deleteUser) await options.deleteUser();
       deleted.push(id);
     },
   };
   const hooks = staffSessionHooks({
     staffDomains: ['staff.example.test'],
-    getContext: async () => ({ internalAdapter }) as never,
+    getContext: async () => ({ internalAdapter, adapter }) as never,
     onStaffSignIn: options.hook ?? (() => undefined),
     logger,
   });
@@ -61,7 +81,7 @@ function setup(options: {
         await hooks.create.before({ userId: 'u1' }, {
           path: '/callback/:id',
           params: { id: 'microsoft' },
-          context: { internalAdapter },
+          context: { internalAdapter, adapter },
         } as never);
         return new Response(null, { status: 200 });
       } catch (error) {
@@ -72,7 +92,7 @@ function setup(options: {
     });
     return handler(new Request('https://api.example.test/api/auth/callback/microsoft'));
   };
-  return { request, deleted, logs };
+  return { request, deleted, logs, tx };
 }
 
 const refuses = () => {
@@ -134,6 +154,39 @@ describe('a refused staff sign-in removes the user this request created', () => 
     const t = setup({ hook: refuses, accounts: [] });
     await t.request({ created: true });
     expect(t.deleted).toEqual([]);
+  });
+
+  it('the check and the delete run in ONE transaction, which commits', async () => {
+    const t = setup({ hook: refuses });
+    await t.request({ created: true });
+    expect(t.deleted).toEqual(['u1']);
+    expect(t.tx.deletedInside).toEqual([true]);
+    expect(t.tx.committed).toBe(1);
+    expect(t.tx.rolledBack).toBe(0);
+  });
+
+  it('a session that the database shows INSIDE the transaction stops the delete, although the cache list was empty', async () => {
+    const t = setup({ hook: refuses, sessions: [], sessionRows: [{ id: 's-concurrent' }] });
+    const response = await t.request({ created: true });
+    expect(response.status).toBe(403); // still refused
+    expect(t.deleted).toEqual([]);
+    expect(t.tx.deletedInside).toEqual([]);
+  });
+
+  it('a delete that fails part-way rolls the transaction back (no bare user), is logged, and the sign-in is still refused', async () => {
+    const t = setup({
+      hook: refuses,
+      deleteUser: async () => {
+        throw new Error('user row delete failed after the account was removed');
+      },
+    });
+    const response = await t.request({ created: true });
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('STAFF_SIGN_IN_REFUSED');
+    expect(t.tx.rolledBack).toBe(1);
+    expect(t.tx.committed).toBe(0);
+    expect(JSON.stringify(t.logs)).toMatch(/could not be removed/);
+    expect(JSON.stringify(t.logs)).not.toContain('user row delete failed');
   });
 
   it('a failure to delete is logged (class and code, never the message) and the sign-in is still refused', async () => {

@@ -256,6 +256,9 @@ importers:
       '@quynhonsemiconductor/platform-cache':
         specifier: workspace:^
         version: link:../platform-cache
+      '@quynhonsemiconductor/testing':
+        specifier: workspace:^
+        version: link:../testing
       fastify:
         specifier: ^5.12.5
         version: 5.12.5

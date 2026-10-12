@@ -33,6 +33,27 @@ export const DISABLE_RATE_LIMIT_ENV = 'DISABLE_RATE_LIMIT';
 /** Opt-out variable for {@link IdempotencyInterceptor}: `disabled`. */
 export const IDEMPOTENCY_MODE_ENV = 'IDEMPOTENCY_MODE';
 
+/** How long an in-flight claim lives, in seconds. See {@link IdempotencyInterceptor}. */
+export const IDEMPOTENCY_LEASE_SECONDS_ENV = 'IDEMPOTENCY_LEASE_SECONDS';
+export const IDEMPOTENCY_LEASE_DEFAULT_SECONDS = 60;
+
+/**
+ * Read {@link IDEMPOTENCY_LEASE_SECONDS_ENV}: a whole number of seconds from 5 to 600, default 60. Anything else
+ * is a startup error naming the variable, so a typo never silently means "no protection" or "a lock that
+ * outlives the pod by an hour".
+ */
+export function readIdempotencyLeaseSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[IDEMPOTENCY_LEASE_SECONDS_ENV]?.trim();
+  if (raw === undefined || raw === '') return IDEMPOTENCY_LEASE_DEFAULT_SECONDS;
+  const seconds = /^\d{1,4}$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isInteger(seconds) || seconds < 5 || seconds > 600) {
+    throw new Error(
+      `${IDEMPOTENCY_LEASE_SECONDS_ENV}=${JSON.stringify(raw.slice(0, 20))} is not valid; expected a whole number of seconds from 5 to 600.`,
+    );
+  }
+  return seconds;
+}
+
 export function readMode<T extends string>(
   env: NodeJS.ProcessEnv,
   name: string,

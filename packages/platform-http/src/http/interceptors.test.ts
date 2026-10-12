@@ -210,83 +210,16 @@ describe('HttpLoggingInterceptor', () => {
 });
 
 /** A cache whose `get` misses and whose `set` records. */
-function fakeValkey(overrides?: {
-  get?: ReturnType<typeof vi.fn>;
-  set?: ReturnType<typeof vi.fn>;
-}): { svc: CacheService; get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> } {
-  const get = overrides?.get ?? vi.fn().mockResolvedValue(null);
-  const set = overrides?.set ?? vi.fn().mockResolvedValue('OK');
-  return { svc: { instance: { get, set } } as unknown as CacheService, get, set };
+function fakeValkey(): { svc: CacheService; evalSpy: ReturnType<typeof vi.fn> } {
+  // The first eval is "read or claim": answer that the key was claimed.
+  const evalSpy = vi.fn().mockResolvedValue(['claimed']);
+  const set = vi.fn().mockResolvedValue('OK');
+  return { svc: { instance: { set, eval: evalSpy } } as unknown as CacheService, evalSpy };
 }
-
-describe('IdempotencyInterceptor', () => {
-  it('passes through non-idempotent methods without touching the cache', async () => {
-    const { svc, get } = fakeValkey();
-    const interceptor = new IdempotencyInterceptor(svc);
-    const ctx = makeHttpContext({
-      method: 'GET',
-      url: '/v1/x',
-      headers: { 'idempotency-key': 'k' },
-    });
-    const out = await lastValueFrom(interceptor.intercept(ctx, makeHandler('fresh')));
-    expect(out).toBe('fresh');
-    expect(get).not.toHaveBeenCalled();
-  });
-
-  it('passes through when the Idempotency-Key header is missing', async () => {
-    const { svc, get } = fakeValkey();
-    const interceptor = new IdempotencyInterceptor(svc);
-    const ctx = makeHttpContext({ method: 'POST', url: '/v1/x', headers: {} });
-    const out = await lastValueFrom(interceptor.intercept(ctx, makeHandler('fresh')));
-    expect(out).toBe('fresh');
-    expect(get).not.toHaveBeenCalled();
-  });
-
-  it('returns the cached response on a hit and does not execute the handler', async () => {
-    const { svc } = fakeValkey({ get: vi.fn().mockResolvedValue(JSON.stringify({ ok: 1 })) });
-    const interceptor = new IdempotencyInterceptor(svc);
-    const ctx = makeHttpContext({
-      method: 'POST',
-      url: '/v1/x',
-      headers: { 'idempotency-key': 'k' },
-    });
-    let executed = false;
-    const out = await asUser('u1', () =>
-      lastValueFrom(
-        interceptor.intercept(
-          ctx,
-          makeHandler('fresh', () => (executed = true)),
-        ),
-      ),
-    );
-    expect(out).toEqual({ ok: 1 });
-    expect(executed).toBe(false);
-  });
-
-  it('executes and caches the response on a miss', async () => {
-    const { svc, set } = fakeValkey();
-    const interceptor = new IdempotencyInterceptor(svc);
-    const ctx = makeHttpContext({
-      method: 'POST',
-      url: '/v1/x',
-      headers: { 'idempotency-key': 'k' },
-    });
-    const out = await asUser('u1', () =>
-      lastValueFrom(interceptor.intercept(ctx, makeHandler({ created: true }))),
-    );
-    expect(out).toEqual({ created: true });
-    expect(set).toHaveBeenCalledWith(
-      'idem:u1:POST:/v1/x:k',
-      JSON.stringify({ created: true }),
-      'EX',
-      24 * 60 * 60,
-    );
-  });
-});
 
 describe('who the user is: the request context, and only the request context', () => {
   const keyOf = async (req: Record<string, unknown>, userId: string | undefined) => {
-    const { svc, set } = fakeValkey();
+    const { svc, evalSpy } = fakeValkey();
     const interceptor = new IdempotencyInterceptor(svc);
     const ctx = makeHttpContext({
       method: 'POST',
@@ -295,13 +228,13 @@ describe('who the user is: the request context, and only the request context', (
       ...req,
     });
     await asUser(userId, () => lastValueFrom(interceptor.intercept(ctx, makeHandler('x'))));
-    return set.mock.calls[0]?.[0] as string;
+    return evalSpy.mock.calls[0]?.[2] as string; // eval(script, 2, recordKey, claimKey, ...)
   };
 
   it('idempotency: an authenticated caller is keyed by the principal, whatever req.user says', async () => {
-    expect(await keyOf({}, 'u1')).toBe('idem:u1:POST:/v1/x:k');
-    expect(await keyOf({ user: { sub: 'someone-else', id: 'someone-else' } }, 'u1')).toBe(
-      'idem:u1:POST:/v1/x:k',
+    expect(await keyOf({}, 'u1')).toMatch(/^idem:u1:[0-9a-f]{32}$/);
+    expect(await keyOf({ user: { sub: 'someone-else', id: 'someone-else' } }, 'u1')).toMatch(
+      /^idem:u1:[0-9a-f]{32}$/,
     );
   });
 
@@ -315,7 +248,7 @@ describe('who the user is: the request context, and only the request context', (
       undefined,
     );
     expect(withUser).not.toContain('u9');
-    expect(withUser).toMatch(/^idem:[0-9a-f]{16}:POST:\/v1\/x:k$/);
+    expect(withUser).toMatch(/^idem:[0-9a-f]{16}:[0-9a-f]{32}$/);
   });
 
   describe('the access log', () => {

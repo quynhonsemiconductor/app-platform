@@ -37,6 +37,64 @@ package loads it through `require(esm)`, which needs Node >= 22.12 (the repo is 
 Peers: `@quynhonsemiconductor/platform-cache`, `platform-db`, `platform-http`, `drizzle-orm`, `pg`; for `/nest`:
 `@nestjs/common`, `@nestjs/core`, `fastify`; optional `observability`, `ioredis`.
 
+### Keeping Better Auth's dev-only peers out of the runtime image
+
+Better Auth declares `drizzle-kit`, `react`, `react-dom` and `vitest` as **optional peers** (its CLI, React client and test
+helpers; nothing identity uses). pnpm resolves an optional peer against whatever the importing project has installed, so a
+product with `vitest` or `drizzle-kit` in its `devDependencies` gets them written into Better Auth's lockfile entry as
+`optionalDependencies`, and `pnpm install --prod` **follows optional dependencies**. The runtime image then holds vitest,
+drizzle-kit and their trees (vite, rolldown, esbuild with its Go binary): that is how a Trivy CRITICAL on esbuild
+(CVE-2025-68121) reached opshub's image.
+
+Add this `.pnpmfile.cjs` at the root of the product, next to `pnpm-workspace.yaml`. It is the file the package ships
+(`node_modules/@quynhonsemiconductor/identity/pnpmfile.cjs`; a test keeps this snippet, that file and the reference consumer's
+copy byte-identical):
+
+```js
+const DEV_ONLY_PEERS_OF_BETTER_AUTH = ['drizzle-kit', 'react', 'react-dom', 'vitest'];
+
+function readPackage(pkg) {
+  if (pkg.name === 'better-auth') {
+    for (const peer of DEV_ONLY_PEERS_OF_BETTER_AUTH) {
+      delete pkg.peerDependencies?.[peer];
+      delete pkg.peerDependenciesMeta?.[peer];
+    }
+  }
+  return pkg;
+}
+
+module.exports = { hooks: { readPackage } };
+```
+
+Then, once:
+
+1. `pnpm install` (changing the file changes the lockfile; commit both).
+2. **Every Docker stage that runs `pnpm install --frozen-lockfile` copies the file** (`COPY ... .npmrc .pnpmfile.cjs ./`).
+   A frozen install checks the file's checksum against the lockfile: a stage that forgot it fails with
+   `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`, loudly, rather than shipping the tools.
+3. Check: `pnpm install --frozen-lockfile --prod`, then `pnpm why esbuild vitest --prod` prints nothing, and
+   `ls node_modules/.pnpm | grep -E '^(vitest|esbuild|drizzle-kit)@'` is empty.
+
+Verified on pnpm 10.33.2 (the version the product Dockerfiles pin) and 11.28.5, on a project with `vitest` and `drizzle-kit`
+as devDependencies (esbuild `0.18`, `0.25` and `0.28` in the production tree without it, none with it), and in the
+repository's `reference-consumer/` (vitest, vite and rolldown in the production tree without it, none with it; CI runs
+`check-prod-tree.sh` on every run). What was tried instead, and why it is not the fix:
+
+- **`overrides: { "better-auth>vitest": "-" }`** (in `pnpm-workspace.yaml` or `package.json`) removes the entry on pnpm 11 and
+  does nothing on pnpm 10.33.2: not usable while the Dockerfiles pin pnpm 10.
+- **`packageExtensions`** can add to a package's manifest but not remove a peer.
+- **`auto-install-peers=false`** changes nothing: these peers are not auto-installed, they are matched to what the project has.
+- **`pnpm install --prod --no-optional`** drops every optional dependency, including the platform binaries of
+  `@node-rs/argon2` (identity's password hashing), which that package delivers as optional dependencies (13 of them in its
+  manifest). Not run; it follows from the manifest, and it is not worth finding out in production.
+- **pnpm 11 alone** no longer follows these into `--prod` in the tests above, but do not rely on a changed default while the
+  lockfile still records them; the pnpmfile makes the lockfile say what the image holds.
+- In a workspace where the dev tools live at the **root** and Better Auth in a package, `resolve-peers-from-workspace-root=false`
+  also keeps them apart, but only for that layout.
+
+Accepted cost: a product with the pnpmfile cannot use `better-auth/react`, `better-auth/test` or the `auth generate` CLI from
+the same install. Identity does not use them; if a product needs one, remove the matching name from the list and re-install.
+
 ## Subpaths
 
 | Import                                   | What                                                                                    |

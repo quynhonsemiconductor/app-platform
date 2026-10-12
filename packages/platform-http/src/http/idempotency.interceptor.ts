@@ -20,6 +20,7 @@ import {
   type IdempotencyMode,
 } from './cache-requirement';
 import { clientIp } from './client-ip';
+import { currentUserId } from './principal';
 import { assertEdgeClientIpEnv } from './edge-client-ip';
 
 /** TTL for cached idempotent responses (24 hours). */
@@ -70,9 +71,7 @@ export class IdempotencyInterceptor implements NestInterceptor, OnApplicationBoo
     if (this.mode === 'disabled') return next.handle();
     if (context.getType() !== 'http') return next.handle();
 
-    const req = context
-      .switchToHttp()
-      .getRequest<FastifyRequest & { user?: { id?: string; sub?: string } }>();
+    const req = context.switchToHttp().getRequest<FastifyRequest>();
 
     if (!IDEMPOTENCY_METHODS.has(req.method)) return next.handle();
 
@@ -80,8 +79,10 @@ export class IdempotencyInterceptor implements NestInterceptor, OnApplicationBoo
     const idempotencyKey = Array.isArray(headerVal) ? headerVal[0] : headerVal;
     if (!idempotencyKey) return next.handle();
 
+    // The authenticated user from the request context (`setRequestPrincipal`); an anonymous caller is
+    // told apart by address and agent.
     const userId =
-      req.user?.sub ??
+      currentUserId() ??
       createHash('sha256')
         .update(`${clientIp(req)}:${req.headers['user-agent'] ?? ''}`)
         .digest('hex')

@@ -10,7 +10,7 @@ HTTP **access-log interceptor**, the request-context accessor, and input sanitis
 | `DomainException` + subclasses, `ErrorCategory` → status table, transport-level codes                 | your domain error **codes** (an append-only catalogue)                                                                         |
 | `GlobalExceptionFilter`: the one wire envelope `{ error: { code, message, details, correlationId } }` | which exceptions your code throws                                                                                              |
 | cursor and offset pagination (`PageQuerySchema`, `buildPageResult`, `encodeCursor` …)                 | which endpoints paginate, and their sort keys                                                                                  |
-| `clientIp(req)`: `cf-connecting-ip` → `x-forwarded-for` → socket                                      | nothing: stop reading `req.ip` / `x-real-ip`                                                                                   |
+| `clientIp(req)`: signed edge IP (opt-in) → `cf-connecting-ip` → `x-forwarded-for` → socket            | nothing: stop reading `req.ip` / `x-real-ip`                                                                                   |
 | `RateLimitGuard`, `@RateLimit(tier)`, tiers (`DEFAULT`, `STRICT`, `AUTH_LOGIN`, `AUTH_REFRESH`)       | **which route gets which tier**                                                                                                |
 | `IdempotencyInterceptor` (`Idempotency-Key` on `POST`/`PUT`)                                          | which routes opt in                                                                                                            |
 | `enableCorrelationId(app)`: the request's correlation id, validated, echoed, in the request context   | your own middleware, once its logger and exception filter read `observability`'s store (see [Rolling it out](#rolling-it-out)) |
@@ -42,7 +42,12 @@ Peer dependencies: `@nestjs/common`, `@nestjs/core`, `@nestjs/swagger` (`>=11`);
 
 ## Subpaths
 
-None: a single entry point (`.`). The two pagination styles share names (`buildPageResult`, `PagedResult`),
+| Import                                     | What                                                                                                                 |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `@quynhonsemiconductor/platform-http`      | everything below                                                                                                     |
+| `@quynhonsemiconductor/platform-http/edge` | the **Worker / Pages Function** half of the [signed edge client IP](#signed-edge-client-ip): WebCrypto only, no Node |
+
+The two pagination styles share names (`buildPageResult`, `PagedResult`),
 so they are exported as namespaces: `cursorPagination` and `offsetPagination`.
 
 ## Error envelope
@@ -73,21 +78,93 @@ A framework `HttpException` maps to the code of the same name (`HttpErrorCodes`)
 ```ts
 import { clientIp } from '@quynhonsemiconductor/platform-http';
 
-const ip = clientIp(req); // cf-connecting-ip → first x-forwarded-for → socket address
+const ip = clientIp(req);
+// signed edge address (only with EDGE_CLIENT_IP_SECRET) → cf-connecting-ip → first x-forwarded-for → socket
 ```
 
-Used by request logging, the rate-limit keys and the anonymous idempotency key. Behind
-Cloudflare Tunnel `req.ip` is `cloudflared`'s address, and the first `x-forwarded-for`
-entry is whatever the client chose to send; Cloudflare overwrites `cf-connecting-ip`, so a
-forged `x-forwarded-for` is ignored whenever it is present. A header value that is not a
-literal IP address is skipped.
+Used by request logging, the rate-limit keys, the anonymous idempotency key, and (through the
+identity package's mount) Better Auth's rate limits and the session's IP. Behind Cloudflare Tunnel
+`req.ip` is `cloudflared`'s address, and the first `x-forwarded-for` entry is whatever the client chose
+to send; Cloudflare overwrites `cf-connecting-ip`, so a forged `x-forwarded-for` is ignored whenever it
+is present. A header value that is not a literal IP address is skipped. `HttpLoggingInterceptor` does
+not read `x-real-ip`.
 
-> **Assumption.** `cf-connecting-ip` is authoritative only if the pods are reachable
-> **only** through the Cloudflare Tunnel and the gateway behind it (no public listener, no
-> `NodePort`). Otherwise a caller can choose its own address, and with it its own
-> rate-limit bucket.
+> **Assumption.** `cf-connecting-ip` is authoritative only if the pods are reachable **only** through
+> Cloudflare: the Tunnel and the gateway behind it, with no public listener and no `NodePort`, or an
+> allow-list of Cloudflare's published ranges at the origin. Otherwise a caller reaches the origin
+> directly and chooses its own `cf-connecting-ip`, so its own address and its own rate-limit bucket.
+> **This applies to the signed header below too**: it protects against a forged _header_, not against a
+> bypassed edge, and the origin must accept only Cloudflare traffic for either to mean anything.
 
-`HttpLoggingInterceptor` no longer reads `x-real-ip`.
+### Signed edge client IP
+
+Behind a **Cloudflare Worker or Pages Function** the address at the API may not be the visitor's
+(a request across zones carries a Cloudflare-internal address, `2a06:98c0:3600::103`, for every user;
+a same-zone Worker is unverified), and a plain header the Worker sets (`x-client-ip`) is only a header
+to the API: any caller that reaches it can set the same one. So the Worker **signs** the address, and the
+API believes it only when the signature verifies for _this_ request.
+
+**Opt-in.** Set `EDGE_CLIENT_IP_SECRET` on the API (at least 32 characters; a random 32-byte value,
+hex-encoded, is 64). Unset, nothing changes and `x-qnsc-edge-*` is ignored. Set, a verified address is
+used **before** `cf-connecting-ip`, by every consumer of `clientIp()`.
+
+**On the Worker** (the same secret, as a Worker secret):
+
+```ts
+import { applyEdgeClientIp } from '@quynhonsemiconductor/platform-http/edge';
+
+export default {
+  async fetch(request: Request, env: { EDGE_CLIENT_IP_SECRET: string }): Promise<Response> {
+    const target = new URL(request.url);
+    target.hostname = 'api.qnsc.vn';
+
+    const headers = new Headers(request.headers);
+    await applyEdgeClientIp(headers, {
+      secret: env.EDGE_CLIENT_IP_SECRET,
+      ip: request.headers.get('cf-connecting-ip'),
+      method: request.method,
+      path: target.pathname, // the path of the request SENT to the API, after any rewrite
+    });
+    return fetch(new Request(target, { method: request.method, headers, body: request.body }));
+  },
+};
+```
+
+`applyEdgeClientIp` first **strips every inbound `x-qnsc-edge-*`** (a visitor's own are never
+forwarded), then sets three headers: `x-qnsc-edge-ip` (the address), `x-qnsc-edge-ts` (now, in whole
+seconds) and `x-qnsc-edge-sig` (`base64url(HMAC-SHA256(secret, "ts|ip|METHOD|path"))`). With no usable
+address it strips and signs nothing; the request goes unsigned and the API falls back to its ordinary
+order. It refuses a secret under 32 characters.
+
+**On the API**, the address is accepted only if all of these hold; otherwise it is **ignored** and the
+order above applies, exactly as without the feature:
+
+- the three headers are present, once each, with the shape of a timestamp and a signature;
+- `|now - ts| <= 60` seconds (clock skew between the Worker and the API counts against this);
+- the HMAC over `ts|ip|METHOD|path` of **this request's** method and path (query string ignored, since
+  proxies reorder it) matches, compared in constant time;
+- the value is a literal IP address.
+
+So a signature lifted from one request does not work on another path, another method or another
+address, and the same request cannot be replayed after a minute. **Inside that minute, the same request
+can be replayed from anywhere**: the signature binds the request, not the sender. What it proves is
+who the visitor was, and an attacker with a captured header can at most repeat that same request as that
+visitor. Keep the path in the signature, keep the origin closed to non-Cloudflare traffic, and do not
+log `x-qnsc-edge-sig`.
+
+**Rotation.** Set `EDGE_CLIENT_IP_SECRET_PREVIOUS` to the old value and `EDGE_CLIENT_IP_SECRET` to the new
+one on the API, then change the Worker's secret, then remove the previous one. Both are accepted
+meanwhile. A short secret, or a previous one without a current one, **stops the application starting**
+(the rate-limit guard checks it at boot), naming the variable and never the value.
+
+**Observability.** Each refused header increments `edge_client_ip.rejected{reason}`, with `reason` one of
+`bad_signature`, `stale`, `malformed`, `incomplete`, `unverifiable`, `not_ip`, and a warning with the
+counts is logged at most once a minute (never a header value). A steady stream of `stale` means clocks
+have drifted; `bad_signature` after a rotation means the Worker still has the old secret; `incomplete`
+means something between the Worker and the API strips a header.
+
+A request with no `x-qnsc-edge-*` headers at all costs nothing: no HMAC is computed and nothing is
+counted.
 
 ## Correlation id
 

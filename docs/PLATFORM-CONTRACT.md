@@ -215,6 +215,7 @@ required variable that is missing is a **startup error that names the variable**
 | HTTP       | `RATE_LIMIT_MODE`                                                                               | `cache`                                       | `cache` \| `edge-only` \| `disabled` ([§9](#9-rate-limiting-and-idempotency)). Unknown value = startup error                                                                                                                 |
 |            | `IDEMPOTENCY_MODE`                                                                              | `cache`                                       | `cache` \| `disabled`                                                                                                                                                                                                        |
 |            | `CORRELATION_ID_MODE`                                                                           | `enabled`                                     | `enabled` \| `disabled` ([§7](#7-errors-and-http-behaviour)). `disabled` for a deployment whose product still seeds the correlation id itself. Unknown value = startup error                                                 |
+|            | `EDGE_CLIENT_IP_SECRET`, `EDGE_CLIENT_IP_SECRET_PREVIOUS`                                       | —                                             | Turns on the signed edge client IP ([§8](#8-client-ip)); ≥ 32 characters each. The previous one only during a rotation. A short or orphaned value is a startup error that names the variable                                 |
 |            | `DISABLE_RATE_LIMIT`                                                                            | —                                             | **deprecated** alias of `RATE_LIMIT_MODE=disabled`; ignored when `RATE_LIMIT_MODE` is set                                                                                                                                    |
 | Lifecycle  | `SHUTDOWN_TIMEOUT_MS`, `SHUTDOWN_ENDPOINT_DELAY_MS`                                             | `25000`, `5000` in a pod                      | [§3](#3-shutdown)                                                                                                                                                                                                            |
 |            | `ROLE`                                                                                          | —                                             | `worker` runs handlers and schedules; anything else only enqueues                                                                                                                                                            |
@@ -311,9 +312,11 @@ Reference: `platform-http` `DomainException` and subclasses, `GlobalExceptionFil
 
 The client address is, in order:
 
-1. `cf-connecting-ip`, if present and a literal IP address;
-2. the first `x-forwarded-for` entry that is a literal IP address;
-3. the socket address.
+1. the **signed edge address** (`x-qnsc-edge-ip`), only when `EDGE_CLIENT_IP_SECRET` is set and the
+   signature verifies for this request (below);
+2. `cf-connecting-ip`, if present and a literal IP address;
+3. the first `x-forwarded-for` entry that is a literal IP address;
+4. the socket address.
 
 A header value that is not a literal IP is skipped, not trusted. Behind Cloudflare Tunnel the socket
 address is `cloudflared`'s, and the first `x-forwarded-for` entry is whatever the client sent;
@@ -323,6 +326,23 @@ present.
 > **Assumption.** This is authoritative only if the pods are reachable **only** through the Cloudflare
 > Tunnel and the gateway behind it: no public listener, no `NodePort`. Otherwise a caller chooses its
 > own address, and with it its own rate-limit bucket. The platform (not the service) guarantees this.
+> The origin MUST accept Cloudflare traffic only: through the Tunnel, or with an allow-list of
+> Cloudflare's published ranges. **The signed edge address does not replace this**: it stops a forged
+> header, not a caller who bypasses the edge.
+
+**Behind a Cloudflare Worker or Pages Function** `cf-connecting-ip` at the API is not necessarily the
+visitor: a request across zones carries `2a06:98c0:3600::103` for every user (one rate-limit bucket and
+one `ip` in the log for the whole company), and a same-zone Worker is **unverified** (not observed
+here). A header the Worker sets (`x-client-ip`) is only a header to the API. The Worker therefore signs
+the address (`@quynhonsemiconductor/platform-http/edge`, `applyEdgeClientIp`): it strips inbound
+`x-qnsc-edge-*`, then sets `x-qnsc-edge-ip` (the address of `cf-connecting-ip`), `x-qnsc-edge-ts`
+(seconds) and `x-qnsc-edge-sig` = `base64url(HMAC-SHA256(EDGE_CLIENT_IP_SECRET, "ts|ip|METHOD|path"))`.
+The API accepts it only if the signature verifies in constant time for this request's method and path
+(query ignored), `|now - ts| <= 60 s`, and the value is a literal IP. Anything else is ignored and the
+order falls back to `cf-connecting-ip`. `EDGE_CLIENT_IP_SECRET_PREVIOUS` is accepted alongside the
+current one during a rotation; secrets under 32 characters stop the application starting; refused
+headers are counted as `edge_client_ip.rejected{reason}`. A signature binds the request, not the
+sender: inside its minute the same request can be repeated, as the same visitor.
 
 The same address MUST be used for the request log, rate-limit keys, the anonymous idempotency key and
 authentication-library rate limits (identity v8: Better Auth is configured to read `cf-connecting-ip`).
@@ -712,7 +732,7 @@ for any other language each is the service's own to implement and demonstrate.
 | 7   | Telemetry via OTLP; resource attributes include `service.*`, `deployment.environment.name`, `k8s.*`                                                                       | collector view                                                   |
 | 8   | Metric labels are bounded; unmatched routes are labelled `unmatched`                                                                                                      | request 1,000 random URLs: label count does not move             |
 | 9   | Error body is the envelope; statuses follow the category table; no internal detail                                                                                        | provoke 404, 422, 500                                            |
-| 10  | Client IP follows `cf-connecting-ip` → `x-forwarded-for` → socket, literal IPs only                                                                                       | forge `x-forwarded-for`                                          |
+| 10  | Client IP follows signed edge IP (opt-in) → `cf-connecting-ip` → `x-forwarded-for` → socket, literal IPs only; a signature for another IP, path or method is ignored      | forge `x-forwarded-for`; replay a signed header on another path  |
 | 11  | In production, no cache and neither `RATE_LIMIT_MODE=edge-only` nor `disabled` ⇒ startup error                                                                            | boot with `NODE_ENV=production` and no URL                       |
 | 12  | Database: password auth, TLS verified against the CA **and** the host name; `DATABASE_SSL=disable` refused in production                                                  | point `DATABASE_HOST` at an IP                                   |
 | 13  | A dropped database connection does not kill the process                                                                                                                   | `pg_terminate_backend` under load                                |

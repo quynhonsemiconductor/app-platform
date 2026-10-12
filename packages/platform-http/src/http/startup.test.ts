@@ -104,6 +104,26 @@ describe('production startup without a cache', () => {
     await expect(guard.canActivate({} as never)).resolves.toBe(true);
   });
 
+  it('refuses to start with a too-short EDGE_CLIENT_IP_SECRET, naming the variable and not its value', async () => {
+    vi.stubEnv('RATE_LIMIT_MODE', 'edge-only');
+    vi.stubEnv('EDGE_CLIENT_IP_SECRET', 'too-short-to-be-a-key');
+    const error = await boot(NO_CACHE, [RateLimitGuard]).catch((e: Error) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      /EDGE_CLIENT_IP_SECRET must be at least 32 characters/,
+    );
+    expect((error as Error).message).not.toContain('too-short-to-be-a-key');
+  });
+
+  it('refuses to start with EDGE_CLIENT_IP_SECRET_PREVIOUS and no EDGE_CLIENT_IP_SECRET', async () => {
+    vi.stubEnv('RATE_LIMIT_MODE', 'edge-only');
+    vi.stubEnv('EDGE_CLIENT_IP_SECRET_PREVIOUS', 'p'.repeat(40));
+    await expect(boot(NO_CACHE, [RateLimitGuard])).rejects.toThrow(
+      /EDGE_CLIENT_IP_SECRET_PREVIOUS is set but EDGE_CLIENT_IP_SECRET is not/,
+    );
+  });
+
   describe('RATE_LIMIT_MODE=disabled in production', () => {
     it.each([
       ['RATE_LIMIT_MODE=disabled', { RATE_LIMIT_MODE: 'disabled' }, false],

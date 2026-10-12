@@ -223,6 +223,31 @@ The generated id is prefixed with the job name (`daily-cleanup:8f3a…`), so a l
 search can scope to one job without another field, and an id that escapes into a
 payload is self-describing.
 
+### The principal: `setRequestPrincipal`
+
+Whatever authenticates a request records who the caller is in this context, once, and everything else reads it
+from here:
+
+```ts
+import { setRequestPrincipal, getRequestPrincipal } from '@quynhonsemiconductor/observability';
+
+setRequestPrincipal({
+  userId: session.user.id,
+  sessionId: session.session.id, // the id, never the session token
+  workspaceId: 'ws-1', // optional
+  fields: { role: 'admin', plan: 3 }, // optional: at most 8, on every log line of this request
+});
+getRequestPrincipal(); // -> { userId, sessionId } | undefined
+```
+
+`platform-http`'s rate limit, idempotency key, access log and exception filter read the user from this context and
+from nowhere else (not `req.user`); identity's `SessionGuard` calls it for you. Returns `false`, and does nothing,
+when no request context was seeded. Throws `TypeError` for an invalid value (ids: a non-empty string of at most 128
+characters without control characters; field names `[a-z][A-Za-z0-9_.]{0,39}` that are not `userId`, `sessionId`,
+`workspaceId`, `correlationId`, `trace.id`, `span.id`, `msg`, `level`, `time`, `err` ...; values a string of at most
+128 characters, a finite number or a boolean). The `sessionId` is not put on log lines. Fields are for observability and
+are never an authorization input.
+
 ## Metrics
 
 ```ts

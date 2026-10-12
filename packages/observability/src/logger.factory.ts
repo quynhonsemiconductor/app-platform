@@ -87,6 +87,7 @@ export function createLoggerOptions(options: LoggerFactoryOptions): PinoParams {
           if (requestContext.workspaceId) fields['workspaceId'] = requestContext.workspaceId;
           if (requestContext.userId) fields['userId'] = requestContext.userId;
           if (requestContext.correlationId) fields['correlationId'] = requestContext.correlationId;
+          if (requestContext.principalFields) Object.assign(fields, requestContext.principalFields);
         }
 
         return fields;

@@ -300,6 +300,48 @@ transaction while an organization is being created; a server-side call runs the 
 it never takes a second connection (it holds one, also with a pool of one). A transaction is only opened for a request
 whose session resolves: anonymous requests acquire no connection.
 
+### The principal in the request context, and the `principal` hook
+
+`SessionGuard` writes **who the caller is** into the request context (`observability`'s store, seeded by `enableCorrelationId`):
+`userId` and `sessionId` (the session's id, never its token). `platform-http`'s rate limit, idempotency key, access log and
+exception filter read the user from there, so a product needs no session-principal bridge. Needs `observability` >= 0.2.3.
+**`RateLimitGuard` must run AFTER `SessionGuard`, and a guard declared in the root module runs BEFORE the imported modules'.** Put it in a module of its own, imported after `IdentityModule`:
+
+```ts
+// rate-limit.module.ts: RateLimitGuard in a module of its own
+@Module({ providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }] })
+export class RateLimitModule {}
+
+// app.module.ts: IdentityModule first, RateLimitModule AFTER it
+@Module({
+  imports: [
+    CacheModule.forRoot(/* ... */),
+    IdentityModule.forRootAsync(/* ... */), // SessionGuard: authenticates, writes the principal
+    RateLimitModule, //                         RateLimitGuard: reads it
+  ],
+  // NOT here: providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }]
+})
+export class AppModule {}
+```
+
+If it is the other way round the whole NAT shares one bucket, and `SessionGuard` logs one warning saying so (it also warns once when there is no request context to write to). To add what only the product knows, pass `principal` to `IdentityModule.forRootAsync`:
+
+```ts
+IdentityModule.forRootAsync({
+  inject: [DATABASE_TOKEN, CacheService, JOBS],
+  useFactory: (db, cache, jobs) => createIdentity({ /* ... */ }),
+  principal: (session) => ({
+    workspaceId: workspaceOf(session.user), // goes on every log line as workspaceId
+    fields: { role: roleOf(session.user) }, // at most 8: [a-z][A-Za-z0-9_.]{0,39}, string/number/boolean
+  }),
+}),
+```
+
+`principal` can also be `{ inject: [WorkspaceService], useFactory: (workspaces) => (session) => ({ workspaceId: workspaces.of(session.user.id) }) }` to build the hook from the application's providers; `PRINCIPAL_HOOK` is exported for tests. The hook runs after the session is resolved, on authenticated routes only; it can add a workspace and fields but **cannot overwrite `userId` or `sessionId`**. It is for observability, **never authorization**
+(keep that in your own guard). If it throws or returns something invalid, the request continues with the user and session ids
+alone and one warning (the error class, never its message) is logged. Without `enableCorrelationId` there is no context to
+write to: authentication works and nothing is recorded.
+
 ### Entra claims at sign-in: `hooks.onStaffSignIn`
 
 `onStaffSignIn(user, { oid, tid, email, guest, roles })` runs on **every** Microsoft staff sign-in, after the user exists (created or

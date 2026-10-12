@@ -55,7 +55,7 @@
   "peerDependencies": {
     "@nestjs/common": ">=11",
     "@nestjs/core": ">=11",
-    "@quynhonsemiconductor/observability": ">=0.2.0",
+    "@quynhonsemiconductor/observability": ">=0.2.3",
     "@quynhonsemiconductor/platform-cache": ">=3.1.0",
     "@quynhonsemiconductor/platform-db": ">=0.1.1",
     "@quynhonsemiconductor/platform-http": ">=4.1.0",

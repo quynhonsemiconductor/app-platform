@@ -41,7 +41,11 @@ import {
   staffRefreshGuard,
   staffSessionHooks,
 } from './staff-session';
-import { withCallbackErrorCodes, type StaffSignInClaims } from './callback-errors';
+import {
+  rememberCreatedUser,
+  withCallbackErrorCodes,
+  type StaffSignInClaims,
+} from './callback-errors';
 import { withErrorEnvelope } from './error-envelope';
 import {
   makeCreateOrganizationAtomic,
@@ -124,8 +128,9 @@ export interface IdentityOptions {
      * (`[]` when the token carries none). A throw FAILS the sign-in and no session is minted, so a
      * product can reconcile its roles here and trust that nobody signs in with stale ones. Refused
      * sign-ins (another tenant, a guest, an address off `staff.domains`) never reach it, and write
-     * nothing. The hook itself needs the user, so a throw from it leaves the user and the linked
-     * account (never a session): put every rule decidable from the token in `staff`.
+     * nothing. The hook itself needs the user, so a throw from it happens after Better Auth wrote the
+     * user and the Microsoft account: when this request created them, and they hold nothing else and
+     * no session, they are deleted again (best effort). `onUserCreated` has already run for that user.
      */
     onStaffSignIn?: (user: User, claims: StaffSignInClaims) => Promise<void> | void;
   };
@@ -415,6 +420,8 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       user: {
         create: {
           after: async (user: User) => {
+            // Before the product's hook: a refused staff sign-in removes the user THIS request created.
+            rememberCreatedUser(user.id);
             await o.hooks?.onUserCreated?.(user);
           },
         },

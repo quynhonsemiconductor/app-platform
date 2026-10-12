@@ -292,8 +292,17 @@ linked) and **before the session is returned**.
 - `guest` says whether the token is for a **B2B guest** of the tenant (`acct = 1`, an `idp` other than the issuer, or `#EXT#` in the
   UPN). It can only be `true` when `staff.allowGuests` is set; otherwise guests are refused before the hook.
 - **A throw refuses the sign-in**: the browser is redirected back with `?error=STAFF_SIGN_IN_REFUSED`, and no session row, cookie
-  or cache entry exists. The user and the linked account stay; the next sign-in retries. The hook is given the user, so it can
-  only run once the user exists: **a refusal by the hook is the one that leaves a user row**.
+  or cache entry exists.
+- **The user this sign-in created is removed again.** The hook is given the user, so it runs once Better Auth has written the
+  user and the Microsoft account (one transaction; the session is a separate step). When the hook refuses, identity deletes
+  them if **this request created the user**, the user holds **nothing but this Microsoft account**, and has **no session**: a
+  person the product refused leaves no row, so a later, legitimate sign-in of the same person is a first sign-in again (an
+  offboarded person who is reinstated is not stuck behind a stale user). A user who was already there is never touched, nor is
+  one with another account or a session. It is best effort: if the delete fails, the failure is logged (class and code) and the
+  sign-in is refused all the same. Two limits: **`hooks.onUserCreated` already ran** for that user and nothing undoes what the
+  product did in it, so make it idempotent (or do the work in `onStaffSignIn`, where a refusal can still be observed); and
+  between the check and the delete a concurrent sign-in of the same new person could, in theory, gain a session that the delete
+  then removes with the user (the person signs in again).
 - **Keep the hook for what needs your data.** Put every rule identity can decide from the token (domain, tenant, guest) in
   `staff` options, where it is refused with nothing written.
 - **The product's error message is on neither the wire nor the logs.** One `identity.staff_sign_in_refused` line carries the

@@ -2,7 +2,11 @@ import { hasRequestState } from '@better-auth/core/context';
 import { createAuthMiddleware, setShouldSkipSessionRefresh } from 'better-auth/api';
 import type { BetterAuthPlugin } from 'better-auth';
 import { APIError } from 'better-auth/api';
-import { takeStaffSignIn, type StaffSignInClaims } from './callback-errors';
+import {
+  takeStaffSignIn,
+  wasCreatedInThisRequest,
+  type StaffSignInClaims,
+} from './callback-errors';
 import { DEFAULTS } from './defaults';
 import { staffEmailIn } from './domains';
 import { consoleLogger, errorFields, STAFF_SIGN_IN_REFUSED, type IdentityLogger } from './events';
@@ -32,6 +36,8 @@ interface HookContext {
       findUserById(id: string): Promise<{ id: string; email: string } | null>;
       findAccounts(userId: string): Promise<Array<{ providerId: string; accountId?: string }>>;
       deleteSessions(tokens: string[]): Promise<unknown>;
+      listSessions(userId: string): Promise<unknown[]>;
+      deleteUser(userId: string): Promise<unknown>;
     };
     adapter: {
       findOne(args: {
@@ -95,6 +101,58 @@ export function staffSessionHooks(policy: StaffSessionPolicy) {
     });
   }
 
+  /**
+   * Better Auth creates the user and the Microsoft account in one transaction and the session in a
+   * separate step, so a sign-in refused at the session leaves them behind: a bare user row that the
+   * product's own records know nothing about, and that blocks a later, legitimate sign-in of the same
+   * person from being treated as a first one. When THIS request created the user, and the user holds
+   * nothing but this Microsoft account and no session, remove it. Best effort: a failure is logged
+   * (class and code) and the sign-in is refused all the same.
+   *
+   * What it cannot undo: `hooks.onUserCreated` already ran for this user, and so did anything the
+   * product wrote in it. A user that was already there is never touched.
+   */
+  async function forgetUserCreatedByThisRequest(
+    userId: string,
+    claims: StaffSignInClaims | undefined,
+    context: HookContext | null,
+  ): Promise<void> {
+    if (!wasCreatedInThisRequest(userId)) return;
+    try {
+      const ia =
+        context?.context?.internalAdapter ??
+        ((await policy.getContext()).internalAdapter as unknown as NonNullable<
+          HookContext['context']
+        >['internalAdapter']);
+      const [accounts, sessions] = await Promise.all([
+        ia.findAccounts(userId),
+        ia.listSessions(userId),
+      ]);
+      const only = accounts[0];
+      const onlyThisMicrosoftAccount =
+        accounts.length === 1 &&
+        only?.providerId === 'microsoft' &&
+        (claims === undefined || only.accountId === claims.oid);
+      if (!onlyThisMicrosoftAccount || sessions.length > 0) return;
+      await ia.deleteUser(userId);
+    } catch (error) {
+      (policy.logger ?? consoleLogger).error(
+        `${STAFF_SIGN_IN_REFUSED}: the user created by a refused staff sign-in could not be removed`,
+        { code: STAFF_SIGN_IN_REFUSED, ...errorFields(error) },
+      );
+    }
+  }
+
+  async function refuseAndForget(
+    userId: string,
+    claims: StaffSignInClaims | undefined,
+    context: HookContext | null,
+    cause?: unknown,
+  ): Promise<never> {
+    await forgetUserCreatedByThisRequest(userId, claims, context);
+    return refuse(cause);
+  }
+
   async function runStaffSignIn(
     userId: string,
     claims: StaffSignInClaims,
@@ -115,12 +173,12 @@ export function staffSessionHooks(policy: StaffSessionPolicy) {
       (a) =>
         a.providerId === 'microsoft' && (a as { accountId?: unknown }).accountId === claims.oid,
     );
-    if (!user || !owns) refuse();
+    if (!user || !owns) return refuseAndForget(userId, claims, context);
     try {
       await hook(user as unknown as Parameters<StaffSignInHook>[0], claims);
     } catch (error) {
       // Only the class and code are logged, and nothing the product wrote reaches the wire.
-      refuse(error);
+      return refuseAndForget(userId, claims, context, error);
     }
   }
 
@@ -142,7 +200,11 @@ export function staffSessionHooks(policy: StaffSessionPolicy) {
         // FAIL CLOSED: a Microsoft session with no claims recorded for this request did not come through
         // the provider's checks and cannot be given to the product's hook (a server-side
         // `callbackOAuth`, say). With a hook configured it is refused rather than minted around it.
-        else if (policy.onStaffSignIn && isMicrosoftCallback(context)) refuse();
+        else if (policy.onStaffSignIn && isMicrosoftCallback(context)) {
+          return typeof userId === 'string'
+            ? refuseAndForget(userId, undefined, context)
+            : refuse();
+        }
         if (typeof userId !== 'string' || !(await isStaff(userId, context))) return;
         const requested =
           session['expiresAt'] instanceof Date

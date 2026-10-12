@@ -1,5 +1,19 @@
 # Changelog
 
+## [8.2.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.1.0...identity-v8.2.0) (2026-10-12)
+
+
+### ✨ Features
+
+* **identity:** own rate limit for the redirect endpoints, and opt-in __Host- cookies ([#219](https://github.com/quynhonsemiconductor/app-platform/issues/219)) ([e1419f2](https://github.com/quynhonsemiconductor/app-platform/commit/e1419f2558f7475a590f881dc9cc1c2da58d7a66))
+* **platform-http:** a signed edge client IP ([#224](https://github.com/quynhonsemiconductor/app-platform/issues/224)) ([eb4c6b6](https://github.com/quynhonsemiconductor/app-platform/commit/eb4c6b635ac1699fd9e79a180f3ccf3496691aab))
+
+
+### 🐛 Bug Fixes
+
+* **identity:** ship a pnpmfile that keeps Better Auth's optional peers out of the runtime image ([#226](https://github.com/quynhonsemiconductor/app-platform/issues/226)) ([b1d8a6a](https://github.com/quynhonsemiconductor/app-platform/commit/b1d8a6a9c1676eaa6f0d6d5ffad5dcd33be20db5))
+* **identity:** staff.domains matches exactly; sub-domains need an explicit "*.qnsc.vn" entry ([#225](https://github.com/quynhonsemiconductor/app-platform/issues/225)) ([ed57810](https://github.com/quynhonsemiconductor/app-platform/commit/ed578103999cbfbe96304de224798d272a90a3c0))
+
 ## [8.1.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.0.1...identity-v8.1.0) (2026-10-11)
 
 

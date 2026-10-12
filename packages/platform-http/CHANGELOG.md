@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v4.2.0...platform-http-v4.3.0) (2026-10-12)
+
+
+### ✨ Features
+
+* **platform-http:** a signed edge client IP ([#224](https://github.com/quynhonsemiconductor/app-platform/issues/224)) ([eb4c6b6](https://github.com/quynhonsemiconductor/app-platform/commit/eb4c6b635ac1699fd9e79a180f3ccf3496691aab))
+
 ## [4.2.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v4.1.0...platform-http-v4.2.0) (2026-10-10)
 
 

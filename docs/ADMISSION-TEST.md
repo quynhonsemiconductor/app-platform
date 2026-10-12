@@ -1,7 +1,7 @@
 # What belongs in a shared package
 
 Written 2026-07-28, after an audit that asked whether these packages are genuinely
-reusable or merely extracted from rally. The answer was "mostly the former", and
+reusable or merely extracted from rova (then called rally). The answer was "mostly the former", and
 the ~35 % that wasn't had one thing in common: it carried product vocabulary. This
 is the rule that fell out, plus the evidence behind it, so the next "should this be
 shared?" has an answer that isn't a matter of taste.
@@ -26,11 +26,11 @@ Worked examples, all real:
 | `FAIL_OPEN_FIELD` (`securityFailOpen`)                            | a Grafana alert rule matches this literal in the logs and on the `security.fail_open` metric; a rename disarms the alert silently |
 | `CacheService`                                                    | it is a **peer** dependency of the BFF session store — two copies means sessions written by one holder are invisible to the other |
 
-| out                                                    | why                                                                                                                                                                                     |
-| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| permission codes, wildcard semantics, role definitions | product vocabulary by definition. rally uses `ns:*` with colons; opshub uses dotted `resource.action`. The shared `permissionGrants` was literally unusable by one of its two consumers |
-| authorization guards, scope models                     | policy, not mechanism. Both products wrote their own and neither used the package's                                                                                                     |
-| HTTP controllers, DTOs, route names, cookie names      | product surface. The package's `AuthController` shipped a `switch-workspace` route only one product has a concept of                                                                    |
+| out                                                    | why                                                                                                                                                                                    |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| permission codes, wildcard semantics, role definitions | product vocabulary by definition. rova uses `ns:*` with colons; opshub uses dotted `resource.action`. The shared `permissionGrants` was literally unusable by one of its two consumers |
+| authorization guards, scope models                     | policy, not mechanism. Both products wrote their own and neither used the package's                                                                                                    |
+| HTTP controllers, DTOs, route names, cookie names      | product surface. The package's `AuthController` shipped a `switch-workspace` route only one product has a concept of                                                                   |
 
 ## Promotion checklist
 
@@ -137,5 +137,5 @@ Stated as limits, not gaps to be embarrassed about:
   be verified by a third party as-is.
 
 `FailOpenControl` still declares `authz_epoch` and `authz_epoch_bump`. Nothing
-emits them since rally deleted its authorization epoch (quynhonsemiconductor/rally#238);
+emits them since rova deleted its authorization epoch (quynhonsemiconductor/rova#238, the repository was called rally then);
 removing union members is breaking, so they come out on the next major.

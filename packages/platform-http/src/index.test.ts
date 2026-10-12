@@ -34,10 +34,10 @@ describe('error taxonomy', () => {
 
   it('gives 503 its own code rather than calling it an internal error', () => {
     // Both products throw ServiceUnavailableException when an optional integration is
-    // unconfigured — opshub's AI assistant, rally's SCM webhook secret. Under the
+    // unconfigured — opshub's AI assistant, rova's SCM webhook secret. Under the
     // INTERNAL_ERROR fallback the response said "this service is broken" about a service
-    // that was working and merely switched off, and on rally's INBOUND webhook that
-    // reached GitHub's delivery log as a rally fault.
+    // that was working and merely switched off, and on rova's INBOUND webhook that
+    // reached GitHub's delivery log as a rova fault.
     expect(httpStatusToErrorCode(503)).toBe(HttpErrorCodes.SERVICE_UNAVAILABLE);
     expect(httpStatusToErrorCode(503)).not.toBe(HttpErrorCodes.INTERNAL_ERROR);
   });

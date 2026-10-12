@@ -112,12 +112,12 @@ describe('startOtel', () => {
     });
 
     // Regression guard. NODE_ENV is a runtime MODE, not a deployment identity, and
-    // products deliberately pin it to "production" outside production — rally's
+    // products deliberately pin it to "production" outside production — rova's
     // develop does, because `devLoginAllowed` is `nodeEnv !== 'production'` and a
     // public host must not expose passwordless dev-login. Deriving deployment
     // identity from it labelled every develop signal as production.
     it('takes the deployment environment from DEPLOYMENT_ENV, not NODE_ENV', () => {
-      process.env['NODE_ENV'] = 'production'; // as rally's develop really runs
+      process.env['NODE_ENV'] = 'production'; // as rova's develop really runs
       process.env['DEPLOYMENT_ENV'] = 'develop';
       startOtel({ defaultServiceName: 'svc' });
 
@@ -158,7 +158,7 @@ describe('startOtel', () => {
   });
 
   /**
-   * The p99 alert on rally reported `10000`. That is not a latency — it is the largest
+   * The p99 alert on rova reported `10000`. That is not a latency — it is the largest
    * finite boundary of the OTel JS default explicit histogram, which `histogram_quantile`
    * clamps to, so a 12s request and a 180s request were the same number. Those requests
    * return 200 (the resilience presets budget 60s x 3 attempts), so the 5xx alert could

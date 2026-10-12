@@ -20,7 +20,7 @@ export interface CacheModuleOptions {
    */
   url?: string;
   /**
-   * Key prefix applied to every key (namespacing, e.g. `rally:` / `opshub:`),
+   * Key prefix applied to every key (namespacing, e.g. `rova:` / `opshub:`),
    * so multiple products may share a node without colliding.
    */
   keyPrefix?: string;

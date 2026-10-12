@@ -1,8 +1,8 @@
 # QNSC platform runtime contract
 
 **Status:** v1.2 (2026-10-10: the four open questions are decided, and the correlation id ships in `platform-http`; see [Decisions](#decisions-on-the-questions-found-while-deriving-this-document)) · derived from the packages **as merged on `main`** (2026-10-09):
-`platform-db` 0.1.1 · `platform-runtime` 0.1.3 · `platform-http` 4.1.x · `platform-cache` 3.1.x ·
-`observability` 0.2.x · `identity` 7.1.0 (8.0.0 pending) — plus [ADR 0001](adr/0001-job-queue.md),
+`platform-db` 0.1.1 · `platform-runtime` 0.1.3 · `platform-http` 4.x · `platform-cache` 3.x ·
+`observability` 0.2.x · `identity` 8.x (Better Auth) — plus [ADR 0001](adr/0001-job-queue.md),
 [ADR 0002](adr/0002-identity-v8-better-auth.md) and [PLAN.md](PLAN.md) §4 for what is decided but not yet built.
 
 This is the contract every QNSC service honours, whatever its language. TypeScript services get most
@@ -142,7 +142,8 @@ Reference: `platform-runtime` `enableGracefulShutdown(app)`. Resource release be
   logging is off, to avoid a duplicate). It carries method, URL, status code, duration, `userId`,
   `correlationId` and the client IP ([§8](#8-client-ip)). Probe paths are skipped ([§2](#2-health)).
 - **Security fail-open events** carry the literal field **`securityFailOpen`** with one of `denylist`,
-  `rate_limit`, `authz_epoch`, `authz_epoch_bump`. Alerts match that literal; renaming it silently
+  `rate_limit`, `authz_epoch`, `authz_epoch_bump` (`denylist` is emitted only by a product still on identity 7.x; nothing emits the
+  two `authz_epoch*` values any more, and they leave the union at the next `observability` major). Alerts match that literal; renaming it silently
   disarms them. It is paired with the `security.fail_open` metric ([§5](#5-telemetry)).
 
 Reference: `observability` `createLoggerOptions`, `failOpenLog`, `FAIL_OPEN_FIELD`, `withJobContext`.
@@ -403,6 +404,8 @@ Both store their state in the cache, and both are **only as good as it**.
 | `AUTH_LOGIN`                | 5 / 15 minutes, per IP                                                       |
 | `AUTH_REFRESH`              | 30 / minute, per session (SHA-256 of the refresh cookie), falling back to IP |
 
+`AUTH_REFRESH` is for a product still on identity 7.x, which has a refresh cookie. Identity 8 has no refresh token; a product on 8 does not use this tier.
+
 - **Idempotency:** `Idempotency-Key` on `POST`/`PUT`. The first call runs and its response is stored;
   a repeat with the same key returns the stored response (it is not re-executed). The stored entry is
   scoped to user, method, URL and key; an anonymous caller is identified by a hash of client IP and
@@ -477,11 +480,12 @@ vocabulary and stays in the product.
   in is product policy (default: no).
 - **Service-to-service** calls use the internal network plus a **per-service token**. Never the staff
   login, never a shared token between services.
-- Sessions for browsers are **opaque and server-side** (BFF); tokens are not handed to JavaScript.
-  Refresh tokens rotate on every use with family-level theft detection: reuse of a rotated token
-  revokes the family.
-- Logout and offboarding are effective immediately through a denylist in the cache. **The denylist is
-  a fail-open control** and is reported as such (`securityFailOpen: "denylist"`, [§4](#4-logs)).
+- Sessions for browsers are **opaque and server-side**, an `HttpOnly` cookie; nothing is handed to JavaScript. There is no
+  access token and no refresh token (identity 8), so there is no token family to steal and replay.
+- Logout and offboarding are effective on the next request: `revokeUserSessions` / `setUserBanned` delete the user's sessions in
+  the cache and the database. They **refuse to run while the cache is unavailable** (a fail-closed control) rather than leave
+  cached sessions alive. The `staff` preset has no cookie cache; the public preset's cookie cache can believe a session cookie
+  for up to 5 minutes.
 - Login failures collapse to one response to the browser (no IdP or internal detail); the
   `auth.login` metric is where "is login itself working" is answered ([§5](#5-telemetry)).
 - Passwords (where a product has them): argon2id; a login for an account that does not exist costs the
@@ -489,13 +493,12 @@ vocabulary and stays in the product.
 
 ### Current state and what is pending
 
-|                                             | State                                                                                                                                                                                                           |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identity` 7.1.0 (Passport/JWT, BFF, Entra) | Shipped; the products run it.                                                                                                                                                                                   |
-| `identity` 8.0.0 on Better Auth             | **Pending WP-10.** ADR 0002 passed all ten spike criteria; manual checks **M1–M4** against the real QNSC tenant must pass before release, and **M6** re-runs the email-callback criterion once WP-7/WP-8 exist. |
+|                                        | State                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity` 8.x on Better Auth          | **Shipped** (8.0.0; current 8.1.x). Replaces the Passport/JWT, BFF and refresh-token `identity` 7.x. Products move over one by one (opshub in its PR, rova on its own); a product still on 7.x keeps its own tokens, denylist and `AUTH_REFRESH` tier until it moves ([migration guide](../packages/identity/MIGRATION-v7-to-v8.md)). |
+| Manual checks M1–M4 on the QNSC tenant | Owned by the platform lead ([ADR 0002](adr/0002-identity-v8-better-auth.md), _Manual checks_). **This document does not record their result.**                                                                                                                                                                                        |
 
-Already decided for 8.0.0 ([ADR 0002](adr/0002-identity-v8-better-auth.md), decisions 1–6), so a
-service written now can rely on them:
+Decided for 8.0.0 ([ADR 0002](adr/0002-identity-v8-better-auth.md), decisions 1–6) and enforced by the package:
 
 - SSO provider client secrets are **encrypted in the column** (AES-256-GCM, `enc:v1:` prefix = key
   version), key from `IDENTITY_ENCRYPTION_KEY`; plain text is never logged or returned.

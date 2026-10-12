@@ -5,8 +5,9 @@ import type { JobRegistry } from './ports';
 /**
  * Register the one scheduled job identity owns: the 72-hour purge of unverified accounts
  * (ADR 0002, decision 2, rule 3). `jobs` is `platform-jobs`; the schedule is a singleton, so any
- * number of worker replicas run it once per tick. Call it from the worker process only. Until
- * `platform-jobs` exists, call {@link purgeUnverifiedAccounts} from an `ExclusiveJob` instead.
+ * number of worker replicas run it once per tick. Call it from the worker process only. A product
+ * that has not adopted `platform-jobs` can call {@link purgeUnverifiedAccounts} from a scheduler of
+ * its own that runs it on one replica at a time.
  */
 export async function registerIdentityJobs(jobs: JobRegistry, auth: Identity): Promise<void> {
   if (!identityInternals(auth))

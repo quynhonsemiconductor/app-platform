@@ -1,6 +1,6 @@
 # app-platform
 
-Shared **application-layer** packages for QNSC product backends (`rally`,
+Shared **application-layer** packages for QNSC product backends (`rova`,
 `opshub`, and future products). This repo does for application code what
 [`tf-modules`](https://github.com/quynhonsemiconductor/tf-modules) does for
 infrastructure: **one implementation, independently versioned, consumed by many

@@ -177,7 +177,7 @@ describe('CacheService (optional mode, disabled)', () => {
 
 describe('CacheModule', () => {
   it('forRoot wires the options value and the service', () => {
-    const mod = CacheModule.forRoot({ url: 'redis://localhost:6379', keyPrefix: 'rally:' });
+    const mod = CacheModule.forRoot({ url: 'redis://localhost:6379', keyPrefix: 'rova:' });
     expect(mod.module).toBe(CacheModule);
     expect(mod.exports).toContain(CacheService);
     const optionsProvider = (mod.providers ?? []).find(
@@ -186,7 +186,7 @@ describe('CacheModule', () => {
     );
     expect(optionsProvider?.useValue).toEqual({
       url: 'redis://localhost:6379',
-      keyPrefix: 'rally:',
+      keyPrefix: 'rova:',
     });
   });
 

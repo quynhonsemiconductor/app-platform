@@ -13,9 +13,9 @@ import { CACHE_OPTIONS, type CacheMode, type CacheModuleOptions } from './cache.
  * Shared Valkey/Redis cache primitive (ioredis wrapper).
  *
  * This is the generic *mechanism* — connection lifecycle, key/value access, a
- * token-bucket rate-limit helper, and distributed locks. It carries no domain
- * policy: auth-token denylist/rotation semantics live in `@quynhonsemiconductor/identity`
- * (`AuthTokenCache`), and each product owns its own rate-limit/cache policy.
+ * sliding-window rate-limit helper, and distributed locks. It carries no domain
+ * policy: sessions and their revocation belong to `@quynhonsemiconductor/identity`, and
+ * each product owns its own rate-limit/cache policy.
  *
  * Runtime state is per-product: each backend wires its own connection options
  * ({@link CacheModuleOptions}), so importing this shared code never implies a
@@ -48,8 +48,8 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
     // "unavailable". Eager connect avoids this.
     // Auto-pipelining batches commands issued in the same event-loop tick into a
     // single round trip. `Promise.all([...])` gives concurrency, not batching —
-    // without this, the two denylist reads `JwtAuthGuard` performs on every
-    // authenticated request cost two round trips instead of one. The saving
+    // without this, two independent reads a guard makes on every request (a
+    // session lookup and a revocation check, say) cost two round trips instead of one. The saving
     // applies to any call site that fires independent commands together.
     this.client = new Redis(url, {
       keyPrefix: this.options.keyPrefix,

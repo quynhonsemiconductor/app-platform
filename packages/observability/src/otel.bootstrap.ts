@@ -42,7 +42,7 @@ import {
 export interface OtelBootstrapOptions {
   /**
    * Fallback service name, used when the env var below is unset. Each app passes
-   * its own (`rally-api`, `rally-worker`).
+   * its own (`rova-api`, `rova-worker`).
    */
   defaultServiceName: string;
   /**
@@ -217,7 +217,7 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
 
   // DEPLOYMENT_ENV, not NODE_ENV. NODE_ENV is a RUNTIME MODE, not a deployment
   // identity, and products deliberately pin it to "production" outside production:
-  // rally's develop does so because `devLoginAllowed` is `nodeEnv !== 'production'`,
+  // rova's develop does so because `devLoginAllowed` is `nodeEnv !== 'production'`,
   // and a public host must not expose passwordless dev-login. Deriving deployment
   // identity from it would label every develop span, metric and log
   // `deployment.environment.name=production` — indistinguishable from real

@@ -7,7 +7,7 @@
 # (SAST, replaces CodeQL), Gitleaks (secrets) and osv-scanner (dependency CVEs,
 # reads pnpm-lock.yaml) still run source-based.
 #
-# This is a foundational library consumed by rally/opshub — a vulnerable
+# This is a foundational library consumed by rova/opshub — a vulnerable
 # transitive dep or injected pattern here propagates to every product, so this
 # gate belongs here just as much as in the app repos.
 #

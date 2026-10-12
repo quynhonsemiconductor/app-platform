@@ -61,6 +61,14 @@ Every form was run on pnpm 10.33.2 and 11.28.5 from a clean `HOME`, and the Dock
 (the current pattern installs on 10 and gets 401 on 11; the fix installs on both). The details and the other forms are in
 the root [README](../../README.md#authenticating-to-github-packages).
 
+## If your Docker image runs `pnpm install --prod`: add `.pnpmfile.cjs`
+
+Better Auth's 18 optional peers (`vitest`, `drizzle-kit`, `react`, `next`, `prisma` ...) are matched to your `devDependencies` and recorded
+as optional dependencies, which `--prod` follows: the image gains vitest, drizzle-kit and esbuild's Go binary (Trivy
+CVE-2025-68121 in opshub). Add the `.pnpmfile.cjs` that identity ships (required on pnpm 10, defensive on pnpm 11), **copy it into every Docker stage that
+installs**, run `pnpm install`, and check `pnpm why esbuild vitest --prod` is empty. The file, the check and what else was tried:
+[Keeping Better Auth's optional peers out of the runtime image](README.md#keeping-better-auths-optional-peers-out-of-the-runtime-image).
+
 ## Tables and data
 
 Generate the Better Auth tables for your instance (README, "Tables"), then migrate in one transaction. Ids are

@@ -184,6 +184,17 @@ jobs:
             printf '%s@%s\n' "$p" "$(node -p "require('./node_modules/@quynhonsemiconductor/$p/package.json').version")"
           done
 
+      # The runtime image of a product runs `pnpm install --prod`. better-auth's 18 optional peers (vitest,
+      # drizzle-kit, react, next, prisma ...) would otherwise be recorded as its optionalDependencies and followed
+      # by that install on pnpm 10 (opshub's pin; pnpm 11 does not do it). This checks, on the lockfile as it is
+      # now (after any `update --latest`): better-auth's entries carry none of them; with pnpm 10.33.2 AND the
+      # repository's pnpm, no devDependency is in `pnpm ls --prod --depth Infinity`; and, as a negative control,
+      # that pnpm 10 without `.pnpmfile.cjs` DOES leak, so the check is known to be able to fail.
+      - name: Production tree holds no dev tooling
+        run: ./check-prod-tree.sh
+        env:
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npmrc
+
       - run: docker version --format 'docker {{.Server.Version}}'
 
       - name: Test

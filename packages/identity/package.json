@@ -25,6 +25,7 @@
     "nest.d.ts",
     "testing.js",
     "testing.d.ts",
+    "pnpmfile.cjs",
     "MIGRATION-v7-to-v8.md"
   ],
   "publishConfig": {

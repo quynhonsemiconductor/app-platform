@@ -40,10 +40,43 @@ export function edgePath(raw: string): string {
 }
 
 /**
+ * The secret as BOTH ends use it: trimmed. A secret pasted into a Worker secret or an env file often
+ * carries a trailing newline; the two ends must treat it the same way, or every signature is a
+ * `bad_signature` and the API silently falls back to the shared address.
+ */
+export function normalizeEdgeSecret(secret: string): string {
+  return secret.trim();
+}
+
+/** The method as it is signed, upper-cased, or `undefined` if it is not letters only. */
+export function edgeMethod(method: string): string | undefined {
+  return /^[A-Za-z]+$/.test(method) ? method.toUpperCase() : undefined;
+}
+
+/**
+ * Whether `ip` is shaped like an address: only hex digits, `.` and `:`, with at least one `.` or `:`,
+ * at most 45 characters. This is NOT validation (the API checks with `isIP`); it is what makes the
+ * signing string unambiguous: it can contain no `|`.
+ */
+export function isEdgeIpText(ip: string): boolean {
+  return ip.length <= 45 && /^[0-9a-fA-F:.]+$/.test(ip) && /[.:]/.test(ip);
+}
+
+/**
  * What is signed: `ts|ip|METHOD|path`. Binding the method and the path means a signed header lifted from
  * one request cannot be replayed on another; binding the timestamp bounds replay of the SAME request to
  * {@link EDGE_MAX_SKEW_SECONDS}; binding the address means it cannot be swapped for another.
+ *
+ * Injective: `ts` is digits, `ip` is hex digits, `.` and `:`, and `METHOD` is letters, so none of them
+ * can contain the `|` separator, and everything after the third `|` is the path whatever it holds. Two
+ * different (ts, ip, method, path) can therefore never produce the same string. Anything that would
+ * break that throws, on both ends, rather than being signed.
  */
 export function edgeSigningString(ts: number, ip: string, method: string, path: string): string {
-  return `${ts}|${ip}|${method.toUpperCase()}|${edgePath(path)}`;
+  const upper = edgeMethod(method);
+  if (upper === undefined) throw new RangeError('The edge method must be letters only.');
+  if (!Number.isSafeInteger(ts) || ts < 0)
+    throw new RangeError('The edge timestamp is not a time.');
+  if (!isEdgeIpText(ip)) throw new RangeError('The edge address is not shaped like an IP address.');
+  return `${ts}|${ip}|${upper}|${edgePath(path)}`;
 }

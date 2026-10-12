@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { createHmac } from 'node:crypto';
+import http from 'node:http';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Observability from '@quynhonsemiconductor/observability';
@@ -17,6 +18,7 @@ import {
 } from './edge-client-ip';
 import { EDGE_IP_HEADER, EDGE_SIG_HEADER, EDGE_TS_HEADER } from './edge-protocol';
 import { clientIp } from './client-ip';
+import { edgeSigningString } from './edge-protocol';
 
 const SECRET = 'current-secret-0123456789abcdef0123456789';
 const PREVIOUS = 'previous-secret-0123456789abcdef012345678';
@@ -182,11 +184,11 @@ describe('verifyEdgeClientIp', () => {
     });
 
     it.each([EDGE_IP_HEADER, EDGE_TS_HEADER, EDGE_SIG_HEADER])(
-      'a repeated %s ⇒ malformed',
+      'a header that is not a string (%s) is absent, never read as the first value',
       async (name) => {
         const req = await signed();
-        req.headers[name] = [req.headers[name] as string, req.headers[name] as string];
-        expect(verify(req).reasons).toEqual(['malformed']);
+        req.headers[name] = [req.headers[name] as string, 'second'];
+        expect(verify(req)).toEqual({ ip: undefined, reasons: ['incomplete'] });
       },
     );
 
@@ -194,6 +196,13 @@ describe('verifyEdgeClientIp', () => {
       ['a non-numeric timestamp', EDGE_TS_HEADER, 'yesterday'],
       ['a negative timestamp', EDGE_TS_HEADER, '-5'],
       ['a 13-digit timestamp', EDGE_TS_HEADER, '1760000000000'],
+      ['a timestamp with a leading zero', EDGE_TS_HEADER, `0${NOW_S}`],
+      ['an address with a separator in it', EDGE_IP_HEADER, '203.0.113.7|POST'],
+      [
+        'an address with a space (what a repeated header becomes)',
+        EDGE_IP_HEADER,
+        `${VISITOR}, ${VISITOR}`,
+      ],
       ['a short signature', EDGE_SIG_HEADER, 'abc'],
       ['a signature with the wrong alphabet', EDGE_SIG_HEADER, '!'.repeat(43)],
       ['an over-long signature', EDGE_SIG_HEADER, 'a'.repeat(86)],
@@ -208,17 +217,24 @@ describe('verifyEdgeClientIp', () => {
       expect(verify({ headers: req.headers } as never).reasons).toEqual(['unverifiable']);
     });
 
-    it('validly signed, but not an IP address ⇒ not_ip, and the value is not returned', () => {
-      // A buggy or compromised edge that signs junk: the signature verifies, the value is still text.
-      const junk = '203.0.113.7\r\nx-evil: 1';
+    it('a method that is not letters only ⇒ unverifiable, never a signature over an ambiguous string', async () => {
+      const req = await signed();
+      for (const method of ['GET|x', 'M-SEARCH', 'GET ', '']) {
+        expect(verify({ ...req, method })).toEqual({ ip: undefined, reasons: ['unverifiable'] });
+      }
+    });
+
+    it('validly signed, shaped like an address, but not an IP ⇒ not_ip, and the value is not returned', () => {
+      // A buggy or compromised edge that signs 999.999.999.999: the signature verifies, the value is not an IP.
+      const odd = '999.999.999.999';
       const sig = createHmac('sha256', SECRET)
-        .update(`${NOW_S}|${junk}|POST|/api/auth/sign-in/social`)
+        .update(`${NOW_S}|${odd}|POST|/api/auth/sign-in/social`)
         .digest('base64url');
       const req: Req = {
         method: 'POST',
         url: '/api/auth/sign-in/social',
         headers: {
-          [EDGE_IP_HEADER]: junk,
+          [EDGE_IP_HEADER]: odd,
           [EDGE_TS_HEADER]: String(NOW_S),
           [EDGE_SIG_HEADER]: sig,
         },
@@ -226,11 +242,56 @@ describe('verifyEdgeClientIp', () => {
       expect(verify(req)).toEqual({ ip: undefined, reasons: ['not_ip'] });
     });
 
-    it('an unsigned junk address is bad_signature, not not_ip: the signature is checked first', async () => {
+    it('an address that is not even shaped like one is malformed, before any HMAC is computed', async () => {
       const req = await signed();
       req.headers[EDGE_IP_HEADER] = 'definitely not an ip';
-      expect(verify(req).reasons).toEqual(['bad_signature']);
+      expect(verify(req).reasons).toEqual(['malformed']);
+      req.headers[EDGE_IP_HEADER] = '203.0.113.7\r\nx-evil: 1';
+      expect(verify(req).reasons).toEqual(['malformed']);
     });
+  });
+});
+
+describe('the signing string is injective', () => {
+  it('refuses, on the signing side too, anything that could carry the separator', () => {
+    expect(() => edgeSigningString(1, '1.2.3.4', 'GE|T', '/')).toThrow(RangeError);
+    expect(() => edgeSigningString(1, '1.2.3.4', '', '/')).toThrow(RangeError);
+    expect(() => edgeSigningString(1, '1.2.3.4|POST', 'GET', '/')).toThrow(RangeError);
+    expect(() => edgeSigningString(1, '1.2.3.4', 'GET', '/')).not.toThrow();
+    expect(() => edgeSigningString(-1, '1.2.3.4', 'GET', '/')).toThrow(RangeError);
+    expect(() => edgeSigningString(1.5, '1.2.3.4', 'GET', '/')).toThrow(RangeError);
+  });
+
+  it('no two different (ts, ip, method, path) give the same string, even with | in the path', () => {
+    const tss = [1, 12, 123];
+    const ips = ['1.2.3.4', '1.2.3.45', '::1', '2001:db8::1'];
+    const methods = ['GET', 'POST', 'PUT'];
+    const paths = ['/', '/a', '/a|POST|/b', '|', '/1|1.2.3.4|GET|/', '/a|', '/%7C'];
+    const seen = new Map<string, string>();
+    for (const ts of tss)
+      for (const ip of ips)
+        for (const m of methods)
+          for (const path of paths) {
+            const text = edgeSigningString(ts, ip, m, path);
+            const tuple = JSON.stringify([ts, ip, m, path]);
+            expect(seen.get(text) ?? tuple, text).toBe(tuple);
+            seen.set(text, tuple);
+          }
+    expect(seen.size).toBe(tss.length * ips.length * methods.length * paths.length);
+  });
+
+  it('a path holding what looks like the rest of a signed string cannot stand for another request', async () => {
+    const real = await signed({ path: '/x|POST|/api/auth/sign-in/social' });
+    // The same signature presented for a request whose path is the "tail": a different string, refused.
+    const reasons: EdgeRejection[] = [];
+    const ip = verifyEdgeClientIp(
+      { ...real, url: '/api/auth/sign-in/social' },
+      config,
+      NOW_S,
+      (r) => reasons.push(r),
+    );
+    expect(ip).toBeUndefined();
+    expect(reasons).toEqual(['bad_signature']);
   });
 });
 
@@ -404,6 +465,34 @@ describe('counting the rejections', () => {
     expect(add).toHaveBeenCalledWith(1, { reason: 'bad_signature' });
   });
 
+  it('answers once per request: the guard, the log, idempotency and identity agree, and a refusal is counted once', async () => {
+    await loadWithMockedMeter();
+    vi.stubEnv(EDGE_SECRET_ENV, SECRET);
+    const { clientIp: wired } = await import('./client-ip');
+    const { resetEdgeConfigForTesting: reset } = await import('./edge-client-ip');
+    reset();
+    try {
+      const refused = { ...(await signed()), url: '/not-the-signed-path' };
+      const answers = [wired(refused), wired(refused), wired(refused)];
+      expect(answers).toEqual([CLOUDFLARE_INTERNAL, CLOUDFLARE_INTERNAL, CLOUDFLARE_INTERNAL]);
+      expect(add).toHaveBeenCalledTimes(1);
+
+      // Another request is its own answer, and its own count.
+      wired({ ...refused, headers: { ...refused.headers } });
+      expect(add).toHaveBeenCalledTimes(2);
+
+      // The accepted case is cached too: one answer for every consumer of the same request.
+      const good = await signed({ now: Date.now() });
+      expect(wired(good)).toBe(VISITOR);
+      good.headers[EDGE_IP_HEADER] = '198.51.100.9'; // changing it afterwards does not change the answer
+      expect(wired(good)).toBe(VISITOR);
+      expect(add).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllEnvs();
+      reset();
+    }
+  });
+
   it('never throws, even when the meter does', async () => {
     vi.resetModules();
     vi.doMock('@quynhonsemiconductor/observability', async (original) => ({
@@ -419,7 +508,36 @@ describe('counting the rejections', () => {
   });
 });
 
+describe('the secret is trimmed on both ends', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetEdgeConfigForTesting();
+  });
+
+  it('a Worker secret with a trailing newline signs exactly as one without', async () => {
+    const plain = await signed({ secret: SECRET });
+    const padded = await signed({ secret: `${SECRET}\n` });
+    expect(padded.headers[EDGE_SIG_HEADER]).toBe(plain.headers[EDGE_SIG_HEADER]);
+  });
+
+  it('an API secret with a trailing newline (an env file) verifies a Worker that has none, and the other way round', async () => {
+    expect(readEdgeConfig({ [EDGE_SECRET_ENV]: `${SECRET}\n` })).toEqual({ secrets: [SECRET] });
+    vi.stubEnv(EDGE_SECRET_ENV, `${SECRET}\r\n`);
+    expect(clientIp(await signed({ secret: SECRET }), { now: NOW_MS })).toBe(VISITOR);
+    expect(clientIp(await signed({ secret: `\n${SECRET} ` }), { now: NOW_MS })).toBe(VISITOR);
+  });
+
+  it('the minimum length is measured after trimming, on both ends', async () => {
+    const short = 's'.repeat(31);
+    expect(() => readEdgeConfig({ [EDGE_SECRET_ENV]: `${short}\n\n` })).toThrow(/at least 32/);
+    await expect(
+      signEdgeClientIp({ secret: `${short}\n`, ip: VISITOR, method: 'GET', path: '/' }),
+    ).rejects.toThrow(/at least 32/);
+  });
+});
+
 describe('over real HTTP (Fastify), signed by the Worker helper', () => {
+  const probeReasons: EdgeRejection[] = [];
   afterEach(() => {
     vi.unstubAllEnvs();
     resetEdgeConfigForTesting();
@@ -429,6 +547,12 @@ describe('over real HTTP (Fastify), signed by the Worker helper', () => {
     vi.stubEnv(EDGE_SECRET_ENV, SECRET);
     const fastify = Fastify();
     fastify.all('/api/auth/*', async (request) => ({ ip: clientIp(request) }));
+    fastify.get('/probe', async (request) => {
+      verifyEdgeClientIp(request, config, Math.floor(Date.now() / 1000), (r) =>
+        probeReasons.push(r),
+      );
+      return { ip: clientIp(request) };
+    });
     await fastify.ready();
     return fastify;
   }
@@ -499,4 +623,44 @@ describe('over real HTTP (Fastify), signed by the Worker helper', () => {
     expect(res.json()).toEqual({ ip: CLOUDFLARE_INTERNAL });
     await fastify.close();
   });
+
+  it.each([EDGE_IP_HEADER, EDGE_TS_HEADER, EDGE_SIG_HEADER])(
+    'a repeated %s reaches the API joined with ", " (Node), and is refused: the visitor is not believed',
+    async (repeated) => {
+      const fastify = await app();
+      probeReasons.length = 0;
+      const headers = new Headers();
+      await applyEdgeClientIp(headers, {
+        secret: SECRET,
+        ip: '203.0.113.7',
+        method: 'GET',
+        path: '/probe',
+      });
+      const raw: Record<string, string | string[]> = {
+        'cf-connecting-ip': CLOUDFLARE_INTERNAL,
+        ...Object.fromEntries(headers),
+      };
+      raw[repeated] = [raw[repeated] as string, raw[repeated] as string];
+
+      await fastify.listen({ port: 0, host: '127.0.0.1' });
+      const address = fastify.server.address() as { port: number };
+      const body = await new Promise<string>((resolve, reject) => {
+        const request = http.request(
+          { host: '127.0.0.1', port: address.port, path: '/probe', headers: raw },
+          (response) => {
+            let text = '';
+            response.on('data', (chunk: Buffer) => (text += chunk.toString()));
+            response.on('end', () => resolve(text));
+          },
+        );
+        request.on('error', reject);
+        request.end();
+      });
+
+      expect(JSON.parse(body)).toEqual({ ip: CLOUDFLARE_INTERNAL });
+      expect(probeReasons).toHaveLength(1);
+      expect(['malformed', 'bad_signature']).toContain(probeReasons[0]);
+      await fastify.close();
+    },
+  );
 });

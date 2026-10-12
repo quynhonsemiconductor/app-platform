@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   type NestInterceptor,
+  type OnApplicationBootstrap,
   Optional,
 } from '@nestjs/common';
 import { isIgnoredRequestPath } from '@quynhonsemiconductor/observability';
@@ -12,6 +13,7 @@ import type { FastifyRequest } from 'fastify';
 import type { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { clientIp } from './client-ip';
+import { assertEdgeClientIpEnv } from './edge-client-ip';
 import { requestContextStorage } from './request-context.service';
 
 /**
@@ -87,7 +89,7 @@ function sanitizeValue(value: unknown, key?: string): unknown {
  * Disable pino-http `autoLogging` when this interceptor is active.
  */
 @Injectable()
-export class HttpLoggingInterceptor implements NestInterceptor {
+export class HttpLoggingInterceptor implements NestInterceptor, OnApplicationBootstrap {
   private readonly logger = new Logger('HTTP');
   private readonly logBodies: boolean;
   /** `undefined` means "use the shared default" (`isIgnoredRequestPath`). */
@@ -96,6 +98,10 @@ export class HttpLoggingInterceptor implements NestInterceptor {
   constructor(@Optional() @Inject(HTTP_LOGGING_OPTIONS) options?: HttpLoggingOptions) {
     this.logBodies = options?.logBodies ?? false;
     this.skipPaths = options?.skipPaths ? new Set(options.skipPaths) : undefined;
+  }
+
+  onApplicationBootstrap(): void {
+    assertEdgeClientIpEnv(); // a bad EDGE_CLIENT_IP_SECRET stops the application, wherever clientIp() is used
   }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {

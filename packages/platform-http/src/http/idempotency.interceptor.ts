@@ -20,6 +20,7 @@ import {
   type IdempotencyMode,
 } from './cache-requirement';
 import { clientIp } from './client-ip';
+import { assertEdgeClientIpEnv } from './edge-client-ip';
 
 /** TTL for cached idempotent responses (24 hours). */
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
@@ -53,6 +54,7 @@ export class IdempotencyInterceptor implements NestInterceptor, OnApplicationBoo
   constructor(@Inject(CacheService) private readonly cache: CacheService) {}
 
   onApplicationBootstrap(): void {
+    assertEdgeClientIpEnv(); // a bad EDGE_CLIENT_IP_SECRET stops the application, wherever clientIp() is used
     if (this.mode === 'disabled') {
       this.logger.warn(`${IDEMPOTENCY_MODE_ENV}=disabled: Idempotency-Key is not honoured`);
       return;

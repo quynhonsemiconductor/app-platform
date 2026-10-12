@@ -111,35 +111,50 @@ used **before** `cf-connecting-ip`, by every consumer of `clientIp()`.
 **On the Worker** (the same secret, as a Worker secret):
 
 ```ts
-import { applyEdgeClientIp } from '@quynhonsemiconductor/platform-http/edge';
+import { forwardToOrigin } from '@quynhonsemiconductor/platform-http/edge';
 
 export default {
-  async fetch(request: Request, env: { EDGE_CLIENT_IP_SECRET: string }): Promise<Response> {
+  fetch(request: Request, env: { EDGE_CLIENT_IP_SECRET: string }): Promise<Response> {
     const target = new URL(request.url);
-    target.hostname = 'api.qnsc.vn';
-
-    const headers = new Headers(request.headers);
-    await applyEdgeClientIp(headers, {
-      secret: env.EDGE_CLIENT_IP_SECRET,
-      ip: request.headers.get('cf-connecting-ip'),
-      method: request.method,
-      path: target.pathname, // the path of the request SENT to the API, after any rewrite
-    });
-    return fetch(new Request(target, { method: request.method, headers, body: request.body }));
+    target.hostname = 'api.qnsc.vn'; // the URL of the request SENT to the API, after any rewrite
+    return forwardToOrigin(request, { secret: env.EDGE_CLIENT_IP_SECRET, target });
   },
 };
 ```
 
-`applyEdgeClientIp` first **strips every inbound `x-qnsc-edge-*`** (a visitor's own are never
-forwarded), then sets three headers: `x-qnsc-edge-ip` (the address), `x-qnsc-edge-ts` (now, in whole
-seconds) and `x-qnsc-edge-sig` (`base64url(HMAC-SHA256(secret, "ts|ip|METHOD|path"))`). With no usable
-address it strips and signs nothing; the request goes unsigned and the API falls back to its ordinary
-order. It refuses a secret under 32 characters.
+`forwardToOrigin` is `fetch(await edgeForwardRequest(request, options))`, and `edgeForwardRequest`
+builds the request the API should receive:
+
+- **`redirect: 'manual'`.** A `fetch` follows redirects by default. A Worker that did would follow
+  identity's `/callback/*` 302 itself: the browser would never receive the `Set-Cookie` that signs it in
+  (OAuth sign-in breaks), and the signed headers and the visitor's cookies would be re-sent to wherever the
+  redirect points. The response, a 302 and its `Set-Cookie` headers included, goes back to the browser as
+  the API sent it. **If you build the request by hand, set `redirect: 'manual'` yourself.**
+- **An allow-list of the visitor's headers** (`EDGE_FORWARD_HEADERS`: `cookie`, `authorization`,
+  `content-type`, `origin`, `user-agent`, `idempotency-key`, `x-correlation-id`, `traceparent` …); add a
+  product's own with `forwardHeaders: ['x-csrf-token']`. `x-forwarded-for`, `x-real-ip`, `cf-*`, a
+  visitor's own `x-qnsc-edge-*` and anything not listed never reach the API.
+- **The signed trio**, for the method and path of the request it builds: `x-qnsc-edge-ip` (the address,
+  from `cf-connecting-ip` unless you pass `ip`), `x-qnsc-edge-ts` (now, in whole seconds) and
+  `x-qnsc-edge-sig` (`base64url(HMAC-SHA256(secret, "ts|ip|METHOD|path"))`). With no usable address the
+  request goes unsigned and the API falls back to its ordinary order.
+- The body streamed through for methods that have one.
+
+`applyEdgeClientIp(headers, …)` is the lower-level piece (strip every `x-qnsc-edge-*`, then sign). It
+refuses a secret under 32 characters, a method that is not letters only, and an address that is not
+shaped like one.
+
+**The secret is trimmed on both ends.** A secret pasted into a Worker secret or an env file often carries
+a trailing newline; the Worker and the API both trim it, and the 32-character minimum is measured after
+trimming. If the two ends still differ (a typo, a half-finished rotation), every signature is a
+`bad_signature` and the API silently falls back to the shared address: watch for it (below).
 
 **On the API**, the address is accepted only if all of these hold; otherwise it is **ignored** and the
 order above applies, exactly as without the feature:
 
-- the three headers are present, once each, with the shape of a timestamp and a signature;
+- the three headers are present, each with the shape of what it is (a canonical timestamp, a 43-character
+  signature, an address); a header sent twice reaches the API joined with `, ` by Node and so has no such
+  shape: it is refused;
 - `|now - ts| <= 60` seconds (clock skew between the Worker and the API counts against this);
 - the HMAC over `ts|ip|METHOD|path` of **this request's** method and path (query string ignored, since
   proxies reorder it) matches, compared in constant time;
@@ -154,17 +169,27 @@ log `x-qnsc-edge-sig`.
 
 **Rotation.** Set `EDGE_CLIENT_IP_SECRET_PREVIOUS` to the old value and `EDGE_CLIENT_IP_SECRET` to the new
 one on the API, then change the Worker's secret, then remove the previous one. Both are accepted
-meanwhile. A short secret, or a previous one without a current one, **stops the application starting**
-(the rate-limit guard checks it at boot), naming the variable and never the value.
+meanwhile.
+
+**Bad configuration fails startup, where it can.** A secret under 32 characters, or a previous one without
+a current one, stops the application starting, naming the variable and never the value, when any of
+`RateLimitGuard`, `IdempotencyInterceptor` or `HttpLoggingInterceptor` is registered (each checks at
+boot). If you register none of them, call `assertEdgeClientIpEnv()` from `main.ts` yourself. Identity's
+mount does not check: without one of those, an unusable value is logged once as an error and the feature
+stays OFF (a request never fails on it).
 
 **Observability.** Each refused header increments `edge_client_ip.rejected{reason}`, with `reason` one of
 `bad_signature`, `stale`, `malformed`, `incomplete`, `unverifiable`, `not_ip`, and a warning with the
 counts is logged at most once a minute (never a header value). A steady stream of `stale` means clocks
-have drifted; `bad_signature` after a rotation means the Worker still has the old secret; `incomplete`
-means something between the Worker and the API strips a header.
+have drifted; `bad_signature` means the two secrets differ (or a rotation is half done), or the Worker
+signs another path or method than the API receives, and the warning says so; `incomplete` means
+something between the Worker and the API strips a header; `malformed` includes a header sent twice. There
+is no automatic alarm on the rate: alert on `edge_client_ip.rejected` in the metrics, because every refusal
+is a request that is rate-limited and logged under the shared address.
 
 A request with no `x-qnsc-edge-*` headers at all costs nothing: no HMAC is computed and nothing is
-counted.
+counted. `clientIp()` answers **once per request** (memoised on the request object), so the rate-limit
+guard, the access log, idempotency and identity's mount agree, and a refusal is counted once.
 
 ## Correlation id
 

@@ -8,8 +8,11 @@ import {
   EDGE_SECRET_MIN_LENGTH,
   EDGE_SIG_HEADER,
   EDGE_TS_HEADER,
+  edgeMethod,
   edgePath,
   edgeSigningString,
+  isEdgeIpText,
+  normalizeEdgeSecret,
 } from './edge-protocol';
 
 /** The secret the Worker signs with. Setting it turns the signed edge client IP on. */
@@ -20,10 +23,10 @@ export const EDGE_SECRET_PREVIOUS_ENV = 'EDGE_CLIENT_IP_SECRET_PREVIOUS';
 /** Why an edge client IP was refused. A closed set: it is a metric label. */
 export type EdgeRejection =
   | 'incomplete' // some of the three headers, not all
-  | 'malformed' // a repeated header, or a timestamp/signature that is not the shape of one
-  | 'unverifiable' // the request has no method or path to check the signature against
+  | 'malformed' // a timestamp, signature or address that is not the shape of one (a repeated header too)
+  | 'unverifiable' // the request has no usable method or path to check the signature against
   | 'stale' // the timestamp is more than 60 s from now
-  | 'bad_signature' // wrong secret, or the request is not the one that was signed
+  | 'bad_signature' // wrong secret (or one end's differs), or the request is not the one that was signed
   | 'not_ip'; // validly signed, but the value is not an IP address
 
 export const EDGE_REJECTED_METRIC = 'edge_client_ip.rejected';
@@ -48,8 +51,8 @@ export interface EdgeConfig {
  * short, or a previous secret without a current one), naming the variable and never its value.
  */
 export function readEdgeConfig(env: NodeJS.ProcessEnv = process.env): EdgeConfig | undefined {
-  const current = env[EDGE_SECRET_ENV]?.trim();
-  const previous = env[EDGE_SECRET_PREVIOUS_ENV]?.trim();
+  const current = normalizeEdgeSecret(env[EDGE_SECRET_ENV] ?? '');
+  const previous = normalizeEdgeSecret(env[EDGE_SECRET_PREVIOUS_ENV] ?? '');
   if (!current) {
     if (previous) {
       throw new Error(`${EDGE_SECRET_PREVIOUS_ENV} is set but ${EDGE_SECRET_ENV} is not.`);
@@ -77,13 +80,19 @@ export function assertEdgeClientIpEnv(env: NodeJS.ProcessEnv = process.env): voi
   readEdgeConfig(env);
 }
 
-function only(headers: Headers, name: string): string | undefined | 'repeated' {
+/**
+ * One header as a string. Node joins a repeated header with ", " (only `set-cookie` is ever an array),
+ * so a header sent twice arrives as one string that no longer has the shape of a timestamp or a
+ * signature, or the signed value, and is refused as `malformed` or `bad_signature`. Anything that is
+ * not a string is treated as absent.
+ */
+function only(headers: Headers, name: string): string | undefined {
   const value = headers[name];
-  if (Array.isArray(value)) return value.length === 1 ? value[0] : 'repeated';
-  return value;
+  return typeof value === 'string' ? value : undefined;
 }
 
-const TS = /^\d{1,12}$/;
+/** Canonical seconds: no sign, no leading zero, so a timestamp has one spelling. */
+const TS = /^[1-9]\d{0,11}$/;
 const SIG = /^[A-Za-z0-9_-]{43}$/;
 
 /**
@@ -109,12 +118,11 @@ export function verifyEdgeClientIp(
 
   if (ip === undefined && ts === undefined && sig === undefined) return undefined; // no edge: not a rejection
   if (ip === undefined || ts === undefined || sig === undefined) return fail('incomplete', reject);
-  if (ip === 'repeated' || ts === 'repeated' || sig === 'repeated')
-    return fail('malformed', reject);
-  if (!TS.test(ts) || !SIG.test(sig)) return fail('malformed', reject);
+  if (!TS.test(ts) || !SIG.test(sig) || !isEdgeIpText(ip)) return fail('malformed', reject);
   if (typeof req.method !== 'string' || typeof req.url !== 'string') {
     return fail('unverifiable', reject);
   }
+  if (edgeMethod(req.method) === undefined) return fail('unverifiable', reject);
 
   const signedAt = Number(ts);
   if (Math.abs(nowSeconds - signedAt) > EDGE_MAX_SKEW_SECONDS) return fail('stale', reject);
@@ -161,7 +169,10 @@ export function reportEdgeRejection(reason: EdgeRejection, nowMs: number = Date.
       lastWarnAt = nowMs;
       const summary = [...pending].map(([r, n]) => `${r}=${n}`).join(' ');
       pending.clear();
-      logger.warn(`Refused signed edge client IPs since the last report: ${summary}`);
+      const hint = summary.includes('bad_signature')
+        ? ' bad_signature: the Worker and the API hold different secrets (surrounding whitespace is ignored on both ends), a rotation is half done, or the Worker signs a different path or method than the API receives.'
+        : '';
+      logger.warn(`Refused signed edge client IPs since the last report: ${summary}.${hint}`);
     }
   } catch {
     // Telemetry must never fail a request.

@@ -4,6 +4,7 @@ import { APP_GUARD, APP_INTERCEPTOR, NestFactory } from '@nestjs/core';
 import { SecurityMetrics } from '@quynhonsemiconductor/observability';
 import { CacheModule, CacheService } from '@quynhonsemiconductor/platform-cache';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HttpLoggingInterceptor } from './http-logging.interceptor';
 import { IdempotencyInterceptor, UseIdempotency } from './idempotency.interceptor';
 import { RateLimitGuard } from './rate-limit.guard';
 
@@ -115,6 +116,27 @@ describe('production startup without a cache', () => {
     );
     expect((error as Error).message).not.toContain('too-short-to-be-a-key');
   });
+
+  it.each([
+    [
+      'the idempotency interceptor',
+      [{ provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor }],
+    ],
+    [
+      'the access-log interceptor',
+      [{ provide: APP_INTERCEPTOR, useClass: HttpLoggingInterceptor }],
+    ],
+  ])(
+    'a bad EDGE_CLIENT_IP_SECRET stops the application with only %s registered (no rate-limit guard)',
+    async (_label, providers) => {
+      vi.stubEnv('RATE_LIMIT_MODE', 'edge-only');
+      vi.stubEnv('IDEMPOTENCY_MODE', 'disabled');
+      vi.stubEnv('EDGE_CLIENT_IP_SECRET', 'too-short-to-be-a-key');
+      await expect(boot(NO_CACHE, providers)).rejects.toThrow(
+        /EDGE_CLIENT_IP_SECRET must be at least 32 characters/,
+      );
+    },
+  );
 
   it('refuses to start with EDGE_CLIENT_IP_SECRET_PREVIOUS and no EDGE_CLIENT_IP_SECRET', async () => {
     vi.stubEnv('RATE_LIMIT_MODE', 'edge-only');

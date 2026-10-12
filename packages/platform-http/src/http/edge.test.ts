@@ -106,6 +106,13 @@ describe('signEdgeClientIp (WebCrypto, what a Worker runs)', () => {
     }
   });
 
+  it('refuses a method that is not letters only, rather than sign an ambiguous string', async () => {
+    const base = { secret: SECRET, ip: '1.2.3.4', path: '/' };
+    for (const method of ['GE|T', 'M-SEARCH', '', 'GET ']) {
+      await expect(signEdgeClientIp({ ...base, method })).rejects.toThrow(RangeError);
+    }
+  });
+
   it('never puts the secret in what it returns or in an error', async () => {
     const headers = await signEdgeClientIp({
       secret: SECRET,

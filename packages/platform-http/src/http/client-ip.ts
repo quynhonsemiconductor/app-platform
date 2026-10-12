@@ -80,6 +80,23 @@ function signedEdgeIp(req: ClientIpRequest, options: ClientIpOptions): string | 
  * Redis keys and log lines, and a header is attacker-controlled text.
  */
 export function clientIp(req: ClientIpRequest, options: ClientIpOptions = {}): string {
+  // One answer per request: the guard, the access log, idempotency and the identity mount call this
+  // for the same request and must agree, and a refused signature must be counted once, not once per
+  // caller. Calls with test options are never cached.
+  const cacheable = options.edge === undefined && options.now === undefined;
+  if (cacheable) {
+    const known = resolved.get(req);
+    if (known !== undefined) return known;
+  }
+  const ip = resolveClientIp(req, options);
+  if (cacheable) resolved.set(req, ip);
+  return ip;
+}
+
+/** The answer per request object. Weak, so it lives and dies with the request. */
+const resolved = new WeakMap<object, string>();
+
+function resolveClientIp(req: ClientIpRequest, options: ClientIpOptions): string {
   return (
     signedEdgeIp(req, options) ??
     asIp(firstHeader(req, 'cf-connecting-ip')) ??

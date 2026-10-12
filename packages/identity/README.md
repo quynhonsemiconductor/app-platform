@@ -37,27 +37,31 @@ package loads it through `require(esm)`, which needs Node >= 22.12 (the repo is 
 Peers: `@quynhonsemiconductor/platform-cache`, `platform-db`, `platform-http`, `drizzle-orm`, `pg`; for `/nest`:
 `@nestjs/common`, `@nestjs/core`, `fastify`; optional `observability`, `ioredis`.
 
-### Keeping Better Auth's dev-only peers out of the runtime image
+### Keeping Better Auth's optional peers out of the runtime image
 
-Better Auth declares `drizzle-kit`, `react`, `react-dom` and `vitest` as **optional peers** (its CLI, React client and test
-helpers; nothing identity uses). pnpm resolves an optional peer against whatever the importing project has installed, so a
-product with `vitest` or `drizzle-kit` in its `devDependencies` gets them written into Better Auth's lockfile entry as
+Better Auth 1.7.7 declares **18 optional peer dependencies** (`drizzle-kit`, `vitest`, `react`, `react-dom`, `next`, `prisma`,
+`mongodb`, `mysql2`, `svelte`, `vue` ...): its CLI, its framework clients, its test helpers, the databases it can run on. Identity
+uses two of them, `drizzle-orm` and `pg`. pnpm resolves an optional peer against whatever the importing project has installed, so
+a product with `vitest` or `drizzle-kit` in its `devDependencies` gets them written into Better Auth's lockfile entry as
 `optionalDependencies`, and `pnpm install --prod` **follows optional dependencies**. The runtime image then holds vitest,
 drizzle-kit and their trees (vite, rolldown, esbuild with its Go binary): that is how a Trivy CRITICAL on esbuild
-(CVE-2025-68121) reached opshub's image.
+(CVE-2025-68121) reached opshub's image. Any other of the 18 that a product happens to have installed leaks the same way.
 
 Add this `.pnpmfile.cjs` at the root of the product, next to `pnpm-workspace.yaml`. It is the file the package ships
-(`node_modules/@quynhonsemiconductor/identity/pnpmfile.cjs`; a test keeps this snippet, that file and the reference consumer's
-copy byte-identical):
+(`node_modules/@quynhonsemiconductor/identity/pnpmfile.cjs`, which also carries a header comment; a test keeps this snippet, that
+file and the reference consumer's copy identical):
 
 ```js
-const DEV_ONLY_PEERS_OF_BETTER_AUTH = ['drizzle-kit', 'react', 'react-dom', 'vitest'];
+const KEPT_PEERS_OF_BETTER_AUTH = ['drizzle-orm', 'pg'];
 
 function readPackage(pkg) {
   if (pkg.name === 'better-auth') {
-    for (const peer of DEV_ONLY_PEERS_OF_BETTER_AUTH) {
-      delete pkg.peerDependencies?.[peer];
-      delete pkg.peerDependenciesMeta?.[peer];
+    for (const peer of Object.keys(pkg.peerDependencies ?? {})) {
+      const optional = pkg.peerDependenciesMeta?.[peer]?.optional === true;
+      if (optional && !KEPT_PEERS_OF_BETTER_AUTH.includes(peer)) {
+        delete pkg.peerDependencies[peer];
+        delete pkg.peerDependenciesMeta[peer];
+      }
     }
   }
   return pkg;
@@ -66,6 +70,11 @@ function readPackage(pkg) {
 module.exports = { hooks: { readPackage } };
 ```
 
+It drops **every optional peer of Better Auth except `drizzle-orm` and `pg`**, not a fixed list of four: the other fourteen would
+leak the same way, and a list would need a new entry whenever Better Auth adds a peer. It never touches a peer that is _not_
+optional, so a future Better Auth that really requires something keeps it. Identity pins Better Auth exactly and runs its
+conformance kit on every bump.
+
 Then, once:
 
 1. `pnpm install` (changing the file changes the lockfile; commit both).
@@ -73,27 +82,43 @@ Then, once:
    A frozen install checks the file's checksum against the lockfile: a stage that forgot it fails with
    `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`, loudly, rather than shipping the tools.
 3. Check: `pnpm install --frozen-lockfile --prod`, then `pnpm why esbuild vitest --prod` prints nothing, and
-   `ls node_modules/.pnpm | grep -E '^(vitest|esbuild|drizzle-kit)@'` is empty.
+   `ls node_modules/.pnpm | grep -E '^(vitest|esbuild|drizzle-kit)@'` is empty. Better, assert it in CI for **every
+   devDependency**, not these names: none may appear in `pnpm ls --prod --depth Infinity` (`@types/*` excepted: declaration
+   files that `drizzle-orm` and others list as optional peers). `reference-consumer/check-prod-tree.sh` is a worked example.
+4. **Keep your copy from drifting** from the shipped one when you bump identity:
+   `cmp .pnpmfile.cjs node_modules/@quynhonsemiconductor/identity/pnpmfile.cjs` (a CI step; a difference means a new Better Auth
+   peer or a changed rule). The header comment is part of the shipped file, so copy the file rather than the snippet.
 
-Verified on pnpm 10.33.2 (the version the product Dockerfiles pin) and 11.28.5, on a project with `vitest` and `drizzle-kit`
-as devDependencies (esbuild `0.18`, `0.25` and `0.28` in the production tree without it, none with it), and in the
-repository's `reference-consumer/` (vitest, vite and rolldown in the production tree without it, none with it; CI runs
-`check-prod-tree.sh` on every run). What was tried instead, and why it is not the fix:
+**Which pnpm.** The leak happens on **pnpm 10.33.2**, the version opshub's Dockerfile pins; the file is **required** there.
+pnpm 11.28.5 (rova's `packageManager`) did not put these into a `--prod` install in the tests below even without the file, so
+on pnpm 11 it is defensive: it makes the lockfile say what the image holds, and keeps the product safe if it ever builds an
+image on pnpm 10 or a later pnpm changes the default. A check that installs with pnpm 11 only cannot fail, which is why the
+reference consumer's check runs both versions and a negative control (pnpm 10 without the file must leak).
+
+**A tool that passes `--ignore-pnpmfile`** (Renovate's hosted app might; not verified here) re-resolves the lockfile without the
+hook. On pnpm 10 that drops `pnpmfileChecksum` and brings the peers back (checked: `pnpm install --lockfile-only
+--ignore-pnpmfile` on the reference consumer), and the next frozen install, which uses the file, fails with the same
+`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`: a failed build, not a quietly fat image. Re-run `pnpm install` on the PR. On pnpm 11 the
+checksum was kept.
+
+Verified on a scratch project with `vitest`, `drizzle-kit`, `react` and `react-dom` (esbuild `0.18`, `0.25` and `0.28` in the
+`--prod` tree on pnpm 10 without the file, none with it), and in the repository's `reference-consumer/` (vitest, vite and
+rolldown in the pnpm 10 `--prod` tree without it, none with it; CI runs `check-prod-tree.sh` on every run). What was tried
+instead, and why it is not the fix:
 
 - **`overrides: { "better-auth>vitest": "-" }`** (in `pnpm-workspace.yaml` or `package.json`) removes the entry on pnpm 11 and
-  does nothing on pnpm 10.33.2: not usable while the Dockerfiles pin pnpm 10.
+  does nothing on pnpm 10.33.2, and it is a list too.
 - **`packageExtensions`** can add to a package's manifest but not remove a peer.
 - **`auto-install-peers=false`** changes nothing: these peers are not auto-installed, they are matched to what the project has.
 - **`pnpm install --prod --no-optional`** drops every optional dependency, including the platform binaries of
   `@node-rs/argon2` (identity's password hashing), which that package delivers as optional dependencies (13 of them in its
   manifest). Not run; it follows from the manifest, and it is not worth finding out in production.
-- **pnpm 11 alone** no longer follows these into `--prod` in the tests above, but do not rely on a changed default while the
-  lockfile still records them; the pnpmfile makes the lockfile say what the image holds.
 - In a workspace where the dev tools live at the **root** and Better Auth in a package, `resolve-peers-from-workspace-root=false`
   also keeps them apart, but only for that layout.
 
-Accepted cost: a product with the pnpmfile cannot use `better-auth/react`, `better-auth/test` or the `auth generate` CLI from
-the same install. Identity does not use them; if a product needs one, remove the matching name from the list and re-install.
+Accepted cost: a product with the pnpmfile cannot use `better-auth/react`, `better-auth/test`, a framework client or the
+`auth generate` CLI from the same install, because the peers they need are not resolved. Identity does not use them; if a
+product needs one, add its name to `KEPT_PEERS_OF_BETTER_AUTH`, re-install, and accept the matching entry in the image.
 
 ## Subpaths
 

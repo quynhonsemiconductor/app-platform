@@ -19,51 +19,90 @@ const readPackage = (
   }
 ).hooks.readPackage;
 
-describe('pnpmfile.cjs (keeps Better Auth’s dev-only optional peers out of a product’s runtime image)', () => {
+describe('pnpmfile.cjs (keeps Better Auth’s optional peers out of a product’s runtime image)', () => {
+  const OPTIONAL = [
+    '@lynx-js/react',
+    '@prisma/client',
+    '@sveltejs/kit',
+    '@tanstack/react-start',
+    '@tanstack/solid-start',
+    'drizzle-kit',
+    'drizzle-orm',
+    'mongodb',
+    'mysql2',
+    'next',
+    'pg',
+    'prisma',
+    'react',
+    'react-dom',
+    'solid-js',
+    'svelte',
+    'vitest',
+    'vue',
+  ];
   const betterAuth = (): Manifest => ({
     name: 'better-auth',
     dependencies: { jose: '6.0.0' },
-    peerDependencies: {
-      'drizzle-kit': '>=0.31.4',
-      react: '^19',
-      'react-dom': '^19',
-      vitest: '^4',
-      'drizzle-orm': '^0.45.2',
-      pg: '^8',
-      next: '^16',
-    },
-    peerDependenciesMeta: {
-      'drizzle-kit': { optional: true },
-      react: { optional: true },
-      'react-dom': { optional: true },
-      vitest: { optional: true },
-      'drizzle-orm': { optional: true },
-      pg: { optional: true },
-      next: { optional: true },
-    },
+    peerDependencies: Object.fromEntries(OPTIONAL.map((name) => [name, '*'])),
+    peerDependenciesMeta: Object.fromEntries(OPTIONAL.map((name) => [name, { optional: true }])),
   });
 
-  it('drops drizzle-kit, react, react-dom and vitest from better-auth, and nothing else', () => {
+  it('declares 18 optional peers in this fixture, as better-auth 1.7.7 does', () => {
+    expect(OPTIONAL).toHaveLength(18);
+  });
+
+  it('drops EVERY optional peer of better-auth except drizzle-orm and pg', () => {
     const out = readPackage(betterAuth());
-    expect(Object.keys(out.peerDependencies ?? {}).sort()).toEqual(['drizzle-orm', 'next', 'pg']);
-    expect(Object.keys(out.peerDependenciesMeta ?? {}).sort()).toEqual([
-      'drizzle-orm',
-      'next',
-      'pg',
-    ]);
+    expect(Object.keys(out.peerDependencies ?? {}).sort()).toEqual(['drizzle-orm', 'pg']);
+    expect(Object.keys(out.peerDependenciesMeta ?? {}).sort()).toEqual(['drizzle-orm', 'pg']);
     expect(out.dependencies).toEqual({ jose: '6.0.0' });
+  });
+
+  it('never touches a peer that is not optional, or has no meta: a future required peer is kept', () => {
+    const manifest = betterAuth();
+    manifest.peerDependencies!['some-new-required'] = '^1';
+    manifest.peerDependencies!['declared-without-meta'] = '^1';
+    manifest.peerDependenciesMeta!['declared-but-not-optional'] = { optional: false };
+    manifest.peerDependencies!['declared-but-not-optional'] = '^1';
+    const out = readPackage(manifest);
+    expect(Object.keys(out.peerDependencies ?? {}).sort()).toEqual([
+      'declared-but-not-optional',
+      'declared-without-meta',
+      'drizzle-orm',
+      'pg',
+      'some-new-required',
+    ]);
   });
 
   it('leaves every other package alone, even one with the same peers', () => {
     const other = { ...betterAuth(), name: 'some-plugin' };
     expect(readPackage(structuredClone(other))).toEqual(other);
+    const scoped = { ...betterAuth(), name: '@better-auth/core' };
+    expect(readPackage(structuredClone(scoped))).toEqual(scoped);
   });
 
-  it('copes with a better-auth that declares none of them', () => {
+  it('copes with a better-auth that declares no peers at all', () => {
     expect(readPackage({ name: 'better-auth' })).toEqual({ name: 'better-auth' });
+    expect(readPackage({ name: 'better-auth', peerDependencies: {} })).toEqual({
+      name: 'better-auth',
+      peerDependencies: {},
+    });
   });
 
-  it('is shipped in the package, byte-identical to the README snippet and to the reference consumer’s copy', () => {
+  it('matches the installed better-auth: every peer it declares is optional, and the two kept ones exist', () => {
+    // If a Better Auth bump adds a REQUIRED peer, or renames drizzle-orm/pg, this is where it shows.
+    const dir = join(root, 'node_modules', 'better-auth', 'package.json');
+    const installed = JSON.parse(readFileSync(dir, 'utf8')) as Manifest;
+    const peers = Object.keys(installed.peerDependencies ?? {});
+    for (const peer of peers) {
+      expect(installed.peerDependenciesMeta?.[peer]?.optional, peer).toBe(true);
+    }
+    expect(peers).toEqual(expect.arrayContaining(['drizzle-orm', 'pg']));
+    const out = readPackage(structuredClone(installed));
+    expect(Object.keys(out.peerDependencies ?? {}).sort()).toEqual(['drizzle-orm', 'pg']);
+  });
+
+  it('is shipped in the package, and the README snippet and the reference consumer’s copy are identical to it', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { files: string[] };
     expect(pkg.files).toContain('pnpmfile.cjs');
 

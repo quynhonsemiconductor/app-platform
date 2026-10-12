@@ -1,10 +1,12 @@
 import { Logger } from '@nestjs/common';
-import type { CacheService } from '@quynhonsemiconductor/platform-cache';
+import { CacheService } from '@quynhonsemiconductor/platform-cache';
 import { createPool } from '@quynhonsemiconductor/platform-db';
 import {
   dockerTestsEnabled,
   startPostgres,
+  startValkey,
   type PostgresHarness,
+  type ValkeyHarness,
 } from '@quynhonsemiconductor/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,20 +24,33 @@ vi.mock('@quynhonsemiconductor/observability', async (importOriginal) => ({
  * That false-on-disabled is the behaviour the fail-open path exists to disambiguate.
  */
 class StubCache {
-  readonly keys = new Set<string>();
+  /** key -> the token of the current holder, as in Valkey. */
+  readonly keys = new Map<string, string>();
   available = true;
+  private next = 0;
   get isAvailable() {
     return this.available;
   }
-  acquireLock(key: string) {
-    if (!this.available) return Promise.resolve(false);
-    if (this.keys.has(key)) return Promise.resolve(false);
-    this.keys.add(key);
-    return Promise.resolve(true);
+  tryLock(key: string) {
+    if (!this.available) return Promise.resolve(null);
+    if (this.keys.has(key)) return Promise.resolve(null);
+    const token = `token-${(this.next += 1)}`;
+    this.keys.set(key, token);
+    return Promise.resolve({
+      key,
+      token,
+      // Compare-and-delete: only the current holder's token frees it.
+      release: () => {
+        const ours = this.keys.get(key) === token;
+        if (ours) this.keys.delete(key);
+        return Promise.resolve(ours);
+      },
+      extend: () => Promise.resolve(this.keys.get(key) === token),
+    });
   }
-  releaseLock(key: string) {
+  /** The lease runs out: the key is gone although the holder is still working. */
+  expire(key: string) {
     this.keys.delete(key);
-    return Promise.resolve();
   }
 }
 
@@ -96,13 +111,68 @@ describe('ExclusiveJob', () => {
     expect(ran).toBe(true);
   });
 
+  it('a job that overruns its lock does NOT free the lock of the pod that took over, and says so', async () => {
+    const warns = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const g = gate();
+      const slow = podA.run('sweep', 60_000, async () => {
+        await g.opened;
+      });
+      await expect.poll(() => cache.keys.has('cron:sweep')).toBe(true);
+      cache.expire('cron:sweep'); // the lease ran out while pod A was still working
+      const g2 = gate();
+      const takeover = podB.run('sweep', 60_000, async () => {
+        await g2.opened;
+      });
+      await expect.poll(() => cache.keys.get('cron:sweep')).toBe('token-2');
+
+      g.open(); // pod A finishes late and releases
+      await slow;
+      expect(cache.keys.get('cron:sweep'), 'the late release freed the new holder’s lock').toBe(
+        'token-2',
+      );
+      expect(warns).toHaveBeenCalledWith(expect.stringMatching(/sweep outlived its lock/));
+
+      // So a third pod's tick is still excluded while pod B runs.
+      let ran = false;
+      await new ExclusiveJob(cache as unknown as CacheService).run('sweep', 60_000, () =>
+        Promise.resolve(void (ran = true)),
+      );
+      expect(ran).toBe(false);
+      g2.open();
+      await takeover;
+      expect(cache.keys.size).toBe(0);
+    } finally {
+      warns.mockRestore();
+    }
+  });
+
+  it('a failing release neither masks the job’s error nor fails a good run', async () => {
+    const original = cache.tryLock.bind(cache);
+    cache.tryLock = async (key: string) => {
+      const lock = await original(key);
+      return lock && { ...lock, release: () => Promise.reject(new Error('valkey down')) };
+    };
+    const warns = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        podA.run('sweep', 60_000, () => Promise.reject(new Error('job blew up'))),
+      ).rejects.toThrow('job blew up');
+      cache.keys.clear();
+      await expect(podA.run('sweep', 60_000, () => Promise.resolve())).resolves.toBeUndefined();
+      expect(warns).toHaveBeenCalledWith(expect.stringMatching(/releasing the lock failed/));
+    } finally {
+      warns.mockRestore();
+    }
+  });
+
   it('still runs the job when the cache is unavailable (fails OPEN)', async () => {
     cache.available = false;
     let ran = false;
 
     await podA.run('sweep', 60_000, () => Promise.resolve(void (ran = true)));
 
-    // The whole point: acquireLock also returns false when there is no client, and treating
+    // The whole point: tryLock also returns null when there is no client, and treating
     // that as "another pod has it" would silently stop every scheduled job in the system
     // for the length of a cache incident.
     expect(ran, 'a cache outage silently skipped the job instead of running it').toBe(true);
@@ -178,6 +248,78 @@ describe('ExclusiveJob', () => {
 });
 
 const dockerOn = await dockerTestsEnabled();
+
+describe.skipIf(!dockerOn)('ExclusiveJob on a real Valkey lock', () => {
+  let valkey: ValkeyHarness;
+  const caches: CacheService[] = [];
+  const connect = async () => {
+    const cache = new CacheService({ url: valkey.url, keyPrefix: 'rt:', mode: 'required' });
+    cache.onModuleInit();
+    for (let i = 0; i < 100 && !cache.isAvailable; i += 1)
+      await new Promise((r) => setTimeout(r, 25));
+    caches.push(cache);
+    return cache;
+  };
+
+  beforeAll(async () => {
+    valkey = await startValkey();
+  }, 120_000);
+  afterAll(async () => {
+    await Promise.all(caches.map((c) => c.onApplicationShutdown()));
+    await valkey?.stop();
+  }, 60_000);
+  beforeEach(() => valkey.flush());
+
+  it('two pods on one Valkey: exactly one runs, and the lock is gone afterwards', async () => {
+    const podA = new ExclusiveJob(await connect());
+    const podB = new ExclusiveJob(await connect());
+    const g = gate();
+    let runs = 0;
+    const a = podA.run('sweep', 60_000, async () => {
+      runs++;
+      await g.opened;
+    });
+    await expect.poll(() => runs).toBe(1);
+    await podB.run('sweep', 60_000, () => Promise.resolve(void runs++));
+    expect(runs).toBe(1);
+    g.open();
+    await a;
+    expect(await valkey.command('EXISTS', 'rt:lock:cron:sweep')).toBe('0');
+    await podB.run('sweep', 60_000, () => Promise.resolve(void runs++));
+    expect(runs).toBe(2);
+  });
+
+  it('a job that overruns a SHORT lease does not free the lock of the pod that took over (real compare-and-delete)', async () => {
+    const warns = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const podA = new ExclusiveJob(await connect());
+      const podB = new ExclusiveJob(await connect());
+      const g = gate();
+      const g2 = gate();
+      const slow = podA.run('sweep', 200, async () => {
+        await g.opened;
+      });
+      await expect.poll(async () => valkey.command('EXISTS', 'rt:lock:cron:sweep')).toBe('1');
+      await new Promise((r) => setTimeout(r, 300)); // pod A's lease has run out; it is still working
+      const takeover = podB.run('sweep', 60_000, async () => {
+        await g2.opened;
+      });
+      await expect
+        .poll(async () => valkey.command('TTL', 'rt:lock:cron:sweep'), { timeout: 5_000 })
+        .not.toBe('-2');
+
+      g.open();
+      await slow; // pod A finishes late and tries to release
+      expect(await valkey.command('EXISTS', 'rt:lock:cron:sweep')).toBe('1'); // pod B still holds it
+      expect(warns).toHaveBeenCalledWith(expect.stringMatching(/sweep outlived its lock/));
+      g2.open();
+      await takeover;
+      expect(await valkey.command('EXISTS', 'rt:lock:cron:sweep')).toBe('0');
+    } finally {
+      warns.mockRestore();
+    }
+  });
+});
 
 describe.skipIf(!dockerOn)('ExclusiveJob without a cache, on a Postgres advisory lock', () => {
   let pg: PostgresHarness;

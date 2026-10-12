@@ -5,9 +5,10 @@ import { createServer } from 'node:net';
 import { Controller, Get, Global, Inject, Module, Post } from '@nestjs/common';
 import { APP_FILTER, NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { CacheModule, CacheService } from '@quynhonsemiconductor/platform-cache';
+import { applyEdgeClientIp } from '@quynhonsemiconductor/platform-http/edge';
 import { DATABASE_TOKEN, DatabaseModule } from '@quynhonsemiconductor/platform-db/nest';
 import type { DbExecutor } from '@quynhonsemiconductor/platform-db/drizzle';
 import {
@@ -271,6 +272,45 @@ describe.skipIf(!enabled)('reference consumer: identity inside Nest 11 + Fastify
       expect(keys.some((k) => k.includes('1.2.3.4') || k.includes('198.51.100.99'))).toBe(false);
     } finally {
       client.disconnect();
+    }
+  });
+
+  it('with EDGE_CLIENT_IP_SECRET set, the signed edge address is the rate-limit key — not the shared cf-connecting-ip — and a forged or replayed one is not', async () => {
+    const secret = randomBytes(32).toString('hex');
+    vi.stubEnv('EDGE_CLIENT_IP_SECRET', secret);
+    try {
+      const path = '/api/auth/get-session';
+      const sendSigned = async (visitor: string, over: { method?: string; path?: string } = {}) => {
+        const headers = new Headers({ origin, 'cf-connecting-ip': '198.51.100.30' });
+        await applyEdgeClientIp(headers, { secret, ip: visitor, method: 'GET', path });
+        return fetch(`${origin}${over.path ?? path}`, { headers });
+      };
+      await sendSigned('203.0.113.21');
+      // The same signature moved onto another path: refused, so the key is the (shared) cf-connecting-ip.
+      await sendSigned('203.0.113.22', { path: '/api/auth/list-sessions' });
+      // A forged edge header with no valid signature: ignored.
+      await fetch(`${origin}${path}`, {
+        headers: {
+          origin,
+          'cf-connecting-ip': '198.51.100.31',
+          'x-qnsc-edge-ip': '6.6.6.6',
+          'x-qnsc-edge-ts': String(Math.floor(Date.now() / 1000)),
+          'x-qnsc-edge-sig': 'a'.repeat(43),
+        },
+      });
+
+      const { default: Redis } = await import('ioredis');
+      const client = new Redis(valkey.url);
+      try {
+        const keys = await client.keys(`${keyPrefix}*`);
+        expect(keys).toContain(`${keyPrefix}203.0.113.21|/get-session`);
+        expect(keys).toContain(`${keyPrefix}198.51.100.31|/get-session`);
+        expect(keys.some((k) => k.includes('6.6.6.6') || k.includes('203.0.113.22'))).toBe(false);
+      } finally {
+        client.disconnect();
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

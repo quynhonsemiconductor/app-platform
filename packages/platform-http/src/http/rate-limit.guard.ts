@@ -21,6 +21,7 @@ import {
   type RateLimitMode,
 } from './cache-requirement';
 import { clientIp } from './client-ip';
+import { assertEdgeClientIpEnv } from './edge-client-ip';
 import {
   RATE_LIMIT_METADATA_KEY,
   RATE_LIMIT_TIERS,
@@ -89,6 +90,9 @@ export class RateLimitGuard implements CanActivate, OnApplicationBootstrap {
   ) {}
 
   onApplicationBootstrap(): void {
+    // A short or half-set EDGE_CLIENT_IP_SECRET is a boot error that names the variable, not a
+    // signed-IP feature that quietly does nothing.
+    assertEdgeClientIpEnv();
     const alias = disableAliasStatus();
     if (alias === 'honoured') {
       this.logger.warn(

@@ -6,7 +6,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "edge.js",
+    "edge.d.ts"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",

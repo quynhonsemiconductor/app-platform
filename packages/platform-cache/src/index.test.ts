@@ -262,6 +262,44 @@ describe.skipIf(!dockerEnabled)('CacheService (real Valkey)', () => {
       await service.releaseLock('never-taken'); // and is harmless
     });
 
+    it('two holders of one key in ONE process: the first’s late release does not free the second’s live lock', async () => {
+      expect(await service.acquireLock('same-process', 200)).toBe(true); // holder A
+      await new Promise((resolve) => setTimeout(resolve, 300)); // A overran its lease
+      expect(await service.acquireLock('same-process', 5_000)).toBe(true); // holder B took over, same process
+
+      await service.releaseLock('same-process'); // A finishes late: must hit A's own, expired token
+      expect(await service.tryLock('same-process', 5_000)).toBeNull(); // B's lock is intact
+      expect(await service.acquireLock('same-process', 5_000)).toBe(false);
+
+      await service.releaseLock('same-process'); // B finishes: releases its own
+      const free = await service.tryLock('same-process', 5_000);
+      expect(free).not.toBeNull();
+      await free!.release();
+    });
+
+    it('…and if the second finishes FIRST its lock stays held until the first’s call (the documented cost): never freed under anyone', async () => {
+      expect(await service.acquireLock('order', 200)).toBe(true); // A
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(await service.acquireLock('order', 5_000)).toBe(true); // B
+
+      await service.releaseLock('order'); // B finishes first: consumes A's expired token
+      expect(await service.tryLock('order', 5_000)).toBeNull(); // B's lock is still there (liveness cost)
+
+      await service.releaseLock('order'); // A's late call releases B's (B is done)
+      const free = await service.tryLock('order', 5_000);
+      expect(free).not.toBeNull();
+      await free!.release();
+    });
+
+    it('a plain acquire/release cycle repeated in one process leaves nothing behind', async () => {
+      for (let i = 0; i < 40; i += 1) {
+        expect(await service.acquireLock('cycle', 5_000)).toBe(true);
+        await service.releaseLock('cycle');
+      }
+      expect((service as unknown as { held: Map<string, unknown> }).held.size).toBe(0);
+      expect(await service.acquireLock('cycle', 5_000)).toBe(true);
+    });
+
     it('the lock stored by acquireLock has an owner token, not the constant it used to be', async () => {
       expect(await service.acquireLock('tokened', 5_000)).toBe(true);
       expect(await valkey.command('GET', `${PREFIX}lock:tokened`)).toMatch(/^[0-9a-f]{32}$/);

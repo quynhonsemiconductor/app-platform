@@ -91,6 +91,10 @@ try {
   remembers it in the process; `releaseLock(key)` releases only a lock THIS process took with `acquireLock`, if it is still
   ours. Behaviour change: `releaseLock` for a key this process never took, or took by another process, now does nothing
   (it used to delete it). Move to `tryLock`.
+  **`releaseLock(key)` carries no handle, so it cannot tell two holders of one key in one process apart** (the first overran its
+  lease, the second took over). It releases the _oldest_ remembered lock first: the first holder's late call hits its own expired
+  token and cannot free the second's live lock. The cost is liveness: if the second finishes first, its lock stays held until the
+  first's call or the lease. Only `tryLock` tells holders apart.
 
 ## Modes
 

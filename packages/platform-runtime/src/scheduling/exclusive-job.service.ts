@@ -41,7 +41,7 @@ const UNLOCKED_RUNS = 'job.unlocked_runs';
  * every job, and there are eight of them. Inlining it would be eight chances to forget the
  * `finally` and leave a lock held for its whole TTL.
  *
- * WITHOUT A CACHE, THE LOCK MOVES TO POSTGRES. `CacheService.acquireLock` returns `false` both
+ * WITHOUT A CACHE, THE LOCK MOVES TO POSTGRES. `CacheService.tryLock` returns `null` both
  * when another pod holds the lock AND when there is no cache client at all, so treating a
  * false as "someone else has it" means a Valkey outage silently stops every scheduled job in
  * the system while logging that another pod is doing the work. So when the cache is not
@@ -127,7 +127,8 @@ export class ExclusiveJob {
     }
 
     const key = `cron:${name}`;
-    if (!(await this.cache.acquireLock(key, lockTtlMs))) {
+    const lock = await this.cache.tryLock(key, lockTtlMs);
+    if (!lock) {
       this.logger.log(`${name} already running on another pod — skipping this tick`);
       return;
     }
@@ -135,9 +136,22 @@ export class ExclusiveJob {
     try {
       await fn();
     } finally {
-      // In `finally` so a throwing job releases its lock rather than blocking every tick
-      // until the TTL expires.
-      await this.cache.releaseLock(key);
+      // In `finally` so a throwing job releases its lock rather than blocking every tick until the TTL
+      // expires. The release is compare-and-delete on this run's own token: a job that overran `lockTtlMs`
+      // does NOT free the lock of the pod that took over after the lease expired.
+      try {
+        if (!(await lock.release())) {
+          this.logger.warn(
+            `${name} outlived its lock (${lockTtlMs} ms): another pod may have started it while this run was ` +
+              `still going. Set lockTtlMs above the job's longest run.`,
+          );
+        }
+      } catch (error) {
+        // The lease frees it; and a failed release must not replace the job's own error.
+        this.logger.warn(
+          `${name}: releasing the lock failed (${error instanceof Error ? error.constructor.name : typeof error}); it expires on its own`,
+        );
+      }
     }
   }
 

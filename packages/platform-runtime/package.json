@@ -36,7 +36,7 @@
     "@nestjs/common": ">=11",
     "@nestjs/config": ">=4",
     "@quynhonsemiconductor/observability": ">=0.2.0",
-    "@quynhonsemiconductor/platform-cache": ">=3.1.1",
+    "@quynhonsemiconductor/platform-cache": ">=3.2.0",
     "fastify": ">=5",
     "zod": ">=4",
     "@quynhonsemiconductor/platform-db": ">=0.1.0"

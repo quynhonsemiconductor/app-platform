@@ -6,8 +6,14 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
 import Redis from 'ioredis';
-import { CACHE_OPTIONS, type CacheMode, type CacheModuleOptions } from './cache.types';
+import {
+  CACHE_OPTIONS,
+  type CacheLock,
+  type CacheMode,
+  type CacheModuleOptions,
+} from './cache.types';
 
 /**
  * Shared Valkey/Redis cache primitive (ioredis wrapper).
@@ -218,25 +224,97 @@ else
 end
 `;
 
-  // ── Distributed locks (Redlock-lite via SET NX PX) ───────────────────────────
+  // ── Distributed locks (SET NX PX with an owner token) ────────────────────────
+
+  /** Delete the lock only if it still holds our token. */
+  private static readonly RELEASE_LUA =
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
+  /** Push the lease out only if the lock still holds our token. */
+  private static readonly EXTEND_LUA =
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end";
 
   /**
-   * Attempt to acquire a distributed lock.
-   * Returns true if the lock was acquired, false if already held (or the cache is
-   * disabled). The lock auto-expires after ttlMs to prevent deadlocks on pod crash.
+   * Try to take the distributed lock `key` for `ttlMs` milliseconds. Resolves a {@link CacheLock}, or `null` when
+   * it is already held (or the cache is disabled: check {@link isAvailable} to tell the two apart).
+   *
+   * The value stored is a random token, and `release()` / `extend()` are server-side compare-and-delete /
+   * compare-and-expire on it. That is what makes it safe: a holder that overruns its lease and then releases
+   * does NOT free the lock of whoever acquired it after the lease expired. The lease still has to be longer than
+   * the work (or renewed with `extend`); a lock cannot make an overrunning job stop.
+   *
+   * ```ts
+   * const lock = await cache.tryLock('nightly-report', 60_000);
+   * if (!lock) return; // someone else has it
+   * try { await work(); } finally { await lock.release(); }
+   * ```
+   */
+  async tryLock(key: string, ttlMs: number): Promise<CacheLock | null> {
+    if (!Number.isInteger(ttlMs) || ttlMs <= 0) {
+      throw new RangeError('CacheService.tryLock: ttlMs must be a positive integer');
+    }
+    if (!this.client) return null;
+    const token = randomBytes(16).toString('hex');
+    const lockKey = `lock:${key}`;
+    const result = await this.client.set(lockKey, token, 'PX', ttlMs, 'NX');
+    if (result !== 'OK') return null;
+
+    let released = false;
+    return {
+      key,
+      token,
+      release: async () => {
+        if (released || !this.client) return false;
+        released = true;
+        return Number(await this.client.eval(CacheService.RELEASE_LUA, 1, lockKey, token)) === 1;
+      },
+      extend: async (extendMs: number) => {
+        if (!Number.isInteger(extendMs) || extendMs <= 0) {
+          throw new RangeError('CacheLock.extend: ttlMs must be a positive integer');
+        }
+        if (released || !this.client) return false;
+        return (
+          Number(await this.client.eval(CacheService.EXTEND_LUA, 1, lockKey, token, extendMs)) === 1
+        );
+      },
+    };
+  }
+
+  /** Locks taken through {@link acquireLock} by THIS process, so {@link releaseLock} can compare-and-delete. */
+  private readonly held = new Map<string, { lock: CacheLock; until: number }>();
+
+  /**
+   * @deprecated Use {@link tryLock}, which returns the lock to release.
+   *
+   * Attempt to acquire a distributed lock. Returns true if the lock was acquired, false if already held (or the
+   * cache is disabled). The lock auto-expires after ttlMs to prevent deadlocks on pod crash.
+   *
+   * Since this version it takes a random-token lock under the hood and remembers it in this process, so
+   * {@link releaseLock} can release only what this process holds.
    */
   async acquireLock(key: string, ttlMs: number): Promise<boolean> {
-    if (!this.client) return false;
-    const result = await this.client.set(`lock:${key}`, '1', 'PX', ttlMs, 'NX');
-    return result === 'OK';
+    const lock = await this.tryLock(key, ttlMs);
+    if (!lock) return false;
+    if (this.held.size >= 1000) {
+      const now = Date.now();
+      for (const [k, entry] of this.held) if (entry.until <= now) this.held.delete(k);
+    }
+    this.held.set(key, { lock, until: Date.now() + ttlMs });
+    return true;
   }
 
   /**
-   * Release a distributed lock.
-   * Safe to call even if the lock has already expired or the cache is disabled.
+   * @deprecated Use the {@link CacheLock} that {@link tryLock} returns.
+   *
+   * Release a lock THIS process took with {@link acquireLock}, if it is still ours (compare-and-delete). Safe to
+   * call when the lock has expired, was never taken here, or the cache is disabled: it then does nothing. It
+   * used to delete `lock:{key}` whoever held it, so a holder that overran its lease freed the lock of the one
+   * that had taken over; a lock taken by ANOTHER process is no longer deletable from here.
    */
   async releaseLock(key: string): Promise<void> {
-    if (!this.client) return;
-    await this.client.del(`lock:${key}`);
+    const entry = this.held.get(key);
+    if (!entry) return;
+    this.held.delete(key);
+    await entry.lock.release();
   }
 }

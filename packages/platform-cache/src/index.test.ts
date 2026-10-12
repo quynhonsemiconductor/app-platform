@@ -142,6 +142,131 @@ describe.skipIf(!dockerEnabled)('CacheService (real Valkey)', () => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(await service.acquireLock('ttl', 300)).toBe(true);
   });
+
+  describe('tryLock: a lock with an owner', () => {
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const stored = async (key: string) =>
+      (await valkey.command('GET', `${PREFIX}lock:${key}`)) || null; // the harness gives '' for a missing key
+
+    it('grants a lock once, with a random 32-hex token as the stored value, and refuses a second holder', async () => {
+      const lock = await service.tryLock('job', 5_000);
+      expect(lock).not.toBeNull();
+      expect(lock!.key).toBe('job');
+      expect(lock!.token).toMatch(/^[0-9a-f]{32}$/);
+      expect(await stored('job')).toBe(lock!.token);
+      expect(await service.tryLock('job', 5_000)).toBeNull();
+      const pttl = Number(await valkey.command('PTTL', `${PREFIX}lock:job`));
+      expect(pttl).toBeGreaterThan(0);
+      expect(pttl).toBeLessThanOrEqual(5_000);
+    });
+
+    it('every acquisition has its own token', async () => {
+      const tokens = new Set<string>();
+      for (let i = 0; i < 20; i += 1) {
+        const lock = await service.tryLock(`distinct-${i}`, 5_000);
+        tokens.add(lock!.token);
+      }
+      expect(tokens.size).toBe(20);
+    });
+
+    it('release frees it for the next holder, once: a second release is false', async () => {
+      const lock = (await service.tryLock('r', 5_000))!;
+      expect(await lock.release()).toBe(true);
+      expect(await lock.release()).toBe(false);
+      expect(await stored('r')).toBeNull();
+      expect(await service.tryLock('r', 5_000)).not.toBeNull();
+    });
+
+    it('a holder that overran its lease does NOT free the lock of whoever took over (the bug a plain DEL had)', async () => {
+      const slow = (await service.tryLock('overrun', 200))!;
+      await sleep(300); // the lease ran out while the work was still going
+      const successor = (await service.tryLock('overrun', 5_000))!;
+      expect(successor).not.toBeNull();
+
+      expect(await slow.release()).toBe(false); // it is not ours any more
+      expect(await stored('overrun')).toBe(successor.token); // the successor still holds it
+      expect(await service.tryLock('overrun', 5_000)).toBeNull(); // so nobody else can take it
+      expect(await successor.release()).toBe(true);
+    });
+
+    it('extend pushes the lease out while the lock is ours, and says false once it is not', async () => {
+      const lock = (await service.tryLock('ext', 300))!;
+      expect(await lock.extend(5_000)).toBe(true);
+      const pttl = Number(await valkey.command('PTTL', `${PREFIX}lock:ext`));
+      expect(pttl).toBeGreaterThan(1_000);
+      await lock.release();
+
+      const expiring = (await service.tryLock('ext2', 200))!;
+      await sleep(300);
+      expect(await expiring.extend(5_000)).toBe(false); // expired: not ours, and not resurrected
+      expect(await stored('ext2')).toBeNull();
+      const other = (await service.tryLock('ext2', 5_000))!;
+      expect(await expiring.extend(60_000)).toBe(false); // someone else's: left alone
+      expect(Number(await valkey.command('PTTL', `${PREFIX}lock:ext2`))).toBeLessThanOrEqual(5_000);
+      await other.release();
+    });
+
+    it('refuses a ttl that is not a positive integer, before touching the cache', async () => {
+      for (const ttl of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        await expect(service.tryLock('bad', ttl)).rejects.toBeInstanceOf(RangeError);
+      }
+      const lock = (await service.tryLock('bad-extend', 5_000))!;
+      await expect(lock.extend(0)).rejects.toBeInstanceOf(RangeError);
+      expect(await stored('bad')).toBeNull();
+    });
+
+    it('mutual exclusion: of 25 concurrent attempts exactly one wins', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 25 }, () => service.tryLock('race', 5_000)),
+      );
+      expect(results.filter((l) => l !== null)).toHaveLength(1);
+    });
+
+    it('two processes: one cannot release what the other holds', async () => {
+      const other = new CacheService({ url: valkey.url, keyPrefix: PREFIX });
+      other.onModuleInit();
+      try {
+        const mine = (await service.tryLock('shared', 5_000))!;
+        expect(await other.tryLock('shared', 5_000)).toBeNull();
+        expect(await mine.release()).toBe(true);
+        const theirs = (await other.tryLock('shared', 5_000))!;
+        expect(await mine.release()).toBe(false);
+        expect(await stored('shared')).toBe(theirs.token);
+      } finally {
+        await other.onApplicationShutdown();
+      }
+    });
+  });
+
+  describe('acquireLock / releaseLock (deprecated) are safe now', () => {
+    it('releaseLock releases only what THIS process holds: a lock another process took over survives it', async () => {
+      const other = new CacheService({ url: valkey.url, keyPrefix: PREFIX });
+      other.onModuleInit();
+      try {
+        expect(await service.acquireLock('legacy', 200)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 300)); // the lease runs out
+        expect(await other.acquireLock('legacy', 5_000)).toBe(true); // another pod takes over
+        await service.releaseLock('legacy'); // the first one finishes late
+        expect(await other.acquireLock('legacy', 5_000)).toBe(false); // still held by the second
+        await other.releaseLock('legacy');
+        expect(await service.acquireLock('legacy', 5_000)).toBe(true);
+      } finally {
+        await other.onApplicationShutdown();
+      }
+    });
+
+    it('releaseLock for a key this process never took does not delete someone else’s lock', async () => {
+      const lock = (await service.tryLock('foreign', 5_000))!;
+      await service.releaseLock('foreign');
+      expect(await valkey.command('GET', `${PREFIX}lock:foreign`)).toBe(lock.token);
+      await service.releaseLock('never-taken'); // and is harmless
+    });
+
+    it('the lock stored by acquireLock has an owner token, not the constant it used to be', async () => {
+      expect(await service.acquireLock('tokened', 5_000)).toBe(true);
+      expect(await valkey.command('GET', `${PREFIX}lock:tokened`)).toMatch(/^[0-9a-f]{32}$/);
+    });
+  });
 });
 
 describe('CacheService (optional mode, disabled)', () => {
@@ -167,6 +292,8 @@ describe('CacheService (optional mode, disabled)', () => {
     const rl = await service.consumeRateLimit('x', 5, 60);
     expect(rl.allowed).toBe(true);
     expect(await service.acquireLock('x', 1000)).toBe(false);
+    expect(await service.tryLock('x', 1000)).toBeNull();
+    await service.releaseLock('x'); // harmless
   });
 
   it('throws in required mode when no url is supplied', () => {

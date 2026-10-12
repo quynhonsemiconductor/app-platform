@@ -8,7 +8,7 @@ atomic sliding-window rate limiter and `SET NX PX` locks.
 | connection lifecycle (eager connect, auto-pipelining, quit on shutdown) | the connection URL and key prefix (passed to `CacheModule`)   |
 | `get` / `set` / `getJson` / `setJson` / `del`, key-prefixed             | what is cached, and its TTLs                                  |
 | `consumeRateLimit(key, limit, windowSeconds)` — atomic sliding window   | the limits, tiers and which routes use them (`platform-http`) |
-| `acquireLock(key, ttlMs)` / `releaseLock(key)`                          | which work needs a lock                                       |
+| `tryLock(key, ttlMs)` → `CacheLock` (`release()`, `extend(ms)`)         | which work needs a lock                                       |
 
 It carries **no domain policy**. Token denylists and session semantics live in
 [`identity`](../identity); rate-limit tiers live in [`platform-http`](../platform-http). It is a
@@ -60,10 +60,37 @@ export class AppModule {}
 await cache.set('session:42', 'v', 60); // TTL in seconds
 await cache.getJson<User>('user:42'); // null if missing, disabled, or corrupt
 const { allowed, remaining, resetAt } = await cache.consumeRateLimit('login:1.2.3.4', 5, 900);
-if (await cache.acquireLock('nightly-sweep', 60_000)) {
-  /* … */
+const lock = await cache.tryLock('nightly-sweep', 60_000); // null if someone else holds it
+if (lock) {
+  try {
+    /* … */
+  } finally {
+    await lock.release(); // compare-and-delete on this lock's own token
+  }
 }
 ```
+
+## Locks
+
+```ts
+const lock = await cache.tryLock('nightly-report', 60_000); // CacheLock | null
+if (!lock) return; // held elsewhere (or the cache is disabled: check `cache.isAvailable`)
+try {
+  await work();
+  if (!(await lock.extend(60_000))) throw new Error('lost the lock'); // optional: renew mid-run
+} finally {
+  await lock.release(); // true if it was still ours; false if the lease had expired
+}
+```
+
+- The stored value is a **random 32-hex token**; `release()` and `extend()` are Lua scripts that act only while the value is still
+  that token. Before, the value was the constant `1` and `releaseLock(key)` deleted whatever was there: a holder that overran
+  its lease freed the lock of the pod that had taken over, and two pods ran at once.
+- `ttlMs` must be a positive integer (`RangeError` otherwise).
+- **`acquireLock(key, ttlMs)` / `releaseLock(key)` are deprecated and compatible.** `acquireLock` takes the same token lock and
+  remembers it in the process; `releaseLock(key)` releases only a lock THIS process took with `acquireLock`, if it is still
+  ours. Behaviour change: `releaseLock` for a key this process never took, or took by another process, now does nothing
+  (it used to delete it). Move to `tryLock`.
 
 ## Modes
 
@@ -72,8 +99,8 @@ if (await cache.acquireLock('nightly-sweep', 60_000)) {
 | `required` (default) | **startup error**                                  | the cache is on a critical path (auth denylist, sessions)  |
 | `optional`           | cache disabled; every call no-ops or returns empty | the product treats the cache as best-effort and fails open |
 
-In `optional` mode with no URL `consumeRateLimit` returns `allowed: true` and `acquireLock` returns
-`false`. **That quiet state is a hazard in production**: rate limiting and idempotency would do nothing.
+In `optional` mode with no URL `consumeRateLimit` returns `allowed: true` and `tryLock` returns
+`null` (`acquireLock`, `false`). **That quiet state is a hazard in production**: rate limiting and idempotency would do nothing.
 `platform-http` therefore refuses to start in production in that state unless the deployment says so
 (`RATE_LIMIT_MODE`, `IDEMPOTENCY_MODE`).
 
@@ -107,7 +134,10 @@ package, never published). A product can use any Valkey container, or its CI ser
 
 - One Valkey node; no cluster or sentinel awareness beyond what `ioredis` does from a URL.
 - The rate limiter's window and member scheme are fixed. Tiers and thresholds are the product's.
-- Locks are single-key `SET NX PX` ("Redlock-lite"): safe against a crashed holder, not against a
-  paused one whose TTL expired. Work behind a lock MUST be idempotent.
+- Locks are single-key `SET NX PX` with a random owner token ("Redlock-lite"): safe against a crashed holder
+  (the lease expires) and **a holder that overruns its lease cannot free or extend the lock of whoever took it
+  over** (`release()` / `extend()` are compare-and-delete / compare-and-expire on the token). They do not stop an
+  overrunning job from still running: a paused or slow holder whose lease expired is working alongside the new
+  one. Set the lease above the work, or `extend` it, and keep the work idempotent.
 - With a per-instance cache (not shared across replicas) sessions and revocations are visible to only
   some replicas.

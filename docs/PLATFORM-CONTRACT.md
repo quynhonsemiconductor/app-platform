@@ -464,7 +464,9 @@ rate-limit state are never shared across products. Keys carry a per-product pref
     one duplicate email, never a lost one, and the database still holds the job. They are not in the
     database because the alternative, `jobs.once`, would hold a transaction open across the call to the
     mail provider ([§13](#13-async-work) rule 2).
-- **Locks** are `SET NX PX` with an expiry, so a crashed holder cannot deadlock a job.
+- **Locks** are `SET NX PX` with an expiry, so a crashed holder cannot deadlock a job, and a **random owner token**:
+  `CacheService.tryLock` returns a lock whose `release()` / `extend()` are compare-and-delete / compare-and-expire, so a
+  holder that overran its lease cannot free the lock of the one that took over. The lease must still exceed the work.
 - The client is released **after** work that uses it has stopped ([§3](#3-shutdown)).
 - Pub/sub is for ephemeral realtime signals only ([§13](#13-async-work)).
 

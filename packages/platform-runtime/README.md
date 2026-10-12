@@ -213,10 +213,13 @@ concurrently — and these jobs delete rows and objects.
 
 Set `lockTtlMs` just under the schedule interval: long enough that a slow run keeps
 its lock, short enough that a pod killed mid-run does not block the next tick. The
-lock auto-expires, so a crash cannot deadlock a job permanently.
+lock auto-expires, so a crash cannot deadlock a job permanently. The lock is a random-token lock
+(`CacheService.tryLock`) released by compare-and-delete: a run that **overruns** `lockTtlMs` does not free the lock
+of the pod that took over after the lease expired, and logs a warning (`<job> outlived its lock`) so the TTL can be
+raised. It still cannot stop the overrunning run, so keep jobs idempotent. Needs `platform-cache` >= 3.2.0.
 
-**Without a cache, the lock moves to Postgres.** `acquireLock` returns `false` both when another pod
-holds the lock and when there is no cache client at all, so treating `false` as "someone else has it"
+**Without a cache, the lock moves to Postgres.** `tryLock` returns `null` both when another pod
+holds the lock and when there is no cache client at all, so treating `null` as "someone else has it"
 would let a Valkey outage silently stop every scheduled job. When the cache is not available and
 `platform-db` provides a pool, the job takes `withAdvisoryLock(pool, 'cron:<name>')` instead: a tick
 still runs once across replicas, and a crashed holder frees the lock the moment its connection drops. If

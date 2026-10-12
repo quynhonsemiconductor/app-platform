@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { DEFAULTS } from '../defaults';
 import { signDeviceValue } from '../known-device';
 import { lockoutKeys } from '../lockout';
-import { signIn } from './flows';
+import { signIn, verifiedUser } from './flows';
 import {
   API,
   startStack,
@@ -14,7 +14,7 @@ import {
   type Stack,
 } from './harness';
 import { startMockIdp, type MockIdp } from './mock-idp';
-import { microsoftSignIn, type TestApi } from './support';
+import { microsoftSignIn, totp, type TestApi } from './support';
 
 /**
  * Cookie names and the rate limit of the two redirect endpoints (README, "Session cookies" and
@@ -121,6 +121,80 @@ export function cookiesConformance(t: TestApi, infra: ConformanceInfra): void {
         expect(line).toBeDefined();
         expect(line.split('=')[0]).toBe(`${mode.prefix}.session_token`);
         expect(/Max-Age=0/i.test(line)).toBe(true);
+      });
+
+      it('2FA: the two_factor and trust_device cookies carry the mode prefix and the same attributes, and a trusted device skips the challenge', async () => {
+        const email = uniqueEmail('mfa');
+        const password = strongPassword();
+        const owner = await verifiedUser(stack, email, password, expect);
+        const enable = await owner.post(`${API}/two-factor/enable`, { password });
+        expect(enable.status, enable.body).toBe(200);
+        const secret = new URL(enable.json<{ totpURI: string }>().totpURI).searchParams.get(
+          'secret',
+        )!;
+        expect(
+          (await owner.post(`${API}/two-factor/verify-totp`, { code: totp(secret) })).status,
+        ).toBe(200);
+        await owner.post(`${API}/sign-out`, {});
+
+        const attributes = (line: string, cookie: string) => {
+          expect(line.split('=')[0]).toBe(`${mode.prefix}.${cookie}`);
+          for (const attribute of [
+            /;\s*HttpOnly/i,
+            /;\s*Secure/i,
+            /;\s*SameSite=Lax/i,
+            /;\s*Path=\//i,
+          ]) {
+            expect(attribute.test(line), `${cookie}: ${String(attribute)}`).toBe(true);
+          }
+          expect(/;\s*Domain=/i.test(line), `${cookie} has no Domain`).toBe(false);
+        };
+
+        // The password is right, the second factor is still owed: the challenge cookie.
+        const browser = stack.client();
+        const challenge = await signIn(browser, email, password);
+        expect(challenge.json()).toMatchObject({ twoFactorRedirect: true });
+        attributes(
+          challenge.setCookie.find((l) => /two_factor=/.test(l))!,
+          'two_factor',
+        );
+        // No usable session yet: any session cookie on the response is an expiry (Max-Age=0), in the mode's name.
+        for (const line of challenge.setCookie.filter((l) => /session_token=/.test(l))) {
+          expect(line.split('=')[0]).toBe(`${mode.prefix}.session_token`);
+          expect(/Max-Age=0/i.test(line), line).toBe(true);
+        }
+
+        // The second factor, asking to trust this browser.
+        const verified = await browser.post(`${API}/two-factor/verify-totp`, {
+          code: totp(secret),
+          trustDevice: true,
+        });
+        expect(verified.status, verified.body).toBe(200);
+        attributes(
+          verified.setCookie.find((l) => /trust_device=/.test(l))!,
+          'trust_device',
+        );
+        attributes(
+          verified.setCookie.find((l) => /session_token=/.test(l))!,
+          'session_token',
+        );
+        for (const line of verified.setCookie) {
+          expect(line.startsWith(`${mode.prefix}.`), line).toBe(true);
+        }
+
+        // The trusted browser is not challenged again: the cookie is read back under its own name.
+        await browser.post(`${API}/sign-out`, {});
+        const again = await signIn(browser, email, password);
+        expect(again.status, again.body).toBe(200);
+        expect(again.json()).not.toMatchObject({ twoFactorRedirect: true });
+        // ...and a browser that only has the value under the OTHER mode's name is challenged.
+        const trusted = Object.entries(browser.cookies).find(([n]) => n.endsWith('.trust_device'))!;
+        await browser.post(`${API}/sign-out`, {});
+        const tossed = stack.client();
+        tossed.setCookies({ [`${other.prefix}.trust_device`]: trusted[1] });
+        expect((await signIn(tossed, email, password)).json()).toMatchObject({
+          twoFactorRedirect: true,
+        });
       });
 
       describe('the known-device HMAC covers the cookie name', () => {
@@ -244,14 +318,15 @@ export function cookiesConformance(t: TestApi, infra: ConformanceInfra): void {
     });
   }
 
-  describe('rate limit of the redirect endpoints (/sign-in/social, /callback/*)', () => {
+  describe('rate limit of the redirect endpoints (start: /sign-in/social, /sign-in/sso; back: /callback/*, /sso/callback/*)', () => {
     let idp: MockIdp;
     let stack: Stack;
     beforeAll(async () => {
       idp = await startMockIdp();
-      // Combined instance: the staff redirect endpoints AND the public credential endpoints.
+      // Combined instance: the redirect endpoints of staff and organizations AND the credential
+      // endpoints of the public preset.
       stack = await startStack(infra, {
-        presets: ['public', 'staff'],
+        presets: ['public', 'staff', 'organizations'],
         staff: { authority: idp.base },
       });
     });
@@ -260,46 +335,73 @@ export function cookiesConformance(t: TestApi, infra: ConformanceInfra): void {
       await idp?.stop();
     });
 
-    const { windowSeconds, max } = DEFAULTS.rateLimit.oauth;
-    const start = (ip: string) =>
+    const { start: startLimit, callback: callbackLimit } = DEFAULTS.rateLimit;
+    const social = (ip: string) =>
       stack
         .client({ ip })
         .post(`${API}/sign-in/social`, { provider: 'microsoft', callbackURL: '/' });
 
-    it('is installed as Better Auth custom rules for exactly those two paths', () => {
+    it('is installed as Better Auth custom rules: start 120 per 60 s, callback 100 per 10 s', () => {
       expect(stack.auth.options.rateLimit?.customRules).toEqual({
-        '/sign-in/social': { window: windowSeconds, max },
-        '/callback/*': { window: windowSeconds, max },
+        '/sign-in/social': { window: 60, max: 120 },
+        '/sign-in/sso': { window: 60, max: 120 },
+        '/callback/*': { window: 10, max: 100 },
+        '/sso/callback/*': { window: 10, max: 100 },
       });
+      expect(startLimit.windowSeconds).toBe(60);
+      expect(callbackLimit.windowSeconds).toBe(10);
+    });
+
+    it('the callback limit is NOT stricter than the 100 per 10 s it always had (a longer window with a smaller number would be)', () => {
+      // Better Auth gave /callback/* no special rule, so it ran at its global 100 per 10 s. The default
+      // must allow at least as many requests in any 10 s as that: 100 per 10 s is exactly it.
+      const perTenSeconds = (callbackLimit.max * 10) / callbackLimit.windowSeconds;
+      expect(perTenSeconds).toBeGreaterThanOrEqual(100);
     });
 
     it('an office behind one address can start its whole morning rush: far more than 3 per 10 s', async () => {
       const ip = '203.0.113.200';
       const statuses: number[] = [];
-      for (let i = 0; i < 100; i += 1) statuses.push((await start(ip)).status);
+      for (let i = 0; i < 100; i += 1) statuses.push((await social(ip)).status);
       // Better Auth's own rule for /sign-in* is 3 per 10 s: this would be 3 x 200 then 97 x 429.
       expect(statuses.every((s) => s === 200)).toBe(true);
     });
 
-    it('is still a limit: the request past the ceiling is a 429 with Retry-After, and another address is unaffected', async () => {
-      const ip = '203.0.113.201';
-      for (let i = 0; i < max; i += 1) expect((await start(ip)).status).toBe(200);
-      const refused = await start(ip);
-      expect(refused.status).toBe(429);
-      expect(refused.headers.get('x-retry-after')).not.toBeNull();
-      expect((await start('203.0.113.202')).status).toBe(200);
+    it('SSO organizations get the same: 100 starts of /sign-in/sso from one address are not a 429', async () => {
+      const ip = '203.0.113.205';
+      const statuses: number[] = [];
+      for (let i = 0; i < 100; i += 1) {
+        statuses.push(
+          (
+            await stack
+              .client({ ip })
+              .post(`${API}/sign-in/sso`, { email: `a@no-sso-${i}.example`, callbackURL: '/' })
+          ).status,
+        );
+      }
+      expect(statuses.includes(429)).toBe(false);
     });
 
-    it('/callback/* has the same larger limit, per path', async () => {
+    it('is still a limit: the request past the ceiling is a 429 with Retry-After, and another address is unaffected', async () => {
+      const ip = '203.0.113.201';
+      for (let i = 0; i < startLimit.max; i += 1) expect((await social(ip)).status).toBe(200);
+      const refused = await social(ip);
+      expect(refused.status).toBe(429);
+      expect(refused.headers.get('x-retry-after')).not.toBeNull();
+      expect((await social('203.0.113.202')).status).toBe(200);
+    });
+
+    it('/callback/* takes the 100 per 10 s it always had without a 429, in its own bucket per path', async () => {
       const ip = '203.0.113.203';
       const callback = (p: string) =>
         stack.client({ ip }).get(`${API}/callback/${p}?error=access_denied&state=x`);
       const statuses: number[] = [];
-      for (let i = 0; i < 60; i += 1) statuses.push((await callback('microsoft')).status);
+      for (let i = 0; i < callbackLimit.max; i += 1)
+        statuses.push((await callback('microsoft')).status);
       expect(statuses.includes(429)).toBe(false);
       // Its own bucket: the other provider's callback and the redirect start are not charged to it.
       expect((await callback('google')).status).not.toBe(429);
-      expect((await start(ip)).status).toBe(200);
+      expect((await social(ip)).status).toBe(200);
     });
 
     it('the credential endpoints keep the strict limit: 3 sign-ins per 10 s per address', async () => {
@@ -311,86 +413,175 @@ export function cookiesConformance(t: TestApi, infra: ConformanceInfra): void {
       expect(codes).toEqual([401, 401, 401, 429, 429]);
     });
 
-    it('is configurable by the consumer, and only for these two paths', async () => {
+    it('both groups are configurable by the consumer, each on its own, and only for their own paths', async () => {
       const small = await startStack(infra, {
         presets: ['public', 'staff'],
         staff: { authority: idp.base },
-        oauthRateLimit: { windowSeconds: 60, max: 5 },
+        oauthRateLimit: {
+          start: { windowSeconds: 60, max: 5 },
+          callback: { windowSeconds: 60, max: 4 },
+        },
       });
       try {
-        expect(small.auth.options.rateLimit?.customRules).toEqual({
+        expect(small.auth.options.rateLimit?.customRules).toMatchObject({
           '/sign-in/social': { window: 60, max: 5 },
-          '/callback/*': { window: 60, max: 5 },
+          '/sign-in/sso': { window: 60, max: 5 },
+          '/callback/*': { window: 60, max: 4 },
+          '/sso/callback/*': { window: 60, max: 4 },
         });
-        const ip = '203.0.113.210';
         const go = () =>
           small
-            .client({ ip })
+            .client({ ip: '203.0.113.210' })
             .post(`${API}/sign-in/social`, { provider: 'microsoft', callbackURL: '/' });
         const codes: number[] = [];
         for (let i = 0; i < 7; i += 1) codes.push((await go()).status);
         expect(codes).toEqual([200, 200, 200, 200, 200, 429, 429]);
 
-        // Loosening it does not loosen sign-in.
-        const loose = await startStack(infra, {
-          presets: ['public'],
-          oauthRateLimit: { windowSeconds: 60, max: 10_000 },
-        });
-        try {
-          const lc = loose.client({ ip: '203.0.113.211' });
-          const codes2: number[] = [];
-          for (let i = 0; i < 5; i += 1)
-            codes2.push((await signIn(lc, uniqueEmail('still'), strongPassword())).status);
-          expect(codes2).toEqual([401, 401, 401, 429, 429]);
-        } finally {
-          await loose.stop();
-        }
+        const back = small.client({ ip: '203.0.113.211' });
+        const backCodes: number[] = [];
+        for (let i = 0; i < 6; i += 1)
+          backCodes.push(
+            (await back.get(`${API}/callback/microsoft?error=access_denied&state=x`)).status,
+          );
+        expect(backCodes.slice(0, 4).includes(429)).toBe(false);
+        expect(backCodes.slice(4)).toEqual([429, 429]);
       } finally {
         await small.stop();
       }
+
+      // Loosening a redirect limit does not loosen sign-in.
+      const loose = await startStack(infra, {
+        presets: ['public'],
+        oauthRateLimit: {
+          start: { windowSeconds: 60, max: 10_000 },
+          callback: { windowSeconds: 60, max: 10_000 },
+        },
+      });
+      try {
+        const lc = loose.client({ ip: '203.0.113.212' });
+        const codes: number[] = [];
+        for (let i = 0; i < 5; i += 1)
+          codes.push((await signIn(lc, uniqueEmail('still'), strongPassword())).status);
+        expect(codes).toEqual([401, 401, 401, 429, 429]);
+      } finally {
+        await loose.stop();
+      }
     }, 60_000);
 
+    it('a group left out keeps its default', async () => {
+      const only = await startStack(infra, {
+        presets: ['public'],
+        oauthRateLimit: { start: { windowSeconds: 30, max: 9 } },
+      });
+      try {
+        expect(only.auth.options.rateLimit?.customRules).toMatchObject({
+          '/sign-in/social': { window: 30, max: 9 },
+          '/callback/*': { window: 10, max: 100 },
+        });
+      } finally {
+        await only.stop();
+      }
+    });
+
     it('refuses a limit that would switch the limiter off or is not a number', async () => {
-      for (const bad of [
-        { windowSeconds: 0, max: 10 },
-        { windowSeconds: 60, max: 0 },
-        { windowSeconds: 60, max: 1.5 },
-        { windowSeconds: 60, max: 100_000 },
-        { windowSeconds: 7200, max: 10 },
-        { windowSeconds: Number.NaN, max: 10 },
-      ]) {
-        await expect(startStack(infra, { oauthRateLimit: bad })).rejects.toThrow(/oauthRateLimit/);
+      const bad: unknown[] = [
+        { start: { windowSeconds: 0, max: 10 } },
+        { start: { windowSeconds: 60, max: 0 } },
+        { callback: { windowSeconds: 60, max: 1.5 } },
+        { callback: { windowSeconds: 60, max: 100_000 } },
+        { start: { windowSeconds: 7200, max: 10 } },
+        { start: { windowSeconds: Number.NaN, max: 10 } },
+        { start: { max: 10 } },
+        { start: 'lots' },
+        { windowSeconds: 60, max: 10 }, // the shape of an earlier draft: now it names no group
+      ];
+      for (const oauthRateLimit of bad) {
+        await expect(
+          startStack(infra, { oauthRateLimit: oauthRateLimit as never }),
+          JSON.stringify(oauthRateLimit),
+        ).rejects.toThrow(/oauthRateLimit/);
       }
     });
   });
 
-  describe('hostCookies needs an https base URL', () => {
-    it('is refused over http: a browser would not store the cookie', async () => {
-      await expect(
-        (async () => {
-          const { createIdentityInternal } = await import('../create-identity');
-          return createIdentityInternal(
-            {
-              product: 'conformance',
-              db: {},
-              schema: {},
-              cache: {} as never,
-              baseURL: 'http://insecure.identity.test',
-              trustedOrigins: ['http://insecure.identity.test'],
-              presets: ['staff'],
-              staff: {
-                tenantId: TEST_TENANT,
-                clientId: 'c',
-                clientSecret: 's',
-                domains: ['x.test'],
-              },
-              hostCookies: true,
-              env: { NODE_ENV: 'development', [DEFAULTS.secretEnv]: 'x'.repeat(40) },
-            },
-            {},
-          );
-        })(),
-      ).rejects.toThrow(/hostCookies needs an https baseURL/);
+  describe('/sign-in/social takes no credential: id-token sign-in is off for both providers', () => {
+    let idp: MockIdp;
+    let stack: Stack;
+    beforeAll(async () => {
+      idp = await startMockIdp();
+      stack = await startStack(infra, {
+        presets: ['public', 'staff'],
+        staff: { authority: idp.base },
+        google: { clientId: 'google-client', clientSecret: `g-${randomUUID()}` },
+      });
     });
+    afterAll(async () => {
+      await stack?.stop();
+      await idp?.stop();
+    });
+
+    for (const provider of ['google', 'microsoft']) {
+      it(`${provider}: a posted idToken is refused before it is looked at, and no user is created`, async () => {
+        const before = await stack.pool.query(`select count(*)::int as n from identity."user"`);
+        const res = await stack.client().post(`${API}/sign-in/social`, {
+          provider,
+          callbackURL: '/',
+          idToken: { token: 'aaa.bbb.ccc' },
+        });
+        expect(res.status).toBe(404);
+        expect(res.json<{ code: string }>().code).toBe('ID_TOKEN_NOT_SUPPORTED');
+        expect(res.setCookie.some((l) => /session_token=/.test(l))).toBe(false);
+        const after = await stack.pool.query(`select count(*)::int as n from identity."user"`);
+        expect(after.rows[0]).toEqual(before.rows[0]);
+      });
+    }
+
+    it('the provider configuration says so', () => {
+      for (const provider of ['google', 'microsoft']) {
+        const config = stack.auth.options.socialProviders?.[provider as 'google'] as unknown as {
+          disableIdTokenSignIn?: boolean;
+        };
+        expect(config.disableIdTokenSignIn, provider).toBe(true);
+      }
+    });
+  });
+
+  describe('hostCookies', () => {
+    const base = {
+      product: 'conformance',
+      db: {},
+      schema: {},
+      cache: {} as never,
+      presets: ['staff' as const],
+      staff: { tenantId: TEST_TENANT, clientId: 'c', clientSecret: 's', domains: ['x.test'] },
+      env: { NODE_ENV: 'development', [DEFAULTS.secretEnv]: 'x'.repeat(40) },
+    };
+    const create = async (extra: Record<string, unknown>, origin = 'https://ok.identity.test') => {
+      const { createIdentityInternal } = await import('../create-identity');
+      return createIdentityInternal(
+        { ...base, baseURL: origin, trustedOrigins: [origin], ...extra } as never,
+        {},
+      );
+    };
+
+    it('needs an https base URL: a browser would not store the cookie', async () => {
+      await expect(create({ hostCookies: true }, 'http://insecure.identity.test')).rejects.toThrow(
+        /hostCookies needs an https baseURL/,
+      );
+    });
+
+    for (const value of ['true', 'false', '', 1, 0, null, {}, []]) {
+      it(`refuses ${JSON.stringify(value)}: only a boolean (or nothing) says on or off — a string from an environment variable would be read as off`, async () => {
+        await expect(create({ hostCookies: value })).rejects.toThrow(
+          /hostCookies must be a boolean/,
+        );
+      });
+    }
+
+    for (const value of [true, false, undefined]) {
+      it(`accepts ${String(value)}`, async () => {
+        await expect(create({ hostCookies: value })).resolves.toBeDefined();
+      });
+    }
   });
 }

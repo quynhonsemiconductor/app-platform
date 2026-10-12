@@ -85,12 +85,13 @@ export interface IdentityOptions {
    */
   allowOrganizationCreation?: boolean;
   /**
-   * Rate limit, per client address and per path, of `/sign-in/social` and `/callback/*`: the endpoints
-   * that only start or finish a redirect to the identity provider and take no credential. Default
-   * 120 requests per 60 s (`DEFAULTS.rateLimit.oauth`), sized for about a hundred staff behind one
-   * address in the same minute; raise it for a larger office, lower it for a smaller one. The strict
-   * limit of the credential endpoints (`/sign-in/email`, `/sign-up/*`: 3 per 10 s) is NOT affected,
-   * and cannot be changed here. See README, "Client IP and rate limits".
+   * Rate limits, per client address and per path, of the endpoints that only START or FINISH a redirect
+   * to an identity provider and take no credential: `start` = `/sign-in/social` and `/sign-in/sso`
+   * (default 120 per 60 s, sized for about a hundred staff behind one address in the same minute),
+   * `callback` = `/callback/*` and `/sso/callback/*` (default 100 per 10 s, which is what Better Auth's
+   * global rule already gave them). The strict limit of the credential endpoints (`/sign-in/email`,
+   * `/sign-up/*`: 3 per 10 s) is NOT affected, and cannot be changed here. See README, "Client IP and
+   * rate limits".
    */
   oauthRateLimit?: OAuthRateLimit;
   /**
@@ -103,7 +104,9 @@ export interface IdentityOptions {
    * It covers every identity cookie (session, session cache, known-device, 2FA, OAuth state).
    *
    * Requires an https `baseURL`. Switching it on signs everyone out and forgets every known device
-   * (the names change; the known-device HMAC covers the name). `SameSite` stays `Lax` either way:
+   * (the names change; the known-device HMAC covers the name) — but it does NOT end the old sessions
+   * on the server: they stay valid under the old cookie name and come back if you switch back. Call
+   * `revokeAllSessions(auth)` when you switch. `SameSite` stays `Lax` either way:
    * `Strict` would drop the cookie on the provider's redirect back to `/callback/*`, the one request
    * every OAuth sign-in lands on.
    */
@@ -214,6 +217,12 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     `${DEFAULTS.secretEnv} must be set (32+ characters)`,
   );
   config(!production || o.baseURL.startsWith('https://'), 'baseURL must be https in production');
+  // Exactly a boolean. `'true'` from an environment variable is a string and `=== true` would
+  // quietly read it as off, leaving a product that believes it is on `__Host-` on `__Secure-`.
+  config(
+    o.hostCookies === undefined || typeof o.hostCookies === 'boolean',
+    'hostCookies must be a boolean (a string such as "true" from an environment variable is not one)',
+  );
   const hostCookies = o.hostCookies === true;
   config(
     !hostCookies || o.baseURL.startsWith('https://'),

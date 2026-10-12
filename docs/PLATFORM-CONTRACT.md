@@ -354,24 +354,27 @@ the identity mount fills from `clientIp()`, after discarding whatever the client
 does not read `cf-connecting-ip` itself).
 Do not read `x-real-ip`.
 
-**Behind a Cloudflare Worker or a Pages Function.** What `cf-connecting-ip` holds depends on the path
-(Cloudflare's documentation of its HTTP headers; not verified here against a live Worker):
+**Behind a Cloudflare Worker or a Pages Function.** What `cf-connecting-ip` holds depends on the path.
+Only the first case is something this platform has relied on; the others are from Cloudflare's
+documentation or unverified, and none was observed against a live Worker or Pages Function:
 
 - no Worker in the path: the visitor's address;
-- a Worker or Pages Function in the **same zone** as the API calling it with `fetch()`: the visitor's
-  address (a same-zone subrequest reflects `x-real-ip`). The Worker's own code can alter it, which is why
-  a Worker builds its subrequest from an allow-list and never copies `x-real-ip`, `cf-connecting-ip`,
-  `true-client-ip` or `x-forwarded-for` from the visitor;
-- a Worker calling an API in **another** zone (for example a front end on `*.pages.dev` calling
-  `api.qnsc.vn`): **the same Cloudflare-internal address for every user** (`2a06:98c0:3600::103`). Nothing
-  fails: every user shares one rate-limit bucket and one `ip` in the log. Keep the Worker, the Pages
-  custom domain and the API in one zone, or call the API from the browser directly.
+- a **Worker** in the **same zone** as the API calling it with `fetch()`: documented by Cloudflare to
+  reflect `x-real-ip`, the visitor's address. **Unverified here.**
+- a **Pages Function**: **unverified, assume `2a06:98c0:3600::103`.** A Pages Function on a custom domain
+  probably runs in Pages' zone, not the API's, so its subrequest is cross-zone; community reports say the
+  API then sees that address;
+- a Worker or Pages Function calling an API in **another** zone: documented by Cloudflare: **the same
+  Cloudflare-internal address for every user** (`2a06:98c0:3600::103`).
 
-A header set by the Worker (`x-client-ip`, `x-forwarded-for`) is **not** a trusted source: to the API it
-is only a header, settable by any caller that reaches it. Carrying the address across zones would take
-something the API can verify (a signed request, Authenticated Origin Pulls), designed deliberately; it is
-not part of this contract. Check a new deployment once: the `ip` of the request-summary log line must be
-the visitor's address.
+Assume the last address. Nothing fails: every user shares one rate-limit bucket and one `ip` in the log
+(the authentication library's 3-per-10-seconds credential limit becomes 3 per 10 seconds for the whole
+company). To keep the visitor's address behind a Worker or Pages Function, use the **signed edge client
+IP** (below), or have the browser call the API directly.
+
+A header the Worker sets (`x-client-ip`, `x-forwarded-for`) is **not** a trusted source on its own: to the
+API it is only a header, settable by any caller that reaches it. Check a new deployment once: the `ip` of
+the request-summary log line must be the visitor's address.
 
 Reference: `platform-http` `clientIp(req)`.
 

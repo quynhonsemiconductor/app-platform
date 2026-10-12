@@ -55,7 +55,7 @@ export interface StackOptions {
   /** Leave `mail` out of the options, as a staff-only product can. */
   withoutMail?: boolean;
   /** `__Host-` cookie names instead of `__Secure-` (`IdentityOptions.hostCookies`). */
-  hostCookies?: boolean;
+  hostCookies?: boolean | undefined;
   /** The rate limit of `/sign-in/social` and `/callback/*` (`IdentityOptions.oauthRateLimit`). */
   oauthRateLimit?: IdentityOptions['oauthRateLimit'];
 }
@@ -188,7 +188,7 @@ export async function startStack(
         ...(options.hooks ? { hooks: options.hooks } : {}),
         ...(options.testLogin ? { testLogin: true } : {}),
         ...(options.allowOrganizationCreation ? { allowOrganizationCreation: true } : {}),
-        ...(options.hostCookies ? { hostCookies: true } : {}),
+        ...(options.hostCookies !== undefined ? { hostCookies: options.hostCookies } : {}),
         ...(options.oauthRateLimit ? { oauthRateLimit: options.oauthRateLimit } : {}),
         ...(options.onStorageDegraded ? { onStorageDegraded: options.onStorageDegraded } : {}),
         events: { emit: (e) => void events.push(e) },

@@ -61,23 +61,35 @@ export const DEFAULTS = Object.freeze({
     }),
   }),
   /**
-   * Better Auth limits `/sign-in*` to 3 requests per 10 s per client address, and that is right for
-   * the endpoints that take a credential. It is wrong for the two that only START or FINISH a
-   * redirect to an identity provider: `/sign-in/social` takes no credential (it answers with the
-   * provider's URL) and `/callback/*` is the provider handing the browser back. An office behind one
-   * NAT shares one address, so its whole morning rush of staff sign-ins shares one bucket and the
-   * fourth person gets a 429. These two get their own, larger, per-address-per-path limit. What
-   * guards guessing is not here but in the device lockout (`lockout`), which keys on the account.
-   * Credential endpoints (`/sign-in/email`, `/sign-up/*`, …) keep Better Auth's strict rule.
+   * Better Auth limits everything under `/sign-in*` to 3 requests per 10 s per client address and
+   * path, and that is right for the endpoints that take a credential. It is wrong for the ones that
+   * only START a redirect to an identity provider: `/sign-in/social` takes no credential (it answers
+   * with the provider's URL; id-token sign-in is disabled for both providers, so a token cannot be
+   * posted to it) and `/sign-in/sso` takes an email address and answers whether a provider exists for
+   * its domain. An office behind one NAT shares one address, so its whole morning rush of staff
+   * sign-ins shares one bucket and the fourth person gets a 429. What guards guessing is not here but
+   * in the device lockout (`lockout`), which keys on the account. Credential endpoints
+   * (`/sign-in/email`, `/sign-up/*`, …) keep Better Auth's strict rule.
    *
-   * Sized for ~100 staff behind one address signing in within the same minute: each sign-in is one
-   * request on each of the two paths, and each path has its own bucket.
+   * `start`: sized for ~100 staff behind one address signing in within the same minute (one request
+   * each on each path, and each path has its own bucket). It stays small enough to be a limit on
+   * guessing which domains have SSO: 2 a second per address.
+   *
+   * `callback`: the provider handing the browser back. Better Auth never had a special rule for it,
+   * so it ran at its global 100 per 10 s; this is that, made explicit so it is ours and configurable
+   * rather than whatever the library's global default is next release. It is NOT lowered: a larger
+   * window with a smaller number would be a stricter limit, not a looser one.
    */
   rateLimit: Object.freeze({
-    oauth: Object.freeze({
+    start: Object.freeze({
       windowSeconds: 60,
       max: 120,
-      paths: Object.freeze(['/sign-in/social', '/callback/*'] as const),
+      paths: Object.freeze(['/sign-in/social', '/sign-in/sso'] as const),
+    }),
+    callback: Object.freeze({
+      windowSeconds: 10,
+      max: 100,
+      paths: Object.freeze(['/callback/*', '/sso/callback/*'] as const),
     }),
   }),
   /**

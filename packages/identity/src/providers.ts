@@ -138,6 +138,10 @@ export function googleProvider(
   const base = google(options);
   return {
     ...options,
+    // Authorization-code flow only, like Microsoft: `signInSocial({ idToken })` verifies a token
+    // that is valid for this client id, with no nonce binding, and mints a session from it. With it
+    // enabled `/sign-in/social` would take a credential; disabled, it only returns the provider's URL.
+    disableIdTokenSignIn: true,
     getUserInfo: async (token: Parameters<typeof base.getUserInfo>[0]) => {
       const info = await base.getUserInfo(token);
       if (!info?.user.email) return info;

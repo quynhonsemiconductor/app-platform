@@ -1,10 +1,17 @@
-export { IdentityModule, type IdentityModuleAsyncOptions } from './identity.module';
+export {
+  IdentityModule,
+  type IdentityModuleAsyncOptions,
+  type PrincipalHookFactory,
+} from './identity.module';
 export {
   AUTH,
   CurrentSession,
   CurrentUser,
   Public,
+  PRINCIPAL_HOOK,
   SessionGuard,
+  type PrincipalExtras,
+  type PrincipalHook,
   type RequestWithSession,
 } from './session.guard';
 export { AuthApiErrorFilter, toDomainException } from './errors';

@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createAuthClient } from 'better-auth/client';
 import { createServer } from 'node:net';
 import { Controller, Get, Global, Inject, Module, Post } from '@nestjs/common';
-import { APP_FILTER, NestFactory } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
@@ -14,6 +14,7 @@ import type { DbExecutor } from '@quynhonsemiconductor/platform-db/drizzle';
 import {
   enableCorrelationId,
   GlobalExceptionFilter,
+  RateLimitGuard,
   REQUEST_CONTEXT,
 } from '@quynhonsemiconductor/platform-http';
 import {
@@ -34,6 +35,8 @@ import { AuthApiErrorFilter } from './errors';
 import { IdentityModule } from './identity.module';
 import { AUTH, CurrentSession, Public, type RequestWithSession } from './session.guard';
 import { checkIdentityReady } from './readiness';
+import { getRequestPrincipal, requestContextStorage } from '@quynhonsemiconductor/observability';
+import { currentUserId } from '@quynhonsemiconductor/platform-http';
 
 /**
  * The reference consumer: a real Nest + Fastify application wired with ONLY the bindings the README
@@ -58,6 +61,28 @@ class ProbeController {
   @Get('me')
   me(@CurrentSession() session: NonNullable<RequestWithSession['session']>) {
     return { id: session.user.id, email: session.user.email };
+  }
+
+  /** What the rest of the process (platform-http's rate limit, idempotency, access log) learns about the caller. */
+  @Get('principal')
+  principal() {
+    return this.whoIsCalling();
+  }
+
+  @Public()
+  @Get('principal-anonymous')
+  principalAnonymous() {
+    return this.whoIsCalling();
+  }
+
+  private whoIsCalling() {
+    const context = requestContextStorage.getStore();
+    return {
+      principal: getRequestPrincipal(),
+      workspaceId: context?.workspaceId,
+      fields: context?.principalFields,
+      platformHttpSees: currentUserId(),
+    };
   }
 
   /** A product calling `auth.api.*` directly: Better Auth's APIError must come out as the platform envelope. */
@@ -144,6 +169,12 @@ describe.skipIf(!enabled)('reference consumer: identity inside Nest 11 + Fastify
     })
     class JobsModule {}
 
+    // THE PATTERN FOR RateLimitGuard: its own module, imported AFTER IdentityModule. An APP_GUARD declared in
+    // this root module would run BEFORE identity's SessionGuard (the root module's guards come first), the
+    // principal would be empty, and every authenticated caller behind one NAT would share one bucket.
+    @Module({ providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }] })
+    class RateLimitModule {}
+
     @Module({
       imports: [
         CacheModule.forRoot({ url: valkey.url, keyPrefix, mode: 'required' }),
@@ -177,6 +208,7 @@ describe.skipIf(!enabled)('reference consumer: identity inside Nest 11 + Fastify
               env: authEnv,
             })) as never,
         }),
+        RateLimitModule, // AFTER IdentityModule: see above
       ],
       controllers: [ProbeController],
       providers: [
@@ -212,16 +244,22 @@ describe.skipIf(!enabled)('reference consumer: identity inside Nest 11 + Fastify
     await Promise.allSettled([idp?.stop(), pg?.stop(), valkey?.stop()]);
   });
 
-  const signUpAndIn = async (c: TestClient, email: string, password: string) => {
-    expect((await c.post('/api/auth/sign-up/email', { email, password, name: 'R' })).status).toBe(
+  const signUpAndIn = async (
+    c: TestClient,
+    email: string,
+    password: string,
+    headers: Record<string, string> = {},
+  ) => {
+    const post = (path: string, json: unknown) => c.request('POST', path, { json, headers });
+    expect((await post('/api/auth/sign-up/email', { email, password, name: 'R' })).status).toBe(
       200,
     );
     const { rows } = await pool.query<{ data: { text: string } }>(
       `select data from identity_test_jobs where data->>'to' = $1`,
       [email],
     );
-    expect((await c.get(rows[0]!.data.text)).status).toBe(302);
-    expect((await c.post('/api/auth/sign-in/email', { email, password })).status).toBe(200);
+    expect((await c.get(rows[0]!.data.text, headers)).status).toBe(302);
+    expect((await post('/api/auth/sign-in/email', { email, password })).status).toBe(200);
   };
 
   it('boots with only the documented bindings, serves @Public and protects everything else (platform-http envelope)', async () => {
@@ -248,6 +286,43 @@ describe.skipIf(!enabled)('reference consumer: identity inside Nest 11 + Fastify
     const forged = http();
     forged.setCookies({ [name]: `${value.slice(0, -4)}AAAA` });
     expect((await forged.get('/v1/me')).status).toBe(401);
+  });
+
+  it('SessionGuard writes {userId, sessionId} into the request context, and platform-http reads the user from there (no req.user)', async () => {
+    const email = `principal-${randomUUID().slice(0, 6)}@users.reference.test`;
+    // its own address (cf-connecting-ip wins in clientIp()): the sign-up and sign-in limits are per address,
+    // and the tests around this one count on the shared window
+    const own = { 'cf-connecting-ip': '198.51.100.77' };
+    const c = http();
+    await signUpAndIn(c, email, `pw-${randomUUID()}`, own);
+    const me = (await c.get('/v1/me', own)).json<{ id: string }>();
+    const body = (await c.get('/v1/principal', own)).json<{
+      principal: { userId: string; sessionId: string };
+      platformHttpSees: string;
+    }>();
+    const sessions = await pool.query(`select id from identity.session where user_id = $1`, [
+      me.id,
+    ]);
+    expect(body.principal.userId).toBe(me.id);
+    expect(body.platformHttpSees).toBe(me.id);
+    expect(sessions.rows.map((r: { id: string }) => r.id)).toContain(body.principal.sessionId);
+    // the session TOKEN (the cookie value) is nowhere in what the context holds
+    const [, cookie] = Object.entries(c.cookies)[0]!;
+    expect(JSON.stringify(body)).not.toContain(decodeURIComponent(cookie).split('.')[0]!);
+    // THE RATE LIMIT SAW THE USER: its bucket is the user's, not the address's (RateLimitModule is imported
+    // after IdentityModule). Only reachable because the guard that runs first wrote the principal.
+    const { default: Redis } = await import('ioredis');
+    const client = new Redis(valkey.url);
+    try {
+      const buckets = await client.keys(`${keyPrefix}rl:DEFAULT:*`);
+      expect(buckets).toContain(`${keyPrefix}rl:DEFAULT:uid:${me.id}`);
+      expect(buckets.some((k) => k.includes('198.51.100.77'))).toBe(false); // not keyed by its address
+    } finally {
+      client.disconnect();
+    }
+    // a public route has no principal, and nothing bled over from the request before
+    const anon = (await http().get('/v1/principal-anonymous')).json<{ principal?: unknown }>();
+    expect(anon.principal).toBeUndefined();
   });
 
   it('the body reaches Better Auth un-parsed: a form-encoded POST is not a 415', async () => {

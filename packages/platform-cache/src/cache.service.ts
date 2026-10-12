@@ -280,8 +280,12 @@ end
     };
   }
 
-  /** Locks taken through {@link acquireLock} by THIS process, so {@link releaseLock} can compare-and-delete. */
-  private readonly held = new Map<string, { lock: CacheLock; until: number }>();
+  /**
+   * Locks taken through {@link acquireLock} by THIS process, oldest first, per key. A list, not one entry: two
+   * holders of one key in one process (the first overran its lease, the second took over) both leave a token,
+   * and {@link releaseLock} must not mistake the second's for the first's.
+   */
+  private readonly held = new Map<string, Array<{ lock: CacheLock; until: number }>>();
 
   /**
    * @deprecated Use {@link tryLock}, which returns the lock to release.
@@ -295,11 +299,19 @@ end
   async acquireLock(key: string, ttlMs: number): Promise<boolean> {
     const lock = await this.tryLock(key, ttlMs);
     if (!lock) return false;
+    const now = Date.now();
     if (this.held.size >= 1000) {
-      const now = Date.now();
-      for (const [k, entry] of this.held) if (entry.until <= now) this.held.delete(k);
+      for (const [k, entries] of this.held) {
+        const live = entries.filter((entry) => entry.until > now);
+        if (live.length === 0) this.held.delete(k);
+        else this.held.set(k, live);
+      }
     }
-    this.held.set(key, { lock, until: Date.now() + ttlMs });
+    const entries = this.held.get(key) ?? [];
+    entries.push({ lock, until: now + ttlMs });
+    // Bounded: tokens older than a handful of takeovers are long expired and could only release nothing.
+    if (entries.length > 16) entries.shift();
+    this.held.set(key, entries);
     return true;
   }
 
@@ -310,11 +322,20 @@ end
    * call when the lock has expired, was never taken here, or the cache is disabled: it then does nothing. It
    * used to delete `lock:{key}` whoever held it, so a holder that overran its lease freed the lock of the one
    * that had taken over; a lock taken by ANOTHER process is no longer deletable from here.
+   *
+   * **Limit of this API, and why `tryLock` exists:** `releaseLock(key)` carries no handle, so when one process has
+   * held the same key more than once (the first holder overran its lease and a second took over) it cannot tell
+   * the callers apart. It releases the OLDEST remembered lock first. That is the safe choice: the first
+   * holder's late release hits its own, long expired token and does nothing, so it can never free the second
+   * holder's live lock. The cost is liveness, not safety: if the second holder finishes first, its call
+   * consumes the first token and its own lock stays held until the first holder's call or the lease. Only
+   * `tryLock` tells holders apart.
    */
   async releaseLock(key: string): Promise<void> {
-    const entry = this.held.get(key);
-    if (!entry) return;
-    this.held.delete(key);
-    await entry.lock.release();
+    const entries = this.held.get(key);
+    const oldest = entries?.shift();
+    if (!oldest) return;
+    if (entries!.length === 0) this.held.delete(key);
+    await oldest.lock.release();
   }
 }

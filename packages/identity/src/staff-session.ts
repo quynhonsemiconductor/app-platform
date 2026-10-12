@@ -4,7 +4,7 @@ import type { BetterAuthPlugin } from 'better-auth';
 import { APIError } from 'better-auth/api';
 import { takeStaffSignIn, type StaffSignInClaims } from './callback-errors';
 import { DEFAULTS } from './defaults';
-import { domainIn, emailDomain } from './domains';
+import { staffEmailIn } from './domains';
 import { consoleLogger, errorFields, STAFF_SIGN_IN_REFUSED, type IdentityLogger } from './events';
 import type { AccountContext } from './accounts';
 
@@ -77,7 +77,7 @@ export function staffSessionHooks(policy: StaffSessionPolicy) {
       >['internalAdapter']);
     const [user, accounts] = await Promise.all([ia.findUserById(userId), ia.findAccounts(userId)]);
     if (accounts.some((a) => a.providerId === 'microsoft')) return true;
-    return !!user && domainIn(emailDomain(user.email), policy.staffDomains);
+    return !!user && staffEmailIn(user.email, policy.staffDomains);
   }
 
   /** The sign-in is refused: the browser is redirected with `?error=STAFF_SIGN_IN_REFUSED`, no session is written. */
@@ -217,7 +217,7 @@ export function staffClassifier(policy: StaffSessionPolicy) {
       adapter: Pick<SessionAdapter, 'findAccounts'>,
       user: { id?: unknown; email: string },
     ): Promise<boolean> {
-      if (domainIn(emailDomain(user.email), policy.staffDomains)) return true;
+      if (staffEmailIn(user.email, policy.staffDomains)) return true;
       const id = user.id;
       if (typeof id !== 'string') return false;
       const hit = memo.get(id);
@@ -381,7 +381,7 @@ export function staffBecameHooks(policy: StaffSessionPolicy, classifier: StaffCl
           const id = user?.['id'];
           const email = user?.['email'];
           if (typeof id !== 'string' || typeof email !== 'string') return;
-          if (!domainIn(emailDomain(email), policy.staffDomains)) return;
+          if (!staffEmailIn(email, policy.staffDomains)) return;
           await revokeUncapped(id, context);
         },
       },

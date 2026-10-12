@@ -191,6 +191,53 @@ A request with no `x-qnsc-edge-*` headers at all costs nothing: no HMAC is compu
 counted. `clientIp()` answers **once per request** (memoised on the request object), so the rate-limit
 guard, the access log, idempotency and identity's mount agree, and a refusal is counted once.
 
+## Who the user is
+
+`RateLimitGuard` (the `uid:` key), `IdempotencyInterceptor`, `HttpLoggingInterceptor` and `GlobalExceptionFilter` learn
+who is calling from **one place: the request context** (`observability`'s store, the one `enableCorrelationId` seeds). They do
+**not** read `req.user`, `req.user.sub` or `req.user.id`. `currentUserId()` is that read.
+
+The guard that authenticates writes it, once, with `setRequestPrincipal` from `@quynhonsemiconductor/observability`:
+
+```ts
+setRequestPrincipal({ userId: claims.sub, sessionId: claims.sid });
+```
+
+Identity's `SessionGuard` does this for you (and takes a `principal` hook for a workspace and log fields). A product with its
+own guard calls it and nothing else; a guard that only sets `req.user` leaves its authenticated callers keyed by client address
+(one bucket per NAT) and out of the access log. The authenticating guard must run **before** `RateLimitGuard`, and **"register it first" in the same module does not do it**:
+Nest runs global guards in the order of the modules that declare them, and the root module's own `APP_GUARD`s run BEFORE those of
+the modules it imports. A `RateLimitGuard` declared in `AppModule` therefore runs before identity's `SessionGuard`. Put it in a
+module of its own and import that module AFTER the one that authenticates:
+
+```ts
+// rate-limit.module.ts: RateLimitGuard in a module of its own
+@Module({ providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }] })
+export class RateLimitModule {}
+
+// app.module.ts: IdentityModule first, RateLimitModule AFTER it
+@Module({
+  imports: [
+    CacheModule.forRoot(/* ... */),
+    IdentityModule.forRootAsync(/* ... */), // authenticates, writes the principal
+    RateLimitModule, //                         reads it
+  ],
+  // NOT here: providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }]
+})
+export class AppModule {}
+```
+
+The reference consumer in the identity package does exactly this and tests it (a real sign-in, then the Valkey key is `rl:DEFAULT:uid:<id>`).
+Two warnings (once per process) tell you when it is wrong: `SessionGuard` says `RateLimitGuard` ran first, and `HttpLoggingInterceptor` says
+a request has `req.user`/`req.session` but no principal.
+`GlobalExceptionFilter` needs no `REQUEST_CONTEXT` binding now: unbound it reads the same store (a binding still wins).
+
+### Upgrading to 5.0.0
+
+Breaking: the `req.user` reads are gone. For each product guard that authenticates: call `setRequestPrincipal(...)` after it
+verifies the caller, and delete the adapter that fed `REQUEST_CONTEXT` or `req.user`. Until you do, authenticated requests are
+rate-limited per address and `userId` is missing from the access log. Needs `observability` >= 0.2.3 for `setRequestPrincipal`.
+
 ## Correlation id
 
 ```ts

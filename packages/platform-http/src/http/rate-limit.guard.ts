@@ -21,6 +21,7 @@ import {
   type RateLimitMode,
 } from './cache-requirement';
 import { clientIp } from './client-ip';
+import { KEYED_BY_ADDRESS, currentUserId } from './principal';
 import { assertEdgeClientIpEnv } from './edge-client-ip';
 import {
   RATE_LIMIT_METADATA_KEY,
@@ -158,7 +159,6 @@ export class RateLimitGuard implements CanActivate, OnApplicationBootstrap {
 
     const req = context.switchToHttp().getRequest<
       FastifyRequest & {
-        user?: { sub?: string };
         cookies?: Record<string, string | undefined>;
       }
     >();
@@ -166,6 +166,8 @@ export class RateLimitGuard implements CanActivate, OnApplicationBootstrap {
 
     // ── Build tracking key ──────────────────────────────────────────────────
     const ip = clientIp(req);
+    // The authenticated user comes from the request context (`setRequestPrincipal`), not from `req.user`.
+    const userId = currentUserId();
     let identifier: string;
     if (tierConfig.keyBy === 'refreshToken') {
       // Per-session bucket: hash the HttpOnly cookie so raw tokens never appear
@@ -177,7 +179,9 @@ export class RateLimitGuard implements CanActivate, OnApplicationBootstrap {
     } else {
       // Prefer authenticated user ID so corporate NAT users aren't penalised for
       // each other. Fall back to IP for unauthenticated endpoints.
-      identifier = req.user?.sub ? `uid:${req.user.sub}` : `ip:${ip}`;
+      identifier = userId ? `uid:${userId}` : `ip:${ip}`;
+      // Remembered on the request: a guard that authenticates AFTER this one can tell the caller it ran too late.
+      if (!userId) (req as unknown as Record<symbol, unknown>)[KEYED_BY_ADDRESS] = true;
     }
     const key = `${tier}:${identifier}`;
 
@@ -196,7 +200,7 @@ export class RateLimitGuard implements CanActivate, OnApplicationBootstrap {
       // Rate limiting is a protective control, not a hard dependency for serving
       // traffic. If Valkey is unavailable, fail open and surface the outage in logs.
       this.logger.error(
-        failOpenLog('rate_limit', { err, key, tier, ip, userId: req.user?.sub }),
+        failOpenLog('rate_limit', { err, key, tier, ip, userId }),
         'Rate limit backend unavailable; allowing request',
       );
       this.recordFailOpen();
@@ -215,7 +219,7 @@ export class RateLimitGuard implements CanActivate, OnApplicationBootstrap {
       const retryAfter = Math.max(resetAt - Math.floor(Date.now() / 1000), 1);
       setHeader('Retry-After', retryAfter);
 
-      this.logger.warn({ key, tier, ip, userId: req.user?.sub }, 'Rate limit exceeded');
+      this.logger.warn({ key, tier, ip, userId }, 'Rate limit exceeded');
 
       throw new RateLimitedException(`Rate limit exceeded (${tier}). Retry after ${retryAfter}s.`);
     }

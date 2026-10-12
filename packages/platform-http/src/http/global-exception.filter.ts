@@ -6,13 +6,25 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { ZodValidationException } from 'nestjs-zod';
 import type { ZodError } from 'zod';
 import { DomainException } from '../errors/exceptions';
 import { HttpErrorCodes, httpStatusToErrorCode } from '../errors/error-codes';
+import { currentUserId } from './principal';
 import { REQUEST_CONTEXT, type RequestContextAccessor } from './request-context';
+import { requestContextStorage } from './request-context.service';
+
+/**
+ * What the filter reads when the product binds nothing: the request context that `enableCorrelationId`
+ * seeds and the authentication layer fills (`setRequestPrincipal`). No bridge is needed.
+ */
+const contextStoreAccessor: RequestContextAccessor = {
+  getCorrelationId: () => requestContextStorage.getStore()?.correlationId,
+  getUserId: currentUserId,
+};
 
 /**
  * Global exception filter — maps every thrown error to one stable wire envelope:
@@ -26,7 +38,12 @@ import { REQUEST_CONTEXT, type RequestContextAccessor } from './request-context'
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
-  constructor(@Inject(REQUEST_CONTEXT) private readonly ctx: RequestContextAccessor) {}
+  private readonly ctx: RequestContextAccessor;
+
+  /** `ctx` is optional: unbound, the filter reads the request context store itself. */
+  constructor(@Optional() @Inject(REQUEST_CONTEXT) ctx?: RequestContextAccessor) {
+    this.ctx = ctx ?? contextStoreAccessor;
+  }
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const http = host.switchToHttp();

@@ -14,6 +14,7 @@ import type { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { clientIp } from './client-ip';
 import { assertEdgeClientIpEnv } from './edge-client-ip';
+import { warnOnceIfAuthenticatedWithoutPrincipal } from './principal';
 import { requestContextStorage } from './request-context.service';
 
 /**
@@ -109,7 +110,7 @@ export class HttpLoggingInterceptor implements NestInterceptor, OnApplicationBoo
       return next.handle();
     }
 
-    const req = context.switchToHttp().getRequest<FastifyRequest & { user?: { id?: string } }>();
+    const req = context.switchToHttp().getRequest<FastifyRequest>();
     const method = req.method;
     const url =
       ((req as unknown as Record<string, unknown>)['originalUrl'] as string | undefined) ?? req.url;
@@ -126,6 +127,9 @@ export class HttpLoggingInterceptor implements NestInterceptor, OnApplicationBoo
     // `correlationId: undefined` would erase the id the logger adds from the context itself.
     const correlationId = requestContextStorage.getStore()?.correlationId;
     const correlationField = correlationId === undefined ? {} : { correlationId };
+    // The context object itself, read when the line is written: authentication ran before this
+    // interceptor and wrote the principal into it (`setRequestPrincipal`), not onto `req.user`.
+    const requestContext = requestContextStorage.getStore();
     const ip = clientIp(req);
 
     return next.handle().pipe(
@@ -135,7 +139,8 @@ export class HttpLoggingInterceptor implements NestInterceptor, OnApplicationBoo
             .switchToHttp()
             .getResponse<{ statusCode: number }>().statusCode;
           const duration = Date.now() - startTime;
-          const userId = req.user?.id;
+          const userId = requestContext?.userId;
+          warnOnceIfAuthenticatedWithoutPrincipal(req, (m) => this.logger.warn(m));
 
           this.log(statusCode, {
             msg: `<-- ${method} ${url} ${statusCode} ${duration}ms`,
@@ -154,7 +159,8 @@ export class HttpLoggingInterceptor implements NestInterceptor, OnApplicationBoo
           const statusCode = (err as { getStatus?: () => number }).getStatus?.() ?? 500;
           const errorCode =
             (err as { getResponse?: () => { code?: string } }).getResponse?.()?.code ?? 'INTERNAL';
-          const userId = req.user?.id;
+          const userId = requestContext?.userId;
+          warnOnceIfAuthenticatedWithoutPrincipal(req, (m) => this.logger.warn(m));
 
           this.log(statusCode, {
             msg: `<-- ${method} ${url} ${statusCode} ${duration}ms [${errorCode}]`,

@@ -4,7 +4,9 @@ import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SecurityMetrics } from '@quynhonsemiconductor/observability';
+import { requestContextStorage, setRequestPrincipal } from '@quynhonsemiconductor/observability';
 import { RateLimitedException } from '../errors';
+import { KEYED_BY_ADDRESS } from './principal';
 import { RateLimitGuard } from './rate-limit.guard';
 import { RATE_LIMIT_METADATA_KEY, SKIP_RATE_LIMIT_KEY } from './rate-limit.constants';
 
@@ -89,13 +91,60 @@ describe('RateLimitGuard', () => {
     expect(Number(sink.headers['Retry-After'])).toBeGreaterThan(0);
   });
 
-  it('keys authenticated requests by user id, not IP', async () => {
+  const asRequest = <T>(fn: () => T): T =>
+    requestContextStorage.run(
+      {
+        workspaceId: undefined,
+        userId: undefined,
+        sessionId: undefined,
+        correlationId: 'c',
+        traceparent: undefined,
+      },
+      fn,
+    );
+
+  it('keys authenticated requests by the user id in the request context, not IP', async () => {
     const { valkey, spy } = makeValkey({ allowed: true, remaining: 99, resetAt: 1 });
     const guard = new RateLimitGuard(makeReflector({}), valkey); // DEFAULT tier
-    const { context } = makeContext({ ip: '1.2.3.4', user: { sub: 'user-7' } });
+    const { context } = makeContext({ ip: '1.2.3.4' });
 
-    await guard.canActivate(context);
+    await asRequest(async () => {
+      setRequestPrincipal({ userId: 'user-7', sessionId: 's-7' });
+      await guard.canActivate(context);
+    });
     expect(spy).toHaveBeenCalledWith('DEFAULT:uid:user-7', 100, 60);
+  });
+
+  it('does NOT read req.user: a guard that only set req.user.sub leaves the caller keyed by address', async () => {
+    const { valkey, spy } = makeValkey({ allowed: true, remaining: 99, resetAt: 1 });
+    const guard = new RateLimitGuard(makeReflector({}), valkey);
+    const { context } = makeContext({ ip: '1.2.3.4', user: { sub: 'user-7', id: 'user-7' } });
+
+    await asRequest(() => guard.canActivate(context));
+    expect(spy).toHaveBeenCalledWith('DEFAULT:ip:1.2.3.4', 100, 60);
+  });
+
+  it('marks the request when it had to key by address, and not when it keyed by user', async () => {
+    const { valkey } = makeValkey({ allowed: true, remaining: 99, resetAt: 1 });
+    const guard = new RateLimitGuard(makeReflector({}), valkey);
+    const anonymous: Record<symbol, unknown> = { ip: '1.2.3.4' };
+    await asRequest(() => guard.canActivate(makeContext(anonymous).context));
+    expect(anonymous[KEYED_BY_ADDRESS]).toBe(true);
+
+    const authenticated: Record<symbol, unknown> = { ip: '1.2.3.4' };
+    await asRequest(async () => {
+      setRequestPrincipal({ userId: 'user-7', sessionId: 's-7' });
+      await guard.canActivate(makeContext(authenticated).context);
+    });
+    expect(authenticated[KEYED_BY_ADDRESS]).toBeUndefined();
+  });
+
+  it('keys by address when there is no request context at all', async () => {
+    const { valkey, spy } = makeValkey({ allowed: true, remaining: 99, resetAt: 1 });
+    const guard = new RateLimitGuard(makeReflector({}), valkey);
+    const { context } = makeContext({ ip: '1.2.3.4' });
+    await guard.canActivate(context);
+    expect(spy).toHaveBeenCalledWith('DEFAULT:ip:1.2.3.4', 100, 60);
   });
 
   it('keys AUTH_REFRESH by a hash of the refresh-token cookie', async () => {

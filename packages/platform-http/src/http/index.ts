@@ -25,6 +25,7 @@ export * from './request-context';
 export * from './request-context.service';
 export * from './global-exception.filter';
 export * from './http-logging.interceptor';
+export { KEYED_BY_ADDRESS, currentUserId } from './principal';
 export * from './idempotency.interceptor';
 export * from './rate-limit.constants';
 export * from './rate-limit.decorator';

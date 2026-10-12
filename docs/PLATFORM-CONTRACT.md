@@ -408,8 +408,8 @@ Both store their state in the cache, and both are **only as good as it**.
 
 - **Idempotency:** `Idempotency-Key` on `POST`/`PUT`. The first call runs and its response is stored;
   a repeat with the same key returns the stored response (it is not re-executed). The stored entry is
-  scoped to user, method, URL and key; an anonymous caller is identified by a hash of client IP and
-  user agent. A cache failure never fails the request.
+  scoped to user (the principal, [§12](#the-principal-who-is-calling)), method, URL and key; an anonymous
+  caller is identified by a hash of client IP and user agent. A cache failure never fails the request.
 
 Reference: `platform-http` `RateLimitGuard`, `IdempotencyInterceptor`, `RATE_LIMIT_TIERS`.
 
@@ -492,6 +492,37 @@ vocabulary and stays in the product.
   `auth.login` metric is where "is login itself working" is answered ([§5](#5-telemetry)).
 - Passwords (where a product has them): argon2id; a login for an account that does not exist costs the
   same time as one that does.
+
+### The principal: who is calling
+
+Authentication tells the rest of the process who the caller is in **one place, the request context**
+(`observability`'s `requestContextStorage`, the store `enableCorrelationId` seeds): `userId` and
+`sessionId` (the session's id, never its token), and optionally `workspaceId` and a few log fields.
+
+- **Written** by whatever authenticates: `setRequestPrincipal({ userId, sessionId, workspaceId?, fields? })`
+  from `@quynhonsemiconductor/observability`. Identity's `SessionGuard` does it on every authenticated
+  request; a product with its own guard calls it and nothing else. `fields` are at most 8 log fields
+  (`[a-z][A-Za-z0-9_.]{0,39}`, string ≤ 128 characters, number or boolean) that go on every log line of the
+  request; they may not shadow `userId`, `workspaceId`, `correlationId` or the logger's own. They are
+  observability, **never an authorization input**.
+- **Read** by `platform-http`, from there only: the rate limit's `uid:` key, the idempotency key, the access
+  log's `userId`, the exception filter's security log. **None of them reads `req.user`, `req.user.sub` or
+  `req.user.id`.** A guard that sets only those leaves its callers keyed by client address (one bucket
+  per NAT) and out of the access log: call `setRequestPrincipal`.
+- **Order:** the guard that authenticates runs before `RateLimitGuard`. **Nest runs global guards in the order of the modules that
+  declare them, and the root module's own `APP_GUARD`s come BEFORE those of the modules it imports**, so `RateLimitGuard` as an
+  `APP_GUARD` in `AppModule` runs before identity's `SessionGuard`: the principal is empty and the whole NAT shares one bucket.
+  Register it in a module of its own, imported AFTER `IdentityModule` (the identity README shows the module). Both failure modes
+  warn once: `SessionGuard` when `RateLimitGuard` ran first or there is no request context, `HttpLoggingInterceptor` when a request
+  has `req.user`/`req.session` and no principal.
+- With no request context (nothing seeded one) `setRequestPrincipal` does nothing and returns `false`;
+  authentication still works.
+- `GlobalExceptionFilter` needs no `REQUEST_CONTEXT` binding any more: unbound, it reads this store. A
+  product's session-principal bridge (a class adapting its session to `REQUEST_CONTEXT` or to `req.user`)
+  can be deleted; what it added becomes `IdentityModule.forRootAsync({ principal })`.
+
+Reference: `observability` `setRequestPrincipal`, `getRequestPrincipal`; `platform-http` `currentUserId`;
+`identity/nest` `SessionGuard`, `PrincipalHook`.
 
 ### Current state and what is pending
 

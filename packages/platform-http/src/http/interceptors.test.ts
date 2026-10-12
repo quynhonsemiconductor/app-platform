@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import type { CacheService } from '@quynhonsemiconductor/platform-cache';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
-import { lastValueFrom, of } from 'rxjs';
+import { lastValueFrom, of, throwError } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   RequestContextService,
@@ -9,8 +9,9 @@ import {
   type RequestContext,
 } from './request-context.service';
 import { HttpLoggingInterceptor } from './http-logging.interceptor';
+import { resetPrincipalWarningsForTesting } from './principal';
 import { IdempotencyInterceptor } from './idempotency.interceptor';
-import { PROBE_PATHS } from '@quynhonsemiconductor/observability';
+import { PROBE_PATHS, setRequestPrincipal } from '@quynhonsemiconductor/observability';
 
 function makeHttpContext(req: Record<string, unknown>, statusCode = 200): ExecutionContext {
   return {
@@ -21,6 +22,20 @@ function makeHttpContext(req: Record<string, unknown>, statusCode = 200): Execut
     }),
   } as unknown as ExecutionContext;
 }
+
+const emptyContext = (): RequestContext => ({
+  workspaceId: undefined,
+  userId: undefined,
+  sessionId: undefined,
+  correlationId: 'corr-test',
+  traceparent: undefined,
+});
+/** Run `fn` as a request that the authentication layer has identified (`setRequestPrincipal`). */
+const asUser = <T>(userId: string | undefined, fn: () => T): T =>
+  requestContextStorage.run(emptyContext(), () => {
+    if (userId) setRequestPrincipal({ userId, sessionId: `s-${userId}` });
+    return fn();
+  });
 
 function makeHandler<T>(value: T, spy?: () => void): CallHandler {
   return {
@@ -194,16 +209,17 @@ describe('HttpLoggingInterceptor', () => {
   });
 });
 
-describe('IdempotencyInterceptor', () => {
-  function fakeValkey(overrides?: {
-    get?: ReturnType<typeof vi.fn>;
-    set?: ReturnType<typeof vi.fn>;
-  }): { svc: CacheService; get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> } {
-    const get = overrides?.get ?? vi.fn().mockResolvedValue(null);
-    const set = overrides?.set ?? vi.fn().mockResolvedValue('OK');
-    return { svc: { instance: { get, set } } as unknown as CacheService, get, set };
-  }
+/** A cache whose `get` misses and whose `set` records. */
+function fakeValkey(overrides?: {
+  get?: ReturnType<typeof vi.fn>;
+  set?: ReturnType<typeof vi.fn>;
+}): { svc: CacheService; get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> } {
+  const get = overrides?.get ?? vi.fn().mockResolvedValue(null);
+  const set = overrides?.set ?? vi.fn().mockResolvedValue('OK');
+  return { svc: { instance: { get, set } } as unknown as CacheService, get, set };
+}
 
+describe('IdempotencyInterceptor', () => {
   it('passes through non-idempotent methods without touching the cache', async () => {
     const { svc, get } = fakeValkey();
     const interceptor = new IdempotencyInterceptor(svc);
@@ -233,13 +249,14 @@ describe('IdempotencyInterceptor', () => {
       method: 'POST',
       url: '/v1/x',
       headers: { 'idempotency-key': 'k' },
-      user: { sub: 'u1' },
     });
     let executed = false;
-    const out = await lastValueFrom(
-      interceptor.intercept(
-        ctx,
-        makeHandler('fresh', () => (executed = true)),
+    const out = await asUser('u1', () =>
+      lastValueFrom(
+        interceptor.intercept(
+          ctx,
+          makeHandler('fresh', () => (executed = true)),
+        ),
       ),
     );
     expect(out).toEqual({ ok: 1 });
@@ -253,9 +270,10 @@ describe('IdempotencyInterceptor', () => {
       method: 'POST',
       url: '/v1/x',
       headers: { 'idempotency-key': 'k' },
-      user: { sub: 'u1' },
     });
-    const out = await lastValueFrom(interceptor.intercept(ctx, makeHandler({ created: true })));
+    const out = await asUser('u1', () =>
+      lastValueFrom(interceptor.intercept(ctx, makeHandler({ created: true }))),
+    );
     expect(out).toEqual({ created: true });
     expect(set).toHaveBeenCalledWith(
       'idem:u1:POST:/v1/x:k',
@@ -263,5 +281,127 @@ describe('IdempotencyInterceptor', () => {
       'EX',
       24 * 60 * 60,
     );
+  });
+});
+
+describe('who the user is: the request context, and only the request context', () => {
+  const keyOf = async (req: Record<string, unknown>, userId: string | undefined) => {
+    const { svc, set } = fakeValkey();
+    const interceptor = new IdempotencyInterceptor(svc);
+    const ctx = makeHttpContext({
+      method: 'POST',
+      url: '/v1/x',
+      headers: { 'idempotency-key': 'k' },
+      ...req,
+    });
+    await asUser(userId, () => lastValueFrom(interceptor.intercept(ctx, makeHandler('x'))));
+    return set.mock.calls[0]?.[0] as string;
+  };
+
+  it('idempotency: an authenticated caller is keyed by the principal, whatever req.user says', async () => {
+    expect(await keyOf({}, 'u1')).toBe('idem:u1:POST:/v1/x:k');
+    expect(await keyOf({ user: { sub: 'someone-else', id: 'someone-else' } }, 'u1')).toBe(
+      'idem:u1:POST:/v1/x:k',
+    );
+  });
+
+  it('idempotency: req.user alone does not authenticate a caller: it is keyed like an anonymous one', async () => {
+    const withUser = await keyOf(
+      {
+        user: { sub: 'u9' },
+        ip: '1.2.3.4',
+        headers: { 'idempotency-key': 'k', 'user-agent': 'ua' },
+      },
+      undefined,
+    );
+    expect(withUser).not.toContain('u9');
+    expect(withUser).toMatch(/^idem:[0-9a-f]{16}:POST:\/v1\/x:k$/);
+  });
+
+  describe('the access log', () => {
+    const userIdLogged = async (
+      req: Record<string, unknown>,
+      userId: string | undefined,
+      fail = false,
+    ) => {
+      const interceptor = new HttpLoggingInterceptor();
+      const spies = ['log', 'warn', 'error'].map((level) =>
+        vi.spyOn(
+          (interceptor as unknown as { logger: Record<string, (o: unknown) => void> }).logger,
+          level,
+        ),
+      );
+      const ctx = makeHttpContext(
+        { method: 'GET', url: '/v1/things', headers: {}, ...req },
+        fail ? 500 : 200,
+      );
+      const handler: CallHandler = fail
+        ? ({ handle: () => throwError(() => new Error('boom')) } as CallHandler)
+        : makeHandler('ok');
+      await asUser(userId, () =>
+        lastValueFrom(interceptor.intercept(ctx, handler)).catch(() => undefined),
+      );
+      const call = spies.flatMap((spy) => spy.mock.calls)[0]?.[0] as Record<string, unknown>;
+      return call;
+    };
+
+    it('logs the principal, on success and on error', async () => {
+      expect((await userIdLogged({}, 'u1'))['userId']).toBe('u1');
+      expect((await userIdLogged({}, 'u1', true))['userId']).toBe('u1');
+    });
+
+    it('does not read req.user.id', async () => {
+      expect(
+        (await userIdLogged({ user: { id: 'u9', sub: 'u9' } }, undefined))['userId'],
+      ).toBeUndefined();
+      expect((await userIdLogged({ user: { id: 'u9' } }, 'u1'))['userId']).toBe('u1');
+    });
+
+    it('warns ONCE when a request has req.user but no principal (a guard that never called setRequestPrincipal)', async () => {
+      resetPrincipalWarningsForTesting();
+      const interceptor = new HttpLoggingInterceptor();
+      const logger = (interceptor as unknown as { logger: Record<string, (o: unknown) => void> })
+        .logger;
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+      vi.spyOn(logger, 'log').mockImplementation(() => undefined);
+      for (let i = 0; i < 3; i += 1) {
+        await asUser(undefined, () =>
+          lastValueFrom(
+            interceptor.intercept(
+              makeHttpContext({
+                method: 'GET',
+                url: '/v1/things',
+                headers: {},
+                user: { sub: 'u9' },
+              }),
+              makeHandler('ok'),
+            ),
+          ),
+        );
+      }
+      const messages = warn.mock.calls
+        .map((c) => String(c[0]))
+        .filter((m) => /setRequestPrincipal/.test(m));
+      expect(messages).toHaveLength(1);
+    });
+
+    it('a principal set while the handler runs (a guard that ran late) is the one logged', async () => {
+      const interceptor = new HttpLoggingInterceptor();
+      const spy = vi.spyOn(
+        (interceptor as unknown as { logger: { log: (o: unknown) => void } }).logger,
+        'log',
+      );
+      const ctx = makeHttpContext({ method: 'GET', url: '/v1/things', headers: {} });
+      const handler = {
+        handle: () => {
+          setRequestPrincipal({ userId: 'late', sessionId: 's' });
+          return of('ok');
+        },
+      } as CallHandler;
+      await requestContextStorage.run(emptyContext(), () =>
+        lastValueFrom(interceptor.intercept(ctx, handler)),
+      );
+      expect((spy.mock.calls[0]![0] as Record<string, unknown>)['userId']).toBe('late');
+    });
   });
 });

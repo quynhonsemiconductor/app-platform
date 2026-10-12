@@ -5,12 +5,12 @@ import { FAIL_OPEN_FIELD, failOpenLog, type FailOpenControl } from './fail-open'
  * These assertions belong to the package because the guarantee belongs to the
  * package: consumers point a CloudWatch metric filter at `$.securityFailOpen`,
  * and nothing in their own code can stop this helper from emitting a different
- * shape. They previously lived in rally's repo, which meant the second consumer
+ * shape. They previously lived in rova's repo, which meant the second consumer
  * inherited the behaviour without inheriting the guard.
  *
  * What CANNOT move here is the other half of the contract — that a consumer's
  * Terraform actually filters on the field. Each app repo asserts that against its
- * own `infra/` tree (rally: `libs/platform/src/observability/fail-open.spec.ts`),
+ * own `infra/` tree (rova: `libs/platform/src/observability/fail-open.spec.ts`),
  * because the package has no infrastructure to inspect. A repo adopting this
  * package needs its own copy of that check, or its alarm is disarmed while the app
  * still emits the field.

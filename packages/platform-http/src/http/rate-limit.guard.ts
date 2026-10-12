@@ -30,7 +30,8 @@ import {
 } from './rate-limit.constants';
 
 /**
- * Global rate-limit guard backed by Valkey (Redis-compatible) fixed window.
+ * Global rate-limit guard backed by Valkey (Redis-compatible): an atomic sliding-window log
+ * (`CacheService.consumeRateLimit`), not a fixed window, so there is no burst at a boundary.
  *
  * Intended to be registered as an `APP_GUARD` so it applies to every route.
  * Behaviour can be overridden per-route:

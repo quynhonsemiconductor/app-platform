@@ -29,8 +29,8 @@ export class TypedConfigService<TEnv extends Record<string, unknown>> {
   // to `import type`, which erases the class at runtime — `design:paramtypes` then
   // emits `Object` and Nest cannot resolve the dependency at all. Naming the token
   // makes the import a real value usage, and makes the wiring independent of
-  // `emitDecoratorMetadata` either way. Same shape `AuthTokenCache` uses in
-  // `@quynhonsemiconductor/identity`.
+  // `emitDecoratorMetadata` either way. The same applies to every
+  // injected constructor parameter in a package that is compiled with `emitDecoratorMetadata`.
   constructor(@Inject(ConfigService) private readonly config: ConfigService<TEnv, true>) {}
 
   /**

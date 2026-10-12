@@ -53,12 +53,12 @@ export const HttpErrorCodes = {
    * 503. A dependency or optional integration is unavailable — including
    * "not configured", which is the common case: both products throw
    * `ServiceUnavailableException` when an optional integration has no
-   * credentials (opshub's AI assistant, rally's SCM webhook secret).
+   * credentials (opshub's AI assistant, rova's SCM webhook secret).
    *
    * It exists because the fallback below labelled those INTERNAL_ERROR, which
    * says "this service is broken" about a service that is working correctly and
-   * merely switched off. On rally's inbound webhook that reached GitHub's
-   * delivery log, making a configuration gap read as a rally fault.
+   * merely switched off. On rova's inbound webhook that reached GitHub's
+   * delivery log, making a configuration gap read as a rova fault.
    */
   SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
 } as const;

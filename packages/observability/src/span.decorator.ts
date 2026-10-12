@@ -9,8 +9,8 @@ export interface SpanOptions {
 
 /**
  * Tracer identity. Taken from the environment so every product reports under its own
- * name — the previous hard-coded 'rally-api' would have mislabelled every other
- * product's spans, and mislabelled rally's own worker.
+ * name — the previous hard-coded product name (rova's, which was then called rally) would have
+ * mislabelled every other product's spans, and mislabelled rova's own worker.
  */
 const TRACER_NAME = process.env['OTEL_SERVICE_NAME'] ?? 'qnsc';
 const TRACER_VERSION = process.env['SERVICE_VERSION'] ?? 'dev';

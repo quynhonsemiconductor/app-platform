@@ -314,16 +314,21 @@ linked) and **before the session is returned**.
 - It is never called for a refused sign-in (another tenant, a B2B guest when `allowGuests` is false, an address off
   `staff.domains`), for password or Google sign-in, for SSO, or for `/test-login`.
 
-### Per-user controls: `revokeUserSessions`, `setUserBanned`
+### Per-user controls: `revokeUserSessions`, `setUserBanned`, `unlinkMicrosoftAccount`
 
 Service-side, no admin session needed (the admin endpoints of the admin plugin need one): offboarding, a suspected compromise.
 
 ```ts
-import { revokeUserSessions, setUserBanned } from '@quynhonsemiconductor/identity';
+import {
+  revokeUserSessions,
+  setUserBanned,
+  unlinkMicrosoftAccount,
+} from '@quynhonsemiconductor/identity';
 
 await revokeUserSessions(auth, userId); // -> how many sessions it ended (0 for an unknown user)
 await setUserBanned(auth, userId, true, 'offboarded'); // ban + end every session
 await setUserBanned(auth, userId, false); // unban
+await unlinkMicrosoftAccount(auth, userId); // -> how many Microsoft accounts it removed (0 for none)
 ```
 
 - Both delete the user's sessions in **Valkey and Postgres** (the per-user session list included) and move `user.updatedAt`,
@@ -334,6 +339,14 @@ await setUserBanned(auth, userId, false); // unban
   believed for up to that window, because the cache answers before the session is looked up; the session itself is gone at
   once. The `staff` preset has no cookie cache. A sign-in that was already in flight when the ban ran mints a session that is
   refused on its first use: the user is checked whenever a session is read (at most 30 s stale per process).
+- **`unlinkMicrosoftAccount` is the relink path.** A Microsoft sign-in is refused (`MICROSOFT_IDENTITY_CHANGED`) when the user it
+  matches already holds a different Microsoft `oid`. When your administrator has decided the new identity **is the same
+  person**, call this from the admin UI: it deletes the user's Microsoft account rows and ends every session of the user (so the
+  old identity cannot sign in as them any more), emits `account.microsoft_unlinked` (user id and a count), and the next Microsoft
+  sign-in with that address links the **new** identity to the **same** user, roles and history intact. The old identity is then
+  the one that is refused. To keep nothing of the previous person, delete the user in your product instead. Returns `0` (and
+  emits nothing) for a user without a Microsoft account or an unknown one; password and Google accounts are not touched. Who may
+  call it is the product's decision, and it should be logged there: identity has no admin role of its own.
 - `userId` must be a UUID: anything else is a `TypeError` at once, never a database error quoting it.
 - A **banned user cannot sign in**, with any provider (Better Auth's admin plugin refuses the session). `reason` is stored in
   `user.ban_reason` as given (at most 500 characters): keep personal data out of it. `setUserBanned` throws for an unknown user.
@@ -535,7 +548,8 @@ or the error's message), then rethrows. **Alert on that code**: it is the only s
 
 Pass `logger` (`{ warn, error }`) to receive Better Auth's own warnings and errors, and `events` to receive the security
 events (`sign_in.success`/`failure` for password, social and SSO sign-ins, `account.locked`, `password.reset*`,
-`sessions.revoked`, `admin.user_banned`, `account.unverified_replaced`/`purged`). `/nest` has adapters for
+`sessions.revoked`, `admin.user_banned`, `account.unverified_replaced`/`purged`,
+`account.microsoft_link_refused`, `account.microsoft_unlinked`). `/nest` has adapters for
 `observability`: `observabilitySecurityEvents(logger)` (a counter `identity.security_events{event}` and a log line with ids
 only) and `identityLoggerFrom(pinoLogger)`. Events never contain an email address or a token.
 
@@ -589,6 +603,20 @@ Fixed in `DEFAULTS` and asserted by the conformance kit; a product cannot change
   writes anything: a refused sign-in leaves no user, account, session or verification row (asserted by the conformance
   kit), and the product hook is not called. B2B guests are refused unless `staff.allowGuests`, and a guest **never auto-links**: if the address belongs
   to an existing account the sign-in is refused with `ACCOUNT_LINK_REQUIRED`.
+- **One Microsoft identity per user.** The `email` claim is an attribute, not a person: a recycled mailbox, or anyone who can
+  edit `mail`, gives a _different_ Entra object (another `oid`) the address of an existing user, and Better Auth links by
+  address. A member whose address matches a user that **already holds a different Microsoft `oid`** is **refused** with
+  `MICROSOFT_IDENTITY_CHANGED` (a redirect back with `?error=MICROSOFT_IDENTITY_CHANGED`; nothing is written, no second
+  account, no session) and an `account.microsoft_link_refused` event with the user's id (never an address or an `oid`). The same
+  identity keeps signing in. A legitimate change (a rehire, a recreated account that _is_ the same person, a tenant migration)
+  is an explicit administrator operation: [`unlinkMicrosoftAccount`](#per-user-controls-revokeusersessions-setuserbanned).
+- **The member's UPN must be on a staff domain** (`staff.requireUpnOnStaffDomain`, default `true`). An Entra UPN suffix has to be
+  a domain the tenant has verified, so this holds a member to the company's own domain on a claim the `mail` attribute cannot
+  stand in for. It reads `upn`, else `preferred_username` (present in v2 id_tokens under the `profile` scope, which identity
+  requests); with neither, or with one off every `staff.domains` entry, the member is refused with nothing written. Set it to
+  `false` only if your members' UPNs are not on a staff domain (`*.onmicrosoft.com`) and say why. Guests are exempt (their UPN is
+  `name_domain#EXT#@tenant`). This is not `xms_edov`: that needs the optional claim configured in the app registration, and it tells you the
+  tenant owns the domain, not that the address belongs to this person.
 - **Google** (public preset) is refused for staff and verified-SSO domains, like password sign-up.
 - **IdP registration is default-deny** on `/sso/register` and `/sso/update-provider`. Only an organization owner or admin,
   only for the organization, never for a staff domain; the provider is unusable until its domain is verified. Asserted

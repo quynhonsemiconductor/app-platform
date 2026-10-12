@@ -271,6 +271,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     (await getContext()).internalAdapter.findUserByEmail(email.toLowerCase(), {
       includeAccounts: true,
     }) as Promise<{
+      user?: { id: string };
       accounts: Array<{ providerId: string; accountId: string }>;
     } | null>;
   const isReserved = reservedDomainCheck({
@@ -366,7 +367,13 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     },
     socialProviders: {
       ...(staffPreset
-        ? { microsoft: microsoftProvider(o.staff!, { onVerifiedEmail, lookup }) }
+        ? {
+            microsoft: microsoftProvider(o.staff!, {
+              onVerifiedEmail,
+              lookup,
+              emit: (event) => emitSafely(sink, event, onSinkError),
+            }),
+          }
         : {}),
       ...(publicPreset && o.google
         ? { google: googleProvider(o.google, { onVerifiedEmail, isReserved }) }
@@ -527,6 +534,8 @@ type PurgeContext = {
     deleteSessions(tokens: string[]): Promise<unknown>;
     findUserById(id: string): Promise<{ id: string } | null>;
     updateUser(id: string, data: Record<string, unknown>): Promise<unknown>;
+    findAccounts(userId: string): Promise<Array<{ id: string; providerId: string }>>;
+    deleteAccount(id: string): Promise<unknown>;
   };
 };
 
@@ -700,6 +709,45 @@ export async function setUserBanned(
   if (!banned) return;
   await emitSafely(internal.sink, { name: 'admin.user_banned', userId });
   await revokeUserSessions(auth, userId);
+}
+
+/**
+ * Detach the Microsoft identity (or identities) from a user, service side: the explicit relink path.
+ *
+ * A Microsoft sign-in never links to an existing user that already holds a DIFFERENT Microsoft identity
+ * (`oid`); it is refused with `MICROSOFT_IDENTITY_CHANGED` and audited as
+ * `account.microsoft_link_refused`. When that is legitimate (a rehire or a recreated account that is the
+ * same person, a tenant migration), a product's administrator calls this from the admin UI, after
+ * deciding it IS the same person: it deletes the user's Microsoft account rows and revokes every session
+ * of the user, so the old identity can no longer sign in as them. The next Microsoft sign-in with that
+ * address then links the NEW identity to the same user (roles and history intact). To keep nothing of
+ * the old person, delete the user in the product instead.
+ *
+ * Returns how many Microsoft accounts it removed (0 for a user with none, or an unknown user: nothing
+ * changes and nothing is emitted). Emits `account.microsoft_unlinked` with the user id and the count.
+ * Like {@link revokeUserSessions} it **refuses while the cache is unavailable**
+ * ({@link SessionStoreUnavailableError}, before changing anything), because the sessions must end
+ * with the link. Password and Google accounts are not touched. The product decides who may call it.
+ */
+export async function unlinkMicrosoftAccount(auth: Identity, userId: string): Promise<number> {
+  assertUserId(userId, 'unlinkMicrosoftAccount');
+  const internal = internalOf(auth, 'unlinkMicrosoftAccount');
+  if (!internal.cache.isAvailable)
+    throw sessionStoreUnavailable('unlinkMicrosoftAccount', 'not connected');
+  const ctx = (await internal.getContext()) as unknown as PurgeContext;
+  if (!(await ctx.internalAdapter.findUserById(userId))) return 0;
+  const accounts = (await ctx.internalAdapter.findAccounts(userId)).filter(
+    (a) => a.providerId === 'microsoft',
+  );
+  if (accounts.length === 0) return 0;
+  for (const account of accounts) await ctx.internalAdapter.deleteAccount(account.id);
+  await emitSafely(internal.sink, {
+    name: 'account.microsoft_unlinked',
+    userId,
+    detail: { count: accounts.length },
+  });
+  await revokeUserSessions(auth, userId);
+  return accounts.length;
 }
 
 export function identityInternals(auth: Identity) {

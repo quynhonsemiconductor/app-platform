@@ -14,6 +14,7 @@ export {
   revokeUserSessions,
   SessionStoreUnavailableError,
   setUserBanned,
+  unlinkMicrosoftAccount,
   type Identity,
   type IdentityOptions,
 } from './create-identity';

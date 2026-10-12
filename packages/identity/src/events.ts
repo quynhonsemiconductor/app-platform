@@ -13,7 +13,9 @@ export type SecurityEventName =
   | 'sessions.revoked'
   | 'account.unverified_replaced'
   | 'account.unverified_purged'
-  | 'admin.user_banned';
+  | 'admin.user_banned'
+  | 'account.microsoft_link_refused'
+  | 'account.microsoft_unlinked';
 
 export interface SecurityEvent {
   name: SecurityEventName;

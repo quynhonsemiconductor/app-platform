@@ -3,6 +3,7 @@ import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { admin, organization, twoFactor } from 'better-auth/plugins';
 import type { CacheService } from '@quynhonsemiconductor/platform-cache';
 import { uuidv7 } from 'uuidv7';
+import { normalizeStaffDomains, staffDomainsProblem, staffReservedDomains } from './domains';
 import { reservedDomainCheck } from './reserved';
 import { purgeWith, replaceUnverifiedAccount, type AccountContext } from './accounts';
 import { DEFAULTS, type Preset } from './defaults';
@@ -122,7 +123,9 @@ export interface IdentityOptions {
      * session is returned. `claims.roles` is the Entra App Roles claim, validated as `string[]`
      * (`[]` when the token carries none). A throw FAILS the sign-in and no session is minted, so a
      * product can reconcile its roles here and trust that nobody signs in with stale ones. Refused
-     * sign-ins (another tenant, a guest, an address off `staff.domains`) never reach it.
+     * sign-ins (another tenant, a guest, an address off `staff.domains`) never reach it, and write
+     * nothing. The hook itself needs the user, so a throw from it leaves the user and the linked
+     * account (never a session): put every rule decidable from the token in `staff`.
      */
     onStaffSignIn?: (user: User, claims: StaffSignInClaims) => Promise<void> | void;
   };
@@ -237,7 +240,12 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     ...defaultSsrfPolicy,
     allowLocalNetwork: internal.unsafeTestNetwork === true,
   };
-  const staffDomains = o.staff?.domains ?? [];
+  const staffDomainsError = staffDomainsProblem(o.staff?.domains ?? []);
+  config(staffDomainsError === undefined, `staff.domains: ${staffDomainsError}`);
+  // Matched as written: each entry exactly, `*.x.y` for the sub-domains of x.y (domains.ts).
+  const staffDomains = normalizeStaffDomains(o.staff?.domains ?? []);
+  // Reserved is wider than staff: the domain itself AND its sub-domains, whichever way it is written.
+  const reservedStaffDomains = staffReservedDomains(staffDomains);
   let degraded = 0;
   const storage = valkeySecondaryStorage(o.cache, (operation, error) => {
     degraded += 1;
@@ -260,7 +268,11 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     }) as Promise<{
       accounts: Array<{ providerId: string; accountId: string }>;
     } | null>;
-  const isReserved = reservedDomainCheck({ staffDomains, withSso: orgPreset, getContext });
+  const isReserved = reservedDomainCheck({
+    staffDomains: reservedStaffDomains,
+    withSso: orgPreset,
+    getContext,
+  });
   const onVerifiedEmail = (email: string) => replaceUnverifiedAccount(getContext, sink, email);
 
   const sessionPolicy =
@@ -414,7 +426,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
         ? [
             organization({ allowUserToCreateOrganization: o.allowOrganizationCreation === true }),
             ssoPlugin({ hooks: o.hooks, getContext, sink }),
-            ssoRegistrationGuard({ staffDomains, ssrf }),
+            ssoRegistrationGuard({ staffDomains: reservedStaffDomains, ssrf }),
           ]
         : []),
       admin({ allowImpersonatingAdmins: false }),

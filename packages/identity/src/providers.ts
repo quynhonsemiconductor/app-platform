@@ -1,14 +1,22 @@
 import { decodeJwt } from 'jose';
 import { google } from 'better-auth/social-providers';
 import { refuseCallbackWith, rememberStaffSignIn, validRoles } from './callback-errors';
-import { emailInDomains } from './domains';
+import { normalizeStaffDomains, staffEmailIn } from './domains';
 
 export interface StaffOptions {
   /** The QNSC Entra tenant id. */
   tenantId: string;
   clientId: string;
   clientSecret: string;
-  /** Email domain(s) of staff: password sign-up is refused for them (ADR 0002, decision 2). */
+  /**
+   * Email domain(s) of staff: password sign-up is refused for them (ADR 0002, decision 2), and a tenant
+   * member is admitted only with an address on one. **Each entry matches exactly that domain**:
+   * `qnsc.vn` admits `jane@qnsc.vn` and not `jane@sub.qnsc.vn`. Sub-domains are an explicit opt-in:
+   * `*.qnsc.vn` admits `sub.qnsc.vn` and `a.b.qnsc.vn` but not `qnsc.vn` itself, so list both to admit
+   * both. A `*.` entry needs a registrable domain (`*.vn` is refused). Sub-domains of an entry stay
+   * RESERVED either way (password and consumer-provider sign-up is refused for them): a sub-domain
+   * that is not staff has no way in, rather than becoming a public account.
+   */
   domains: string[];
   /**
    * May B2B GUESTS of the tenant sign in? Product policy, default `false` (ADR 0002, decision 3):
@@ -88,7 +96,7 @@ export function microsoftProvider(
 
       const guest = isEntraGuest(claims);
       if (guest && !(staff.allowGuests ?? false)) return null;
-      if (!guest && !emailInDomains(email, staff.domains)) return null;
+      if (!guest && !staffEmailIn(email, normalizeStaffDomains(staff.domains))) return null;
 
       if (guest) {
         const existing = await hooks.lookup(email);

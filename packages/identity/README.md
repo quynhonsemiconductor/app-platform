@@ -69,7 +69,7 @@ export const auth = createIdentity({
   trustedOrigins: [env.WEB_ORIGIN],
   presets: ['public', 'staff', 'organizations'],
   mail: { jobs, templates }, // platform-jobs / platform-mail; required with `public`, optional without (staff, organizations)
-  staff: { tenantId, clientId, clientSecret, domains: ['qnsc.vn'], allowGuests: false },
+  staff: { tenantId, clientId, clientSecret, domains: ['qnsc.vn'], allowGuests: false }, // each domain exact; '*.qnsc.vn' opts into sub-domains
   google: { clientId, clientSecret },
   hooks: { onUserCreated, onStaffSignIn, onSsoProvisioned, ssoRole },
   hostCookies: true, // optional: `__Host-` cookie names (see "Session cookies")
@@ -208,9 +208,13 @@ linked) and **before the session is returned**.
   shape), entries that are not non-empty strings are dropped, duplicates removed.
 - `guest` says whether the token is for a **B2B guest** of the tenant (`acct = 1`, an `idp` other than the issuer, or `#EXT#` in the
   UPN). It can only be `true` when `staff.allowGuests` is set; otherwise guests are refused before the hook.
-- **A throw refuses the sign-in**: the browser is redirected back with `?error=STAFF_SIGN_IN_REFUSED`, no session row, cookie or
-  cache entry exists (the user and the linked account stay; the next sign-in retries), and the product's error message is on
-  neither the wire nor the logs: one `identity.staff_sign_in_refused` line carries the error's class and code only.
+- **A throw refuses the sign-in**: the browser is redirected back with `?error=STAFF_SIGN_IN_REFUSED`, and no session row, cookie
+  or cache entry exists. The user and the linked account stay; the next sign-in retries. The hook is given the user, so it can
+  only run once the user exists: **a refusal by the hook is the one that leaves a user row**.
+- **Keep the hook for what needs your data.** Put every rule identity can decide from the token (domain, tenant, guest) in
+  `staff` options, where it is refused with nothing written.
+- **The product's error message is on neither the wire nor the logs.** One `identity.staff_sign_in_refused` line carries the
+  error's class and code only.
 - **It cannot be skipped.** The Microsoft provider takes the authorization-code flow only: the id_token sign-in
   (`signInSocial({ idToken })`) is disabled, because it accepts any token valid for the client id with no nonce and would mint
   a session around the hook. And if a Microsoft session is ever about to be created with no claims recorded for the request, or
@@ -482,7 +486,16 @@ Fixed in `DEFAULTS` and asserted by the conformance kit; a product cannot change
   provider asserts a verified email and the only account is unverified, password-only and never had a session, it is
   replaced (`account.unverified_replaced`). Unverified accounts are purged after 72 h.
 - **Tenant and guests.** `tid` must equal the configured tenant. A tenant member is accepted only with an email on
-  `staff.domains`. B2B guests are refused unless `staff.allowGuests`, and a guest **never auto-links**: if the address belongs
+  `staff.domains`, and **each entry matches exactly that domain**: `qnsc.vn` admits `jane@qnsc.vn`, not `jane@sub.qnsc.vn`
+  (nor a look-alike such as `miqnsc.vn`, nor an address with two `@`). Sub-domains are an explicit opt-in:
+  `domains: ['qnsc.vn', '*.qnsc.vn']` (`*.qnsc.vn` alone does not admit `qnsc.vn`). A wildcard on a top-level domain (`*.vn`) or a shared suffix (`*.com.vn`, `*.co.uk`,
+  `*.github.io`) is a boot error: it would admit every company under it. That check is a heuristic (a short list of shared
+  second levels and multi-tenant hosts), not the Public Suffix List; a wildcard is for a domain you own, and exact entries always work.
+  Whatever is not staff stays **reserved** if it is under a staff domain: password and Google sign-up are refused for
+  `sub.qnsc.vn` as for `qnsc.vn`, so a sub-domain you did not opt in has no way in rather than becoming a public account.
+  Every one of these refusals, and the tenant and guest ones, happens in the Microsoft provider **before** Better Auth
+  writes anything: a refused sign-in leaves no user, account, session or verification row (asserted by the conformance
+  kit), and the product hook is not called. B2B guests are refused unless `staff.allowGuests`, and a guest **never auto-links**: if the address belongs
   to an existing account the sign-in is refused with `ACCOUNT_LINK_REQUIRED`.
 - **Google** (public preset) is refused for staff and verified-SSO domains, like password sign-up.
 - **IdP registration is default-deny** on `/sso/register` and `/sso/update-provider`. Only an organization owner or admin,

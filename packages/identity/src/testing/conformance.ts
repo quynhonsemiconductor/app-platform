@@ -2,6 +2,7 @@ import { cookiesConformance } from './conformance-cookies';
 import { hardeningConformance } from './conformance-hardening';
 import { decisionsConformance } from './conformance-decisions';
 import { defaultsConformance } from './conformance-defaults';
+import { staffDomainsConformance } from './conformance-staff-domains';
 import type { ConformanceInfra } from './harness';
 import type { TestApi } from './support';
 
@@ -28,5 +29,8 @@ export function runIdentityConformance(t: TestApi, infra: ConformanceInfra): voi
   t.describe(
     'identity conformance: cookie names (__Secure- and __Host-) and the redirect rate limit',
     () => cookiesConformance(t, infra),
+  );
+  t.describe('identity conformance: staff domains are exact (opshub#355)', () =>
+    staffDomainsConformance(t, infra),
   );
 }

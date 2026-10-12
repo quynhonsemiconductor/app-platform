@@ -100,8 +100,8 @@ export class AppModule {}
 
 The module mounts `auth.handler` on `/api/auth/*` as an encapsulated Fastify plugin that receives the raw body
 (so form posts from SSO work) and leaves the rest of the app's parsers alone. It writes the client address,
-resolved with `clientIp()` (`cf-connecting-ip` first), into the one header Better Auth reads, discarding any the
-client sent.
+resolved with `clientIp()` (a verified signed edge address first when `EDGE_CLIENT_IP_SECRET` is set, then
+`cf-connecting-ip`; contract §8), into the one header Better Auth reads, discarding any the client sent.
 
 **`/api/auth/*` follows Better Auth's wire protocol, plus the platform error envelope next to it.** `better-auth/client`,
 which product frontends use, reads the top-level `code` and `message` of an error body and the HTTP status, so none of
@@ -294,7 +294,7 @@ createIdentity({ /* … */ hostCookies: true });
 
 Better Auth rate-limits per client address **and per path**. Its built-in rule for everything under
 `/sign-in*`, `/sign-up*`, `/change-password*` and `/change-email*` is **3 requests per 10 seconds**, and the
-address it keys on is `clientIp()` (`cf-connecting-ip` first, see contract §8). An office of a hundred people
+address it keys on is `clientIp()` (the signed edge address when enabled, then `cf-connecting-ip`; see contract §8). An office of a hundred people
 behind one NAT shares one address, so the morning's staff sign-ins share one bucket and the fourth person gets
 a 429.
 
@@ -346,8 +346,9 @@ createIdentity({
 Each group is optional (an absent one keeps its default). The values are checked (`windowSeconds` 1 to 3600,
 `max` 1 to 10,000, integers, no unknown key), so a typo cannot switch the limiter off.
 
-**Which address does the API see?** `clientIp()` reads `cf-connecting-ip`, then the first
-`x-forwarded-for`, then the socket (contract §8). It trusts a header only because the pods are reachable
+**Which address does the API see?** `clientIp()` reads a verified signed edge address first (only when
+`EDGE_CLIENT_IP_SECRET` is set; below), then `cf-connecting-ip`, then the first `x-forwarded-for`, then the
+socket (contract §8). It trusts a header only because the pods are reachable
 **only** through Cloudflare (the Tunnel, or an allow-list of Cloudflare's addresses): otherwise
 `cf-connecting-ip` itself is just a header a caller can set. What `cf-connecting-ip` holds depends on how the
 request reached Cloudflare. **Only the first row is something this repository has relied on; the rest are
@@ -367,8 +368,13 @@ whole company**.
 - **The way to keep the visitor's address behind a Worker or Pages Function is the signed edge client IP**
   (`@quynhonsemiconductor/platform-http/edge` in the Worker, `EDGE_CLIENT_IP_SECRET` on the API; see
   `platform-http`'s README and contract §8). The Worker signs the address with a secret only it and the API
-  hold, and `clientIp()` accepts it only if the signature verifies: it cannot be spoofed by a caller who
-  reaches the API, which a plain `x-forwarded-for` or custom header can. Nothing of this package changes.
+  hold, and `clientIp()` prefers it over `cf-connecting-ip` when the signature verifies: it cannot be
+  spoofed by a caller who reaches the API, which a plain `x-forwarded-for` or custom header can. Nothing of this
+  package's code changes (the mount calls `clientIp(request)`; the request log, rate-limit keys and Better Auth's
+  keys all follow). **It needs `@quynhonsemiconductor/platform-http` 4.3.0 or later** (the release that added
+  `/edge` and the signed address). Identity's peer range stays `>=4.1.0`, because nothing here depends on the
+  new API: on an older `platform-http` the headers are simply ignored and the order is the old one. Enable it in
+  the Worker and on the API together, and put `platform-http` >= 4.3.0 on the API first.
 - **Do not make an unsigned header the source of truth.** A header the Worker sets (`x-client-ip`) is only a
   header to the API; any caller that reaches the API without the Worker could set it too, so `clientIp()` does
   not read one.

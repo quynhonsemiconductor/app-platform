@@ -123,12 +123,12 @@ startOtel({
 });
 ```
 
-|            |                                                                             |
-| ---------- | --------------------------------------------------------------------------- |
-| Option     | `httpDurationBoundaries?: number[]` on `startOtel`                          |
-| Unit       | **milliseconds**                                                            |
-| Applies to | the `http.server.duration` instrument only                                  |
-| Omitted    | the OpenTelemetry defaults are kept, and the SDK configuration is unchanged |
+|            |                                                    |
+| ---------- | -------------------------------------------------- |
+| Option     | `httpDurationBoundaries?: number[]` on `startOtel` |
+| Unit       | **milliseconds**                                   |
+| Applies to | the `http.server.duration` instrument only         |
+| Omitted    | the OpenTelemetry defaults are kept                |
 
 **Why you might want it.** The OTel JS default explicit-histogram boundaries end at
 `10000`:
@@ -172,8 +172,45 @@ option exists to fix. The check runs **before** the `OTEL_ENABLED` gate, so a ba
 fails in local dev and CI rather than waiting for the one environment that has
 telemetry switched on.
 
-Only `http.server.duration` is affected. `job.duration` and every other instrument keep
-their defaults, and a product that does not pass the option sees no change at all.
+Only `HttpMetrics`' `http.server.duration` is affected (the view is scoped to its meter, `qnsc`).
+`job.duration` and every other instrument keep their defaults.
+
+### One source of truth for the request duration (`httpInstrumentationDuration`)
+
+`HttpMetrics` records the inbound request duration the dashboards and alerts are written against:
+**`http.server.duration`, in milliseconds, labelled by the route _template_, the method and the status class.**
+`@opentelemetry/instrumentation-http` records a duration histogram of its own, from another meter, with raw URL attributes.
+`startOtel` therefore has a policy for it:
+
+```ts
+startOtel({
+  defaultServiceName: 'rova-api',
+  httpInstrumentationDuration: 'drop', // the default
+  // 'keep': export instrumentation-http's duration histogram too
+});
+```
+
+**What `'drop'` really changes depends on the instrumentation version.**
+
+| `@opentelemetry/instrumentation-http` | records                                              | collides with `HttpMetrics`?                          | effect of `'drop'`                                        |
+| ------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------- |
+| **0.221** (opshub's and rova's locks) | `http.server.request.duration`, **seconds**, only    | no: a different name                                  | **`http.server.request.duration` stops being exported**   |
+| an older version                      | the legacy `http.server.duration`, **ms**, same name | yes: two series, every request counted twice in a sum | the duplicate goes; `HttpMetrics`' series is the only one |
+
+Checked against the 0.221 package: it creates `http.server.request.duration` (unit `s`) and `http.client.request.duration` and
+no `http.server.duration`; a test runs the real instrumentation and asserts exactly that, so a version that changes it fails
+the build, not a dashboard. The legacy name is dropped as well as a **guard** for an older version (and the buckets view is
+scoped to `HttpMetrics`' meter, `qnsc`, so that on such a version it cannot bring the legacy stream back). Spans are never
+affected: only the metric.
+
+> **Migration (this is a breaking change: a series is no longer exported by default).**
+>
+> - If a dashboard or alert reads **`http.server.request.duration`** (seconds, from instrumentation-http), it stops receiving data.
+>   Move it to **`http.server.duration`** (milliseconds; labels `route`, `method`, `status_class`), or set
+>   `httpInstrumentationDuration: 'keep'` while you migrate.
+> - `http.server.duration` itself is unchanged on 0.221: same name, same labels, same unit, and its numbers do not change.
+> - A service that does **not** call `HttpMetrics.record()` and relied on the instrumentation's own duration must set `'keep'`, or it
+>   has no request duration at all.
 
 ## Logger
 

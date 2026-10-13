@@ -75,7 +75,39 @@ export interface OtelBootstrapOptions {
    * per-product option rather than a package-wide default.
    */
   httpDurationBoundaries?: number[];
+  /**
+   * What to do with the HTTP server duration histogram that `@opentelemetry/instrumentation-http` records itself.
+   *
+   * - `'drop'` (default): drop it. {@link HttpMetrics} is the ONE source of truth for the inbound request
+   *   duration: `http.server.duration`, in milliseconds, labelled by the route TEMPLATE, the method and the status
+   *   class, which is the series dashboards and alerts are written against. instrumentation-http records its own
+   *   histogram from another meter, with raw URL attributes, and the SDK exports it unless a View drops it.
+   *
+   *   WHAT THIS REALLY CHANGES, by instrumentation version. With `@opentelemetry/instrumentation-http` 0.221 (the
+   *   version in the products' lockfiles) the instrument is `http.server.request.duration`, in SECONDS, and the
+   *   legacy `http.server.duration` is gone, so nothing collided: the effect of `'drop'` is that
+   *   **`http.server.request.duration` is no longer exported**. An older version records the legacy
+   *   `http.server.duration` (ms) under the SAME name as `HttpMetrics`' histogram, with different attributes: two
+   *   series under one name and every request counted twice in a sum. The legacy name is therefore dropped too, as
+   *   a guard for such a version. Its SPANS are untouched in every case: only the metric goes.
+   * - `'keep'`: leave it exported. For a service that does NOT record `HttpMetrics`, or that has a dashboard on
+   *   `http.server.request.duration`. With an old instrumentation version AND `HttpMetrics` it double-reports.
+   */
+  httpInstrumentationDuration?: 'drop' | 'keep';
 }
+
+/** The meter `HttpMetrics` (and every `getMeter()` with no argument) records on. */
+const QNSC_METER = 'qnsc';
+
+/** The meter `@opentelemetry/instrumentation-http` records on. */
+const HTTP_INSTRUMENTATION_METER = '@opentelemetry/instrumentation-http';
+
+/**
+ * The server duration histograms that instrumentation has recorded: the stable one (`http.server.request.duration`,
+ * seconds; the only one in 0.221) and the legacy one (`http.server.duration`, ms; older versions, and the name
+ * `HttpMetrics` uses, hence the need to select by meter).
+ */
+const HTTP_INSTRUMENTATION_DURATIONS = ['http.server.duration', 'http.server.request.duration'];
 
 /**
  * Instrument name the histogram View selects.
@@ -254,20 +286,36 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
   // The array is copied. The SDK keeps the reference we hand it, so a caller that
   // mutates its own boundaries array after startup would otherwise re-bucket a live
   // histogram — and the validation above would already have passed.
-  const httpDurationView: { views?: ViewOptions[] } =
-    options.httpDurationBoundaries === undefined
-      ? {}
-      : {
-          views: [
-            {
-              instrumentName: HTTP_SERVER_DURATION_INSTRUMENT,
-              aggregation: {
-                type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
-                options: { boundaries: [...options.httpDurationBoundaries] },
-              },
+  //
+  // ONE SOURCE OF TRUTH for the inbound request duration: `HttpMetrics` (route template, method, status
+  // class). instrumentation-http's own duration histogram is dropped by a View selecting it by METER and
+  // instrument name, so `HttpMetrics`' series (meter `qnsc`) is untouched. In 0.221 that histogram is
+  // `http.server.request.duration` and there is no name clash; an older version used `http.server.duration`,
+  // which clashes, and is dropped as well. The buckets view is scoped to the `qnsc` meter so that, on such an
+  // older version, it cannot create a stream for the instrumentation's histogram and bring it back.
+  const dropInstrumentation = (options.httpInstrumentationDuration ?? 'drop') === 'drop';
+  const views: ViewOptions[] = [
+    ...(dropInstrumentation
+      ? HTTP_INSTRUMENTATION_DURATIONS.map((instrumentName): ViewOptions => ({
+          meterName: HTTP_INSTRUMENTATION_METER,
+          instrumentName,
+          aggregation: { type: AggregationType.DROP },
+        }))
+      : []),
+    ...(options.httpDurationBoundaries === undefined
+      ? []
+      : [
+          {
+            ...(dropInstrumentation ? { meterName: QNSC_METER } : {}),
+            instrumentName: HTTP_SERVER_DURATION_INSTRUMENT,
+            aggregation: {
+              type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+              options: { boundaries: [...options.httpDurationBoundaries] },
             },
-          ],
-        };
+          } satisfies ViewOptions,
+        ]),
+  ];
+  const httpDurationView: { views?: ViewOptions[] } = views.length === 0 ? {} : { views };
 
   sdk = new NodeSDK({
     serviceName,

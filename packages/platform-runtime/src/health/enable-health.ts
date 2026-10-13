@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { CacheService } from '@quynhonsemiconductor/platform-cache';
 import type { FastifyInstance } from 'fastify';
 import { HealthRegistry, type HealthCheck } from './health-registry';
@@ -109,7 +110,12 @@ export function enableHealth(
  * `platform-db`, so this works when two copies of that package are installed, and when none is.
  */
 function registerBuiltInChecks(app: INestApplication, registry: HealthRegistry): void {
-  const pool = tryGet<object>(app, DATABASE_POOL_TOKEN);
+  // `ModuleRef`, not `app.get`: the application object `NestFactory.create` returns runs every `get` inside
+  // Nest's ExceptionsZone, and when the provider is missing the zone's teardown ends the PROCESS
+  // (`abortOnError`, the default) before any `try/catch` of ours can see the throw. A missing pool or cache is
+  // the normal case here, both being optional. `ModuleRef.get` is a plain call: it throws to us.
+  const moduleRef = app.get(ModuleRef);
+  const pool = tryGet<object>(moduleRef, DATABASE_POOL_TOKEN);
   if (pool) {
     registry.register('database', async () => {
       // Imported on use: this package must load without platform-db installed.
@@ -118,7 +124,7 @@ function registerBuiltInChecks(app: INestApplication, registry: HealthRegistry):
     });
   }
 
-  const cache = tryGet<CacheService>(app, CacheService);
+  const cache = tryGet<CacheService>(moduleRef, CacheService);
   if (cache) {
     // Decided on each probe, not now: the client is created in `onModuleInit`, which has not run
     // when this is called before `listen()`. `redis` is null in `optional` mode with no URL, and
@@ -131,9 +137,9 @@ function registerBuiltInChecks(app: INestApplication, registry: HealthRegistry):
   }
 }
 
-function tryGet<T>(app: INestApplication, token: unknown): T | undefined {
+function tryGet<T>(moduleRef: ModuleRef, token: unknown): T | undefined {
   try {
-    return app.get<T>(token as never, { strict: false });
+    return moduleRef.get<T>(token as never, { strict: false });
   } catch {
     return undefined;
   }

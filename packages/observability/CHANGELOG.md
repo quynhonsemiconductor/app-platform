@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.2.2...observability-v0.3.0) (2026-10-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** http.server.request.duration (seconds) is no longer exported by default. Move dashboards and alerts that read it to http.server.duration (ms; labels route, method, status_class), or set httpInstrumentationDuration: 'keep'. A service that does not call HttpMetrics.record() and relied on the instrumentation's duration must set 'keep'.
+
+### ✨ Features
+
+* **observability:** setRequestPrincipal, the one place the authenticated caller is recorded ([e35f73f](https://github.com/quynhonsemiconductor/app-platform/commit/e35f73f6adf17cfc6dfd06b8f711154fc308b4c2))
+
+
+### 🐛 Bug Fixes
+
+* **observability:** do not export instrumentation-http's server duration; HttpMetrics owns the request duration ([#237](https://github.com/quynhonsemiconductor/app-platform/issues/237)) ([e675897](https://github.com/quynhonsemiconductor/app-platform/commit/e67589755fe81d4ad1639589373de25a7e88e5e7))
+
 ## [0.2.2](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.2.1...observability-v0.2.2) (2026-10-10)
 
 

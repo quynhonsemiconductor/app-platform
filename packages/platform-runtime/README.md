@@ -32,7 +32,7 @@ in a project `.npmrc`. See [Authenticating to GitHub Packages](../../README.md#a
 pnpm add @quynhonsemiconductor/platform-runtime
 ```
 
-Peer dependencies: `@nestjs/common`, `@nestjs/config`,
+Peer dependencies: `@nestjs/common`, `@nestjs/core`, `@nestjs/config`,
 `@quynhonsemiconductor/platform-cache` (**`>=3.1.1`**: from that release the client quits in
 `onApplicationShutdown`, which the shutdown order below depends on), `@quynhonsemiconductor/observability`, and
 `fastify` (optional — `request-timing`, `enableHealth`);
@@ -129,6 +129,11 @@ Built in, with nothing for the product to register:
 
 - `database` — when `@quynhonsemiconductor/platform-db/nest` provides a pool (`pingDatabase`).
 - `cache` — when a Valkey URL is configured. `optional` mode with no URL is not checked.
+
+Both are optional: **a service with neither a database pool nor a `CacheService` boots and serves `/readyz`** with those checks
+simply absent. They are looked up through `ModuleRef`, not `app.get`: the application object `NestFactory.create` returns runs
+`get` inside Nest's exceptions zone, which ends the process when a provider is missing (the default `abortOnError`) before any
+`try/catch` could see it. (Fixed in this release: until then such a service exited at boot.)
 
 Add your own: `enableHealth(app, { checks: { search: () => pingSearch() } })`. A check resolves when up
 and throws when down; keep it cheap, it runs every 5 s on every replica.

@@ -232,9 +232,9 @@ describe('who the user is: the request context, and only the request context', (
   };
 
   it('idempotency: an authenticated caller is keyed by the principal, whatever req.user says', async () => {
-    expect(await keyOf({}, 'u1')).toMatch(/^idem:u1:[0-9a-f]{32}$/);
+    expect(await keyOf({}, 'u1')).toMatch(/^idem:\{u1:[0-9a-f]{32}\}$/);
     expect(await keyOf({ user: { sub: 'someone-else', id: 'someone-else' } }, 'u1')).toMatch(
-      /^idem:u1:[0-9a-f]{32}$/,
+      /^idem:\{u1:[0-9a-f]{32}\}$/,
     );
   });
 
@@ -248,7 +248,7 @@ describe('who the user is: the request context, and only the request context', (
       undefined,
     );
     expect(withUser).not.toContain('u9');
-    expect(withUser).toMatch(/^idem:[0-9a-f]{16}:[0-9a-f]{32}$/);
+    expect(withUser).toMatch(/^idem:\{[0-9a-f]{16}:[0-9a-f]{32}\}$/);
   });
 
   describe('the access log', () => {

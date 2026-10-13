@@ -372,6 +372,7 @@ the first request with a key runs and its **status, body and a few headers** are
 - **It fails open.** An unreachable cache, or any error reading the key or taking the claim, is logged and the request runs as if
   it had no key; an error storing the response is logged and the response is returned. Refusing every mutation while Valkey is
   down would be worse than losing the guarantee for that window.
+- **Cluster-safe.** The record and the claim share a Redis Cluster hash tag (`idem:{user:hash}` and `idem:{user:hash}:claim`), because one script touches both and a cluster (ElastiCache Serverless is one) answers `CROSSSLOT` to keys of different slots, which would have turned idempotency off silently through the fail-open path. A user id with a brace is hashed first so the tag cannot be cut short. Tested against a Valkey started in cluster mode.
 - **Scope.** The stored entry is scoped to the user (the principal, see "Who the user is"; an anonymous caller is a hash of address and
   agent), method, URL and key. No header value reaches a Redis key.
 - **CORS.** A browser client needs `Idempotency-Key` in `allowedHeaders` and `X-Idempotent-Replayed` in `exposedHeaders`;

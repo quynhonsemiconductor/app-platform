@@ -130,7 +130,8 @@ type Decision =
  *
  * Replayed headers: `Location`, `ETag` and `Content-Type` if the handler set them, never `Set-Cookie`.
  *
- * Cache key: `idem:{userId}:{sha256(method, url, key)}`, so no header value reaches a Redis key. The user is
+ * Cache key: `idem:{userId:sha256(method, url, key)}` (the braces are a cluster hash tag, shared by the record and
+ * its `:claim`, so the one script that reads both is valid on a cluster), so no header value reaches a Redis key. The user is
  * the principal (`setRequestPrincipal`); an anonymous caller is told apart by a hash of address and agent.
  *
  * Usage (opt-in per route): `@UseIdempotency()`. Usage (global): register as `APP_INTERCEPTOR`.
@@ -248,7 +249,12 @@ export class IdempotencyInterceptor implements NestInterceptor, OnApplicationBoo
       .update(`${req.method}\n${req.url}\n${idempotencyKey}`)
       .digest('hex')
       .slice(0, 32);
-    const recordKey = `idem:${who}:${digest}`;
+    // HASH TAG: the record and the claim are touched by ONE script, and on a cluster (ElastiCache Serverless is
+    // one) every key of a script must hash to the same slot or the server answers CROSSSLOT, which the
+    // fail-open path would turn into "idempotency silently off". Only the text inside `{...}` is hashed, and
+    // both keys carry the same one. `who` is made brace-free first: a `}` in a user id would end the tag early
+    // (and `{}` would hash the whole key, which differs between the two).
+    const recordKey = `idem:{${tagSafe(who)}:${digest}}`;
     const claimKey = `${recordKey}:claim`;
     const fingerprint = requestFingerprint({
       method: req.method,
@@ -434,6 +440,11 @@ function replayableHeaders(reply: FastifyReply): Record<string, string> | undefi
     }
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** `who` with no `{` or `}`: such an id is replaced by a hash of itself (the key only has to be stable). */
+function tagSafe(who: string): string {
+  return /[{}]/.test(who) ? createHash('sha256').update(who).digest('hex').slice(0, 32) : who;
 }
 
 function parseStored(raw: string): StoredResponse | null {

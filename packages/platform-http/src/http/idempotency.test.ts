@@ -691,6 +691,145 @@ describe.skipIf(!dockerEnabled)('IdempotencyInterceptor (real Valkey)', () => {
   });
 });
 
+/** Redis Cluster key slot: CRC16 (XMODEM) of the hash tag, or of the whole key, mod 16384. */
+function keySlot(key: string): number {
+  const open = key.indexOf('{');
+  const close = open === -1 ? -1 : key.indexOf('}', open + 1);
+  const tag = open !== -1 && close > open + 1 ? key.slice(open + 1, close) : key;
+  let crc = 0;
+  for (const byte of Buffer.from(tag, 'utf8')) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit += 1)
+      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+  }
+  return crc % 16384;
+}
+
+describe('the keys of the one script share a cluster slot', () => {
+  it('keySlot is the real algorithm (known values from the Redis Cluster specification and the hash tag rule)', () => {
+    expect(keySlot('123456789')).toBe(0x31c3 % 16384); // CRC16 check value 0x31C3
+    expect(keySlot('foo')).toBe(12182);
+    expect(keySlot('{user1000}.following')).toBe(keySlot('{user1000}.followers'));
+    expect(keySlot('{}a')).not.toBe(keySlot('{}b')); // an empty tag hashes the whole key
+  });
+
+  const capture = async (userId: string | undefined) => {
+    const calls: unknown[][] = [];
+    const interceptor = new IdempotencyInterceptor({
+      get instance() {
+        return {
+          set: async () => 'OK',
+          eval: async (...args: unknown[]) => (calls.push(args), ['claimed']),
+        };
+      },
+    } as unknown as CacheService);
+    await run(interceptor, { user: userId }, handlerOf({ ok: 1 })).result;
+    const claim = calls.find((c) => String(c[0]).includes("'claimed'"))!;
+    return { recordKey: claim[2] as string, claimKey: claim[3] as string, calls };
+  };
+
+  it.each([
+    'u1',
+    '8b4e-uuid',
+    'a:b',
+    'x'.repeat(120),
+    '}x',
+    '{}',
+    '{{',
+    '}}',
+    'a}b{c',
+    '{',
+    '}',
+    '{user}',
+    undefined,
+  ])(
+    'record and claim hash to the SAME slot for user %o (including ids with braces)',
+    async (user) => {
+      const { recordKey, claimKey } = await capture(user);
+      expect(recordKey).toMatch(/^idem:\{[^{}]+\}$/); // exactly one tag, non-empty
+      expect(claimKey).toBe(`${recordKey}:claim`);
+      expect(keySlot(claimKey)).toBe(keySlot(recordKey));
+    },
+  );
+
+  it('different requests still spread over slots (the tag is per request, not a constant)', async () => {
+    const slots = new Set<number>();
+    for (let i = 0; i < 40; i += 1) slots.add(keySlot((await capture(`user-${i}`)).recordKey));
+    expect(slots.size).toBeGreaterThan(20);
+  });
+});
+
+describe.skipIf(!dockerEnabled)(
+  'IdempotencyInterceptor on a CLUSTER-mode Valkey (CROSSSLOT)',
+  () => {
+    let valkey: ValkeyHarness;
+    let cache: CacheService;
+
+    beforeAll(async () => {
+      valkey = await startValkey({ cluster: true });
+      cache = new CacheService({ url: valkey.url, keyPrefix: 'app:', mode: 'required' });
+      cache.onModuleInit();
+      for (let i = 0; i < 100 && !cache.isAvailable; i += 1)
+        await new Promise((r) => setTimeout(r, 25));
+    }, 120_000);
+    afterAll(async () => {
+      await cache?.onApplicationShutdown();
+      await valkey?.stop();
+    }, 60_000);
+
+    it('the harness is a cluster that rejects keys of different slots (what the previous key shape hit)', async () => {
+      const old = ['idem:u1:abc', 'idem:u1:abc:claim'];
+      expect(keySlot(old[0]!)).not.toBe(keySlot(old[1]!));
+      await expect(
+        cache.instance.eval("return redis.call('get', KEYS[1])", 2, ...old),
+      ).rejects.toThrow(/CROSSSLOT/);
+    });
+
+    it('the interceptor works: replays, 409s a concurrent copy, with a key prefix, and does NOT silently fail open', async () => {
+      const interceptor = new IdempotencyInterceptor(cache);
+      const warn = vi.spyOn(
+        (interceptor as unknown as { logger: { warn: () => void } }).logger,
+        'warn',
+      );
+      const gate = new Subject<string>();
+      const slow = vi.fn(() => gate.asObservable());
+      const first = run(interceptor, { user: 'u-cluster' }, { handle: slow });
+      await vi.waitFor(async () =>
+        expect((await cache.instance.keys('*')).some((k) => k.endsWith(':claim'))).toBe(true),
+      );
+      await expect(
+        run(interceptor, { user: 'u-cluster' }, { handle: slow }).result,
+      ).rejects.toMatchObject({
+        code: 'IDEMPOTENCY_IN_FLIGHT',
+      });
+      gate.next('done');
+      gate.complete();
+      expect(await first.result).toBe('done');
+
+      const spy = vi.fn();
+      const retry = run(interceptor, { user: 'u-cluster' }, handlerOf({}, spy));
+      expect(await retry.result).toBe('done');
+      expect(retry.headers[IDEMPOTENCY_REPLAYED_HEADER]).toBe('true');
+      expect(spy).not.toHaveBeenCalled();
+      expect(slow).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled(); // no "cache unavailable; running without protection"
+    });
+
+    it('a user id with braces works on the cluster too', async () => {
+      const interceptor = new IdempotencyInterceptor(cache);
+      for (const user of ['}x', '{}', 'a}b{c']) {
+        const spy = vi.fn();
+        await run(interceptor, { user, key: `brace-${user}` }, handlerOf({ id: user }, spy)).result;
+        const again = vi.fn();
+        expect(
+          await run(interceptor, { user, key: `brace-${user}` }, handlerOf({}, again)).result,
+        ).toEqual({ id: user });
+        expect(again).not.toHaveBeenCalled();
+      }
+    });
+  },
+);
+
 describe('without a cache', () => {
   afterEach(() => vi.unstubAllEnvs());
 

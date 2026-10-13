@@ -4,6 +4,12 @@ import { VALKEY_IMAGE } from './docker';
 export interface StartValkeyOptions {
   /** Override the image. Default: {@link VALKEY_IMAGE}. */
   image?: string;
+  /**
+   * Run the server in CLUSTER mode as a one-node cluster owning all 16384 slots, so a command whose keys hash
+   * to different slots fails with `CROSSSLOT` exactly as it does on ElastiCache Serverless / a real cluster.
+   * Connect with a plain (non-cluster) ioredis client: every slot is on this node, so there are no redirects.
+   */
+  cluster?: boolean;
 }
 
 export interface ValkeyHarness {
@@ -27,6 +33,11 @@ export interface ValkeyHarness {
 export async function startValkey(options: StartValkeyOptions = {}): Promise<ValkeyHarness> {
   const started: StartedTestContainer = await new GenericContainer(options.image ?? VALKEY_IMAGE)
     .withExposedPorts(6379)
+    .withCommand(
+      options.cluster
+        ? ['valkey-server', '--cluster-enabled', 'yes', '--cluster-config-file', '/tmp/nodes.conf']
+        : ['valkey-server'],
+    )
     // BOTH, deliberately. The log line proves the server is up INSIDE the container; it says nothing
     // about the port Docker maps on the host, which can refuse for a moment after it (measured:
     // 4-10 of 16 parallel containers got ECONNREFUSED on a connect made right after start()).
@@ -48,6 +59,14 @@ export async function startValkey(options: StartValkeyOptions = {}): Promise<Val
     }
     return result.output.trim();
   };
+
+  if (options.cluster) {
+    await command('CLUSTER', 'ADDSLOTSRANGE', '0', '16383');
+    for (let i = 0; i < 100; i += 1) {
+      if ((await command('CLUSTER', 'INFO')).includes('cluster_state:ok')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 
   return {
     host,

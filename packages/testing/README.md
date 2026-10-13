@@ -59,6 +59,7 @@ const valkey = await startValkey();
 valkey.url; // redis://host:port — hand to ioredis
 await valkey.flush(); // FLUSHALL, between tests
 await valkey.command('GET', 'k'); // valkey-cli inside the container
+// startValkey({ cluster: true }): a one-node CLUSTER owning every slot, so multi-key commands across slots fail with CROSSSLOT
 ```
 
 No client is bundled, so this package pins no ioredis version on the code under test.

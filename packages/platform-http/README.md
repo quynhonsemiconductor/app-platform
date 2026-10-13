@@ -344,6 +344,55 @@ await withJobContext('mail.send', () => this.deliver(job.data), {
 Every log line the handler writes then carries the request's id. The payload value came from this
 package, so it is already validated; a handler fed from anywhere else should validate before trusting it.
 
+## Idempotency
+
+`IdempotencyInterceptor` (`@UseIdempotency()` per route, or `APP_INTERCEPTOR` globally) honours `Idempotency-Key` on `POST` and `PUT`:
+the first request with a key runs and its **status, body and a few headers** are stored for 24 hours; a retry returns them with
+`X-Idempotent-Replayed: true` and does not run the handler.
+
+- **The request is fingerprinted** (method, URL, body, object keys sorted). The same key with a different request is
+  `422 IDEMPOTENCY_KEY_REUSED`, never the first response. A multipart or streamed body is fingerprinted by `content-type` and
+  `content-length` only.
+- **A concurrent copy is not run, and a completed one is not run again.** One atomic script reads the record or claims the key
+  (`SET NX EX`), so there is no gap between "no record" and "claimed" in which a request that just finished could be repeated.
+  A second request while the first runs gets `409 IDEMPOTENCY_IN_FLIGHT` with `Retry-After`. The lease
+  (`IDEMPOTENCY_LEASE_SECONDS`, default 60, 5 to 600; a bad value stops the application starting) is **renewed while the handler
+  runs** (compare-and-expire on a random token, every third of the lease), so a request may take longer than the lease. It is
+  released by compare-and-delete on the same token: a request that lost its claim cannot free the successor's. A pod killed
+  mid-request frees the key within one lease. If the cache is unreachable for longer than a lease while a request runs, the claim
+  can lapse and a retry can run; that is the fail-open trade below.
+- **Only successes are stored** (a 2xx). A failed request leaves nothing behind, so the retry executes.
+- **A response that cannot be replayed is recorded as done, and never re-run.** A stream, a file (`StreamableFile`), a `Buffer` or
+  typed array, a body over 256 KiB **measured in bytes** (not characters), or one that does not serialize (circular, `BigInt`) is
+  stored as a **marker** with its status and no body. A retry gets `409 IDEMPOTENCY_NOT_REPLAYABLE` with
+  `details: [{ originalStatus }]` (and `X-Idempotent-Replayed: true`): the operation already happened, read its result
+  instead. Nothing of the response is written to the cache, so a file stream's server path cannot leak into it.
+- **Replayed headers:** `Location`, `ETag` and `Content-Type`, if the handler set them (values with control characters or over
+  2 KiB are dropped). **Never `Set-Cookie`**, and nothing else: a replay must not mint or rotate a session.
+- **It fails open.** An unreachable cache, or any error reading the key or taking the claim, is logged and the request runs as if
+  it had no key; an error storing the response is logged and the response is returned. Refusing every mutation while Valkey is
+  down would be worse than losing the guarantee for that window.
+- **Scope.** The stored entry is scoped to the user (the principal, see "Who the user is"; an anonymous caller is a hash of address and
+  agent), method, URL and key. No header value reaches a Redis key.
+- **CORS.** A browser client needs `Idempotency-Key` in `allowedHeaders` and `X-Idempotent-Replayed` in `exposedHeaders`;
+  without the first the preflight fails, without the second the client cannot see that an answer was a replay.
+
+**On a replay, what runs.** Guards run as on any request (a replay is never served to someone the guards refuse). The handler,
+the pipes and every interceptor registered **after** this one (inside it) do **not** run. The stored value is emitted through the
+interceptors registered **before** it (outside it) as a fresh response would be. It is what this interceptor saw, so a response
+transformer registered **after** it has already been applied to the stored value (not applied twice), while one registered
+**before** it is applied again on every replay. An audit or metrics interceptor placed inside does not see replays; one outside
+does, including `HttpLoggingInterceptor`, which logs the replay with the stored status. Register this interceptor
+**after** your response-shaping and logging interceptors if you want those to see replays, and **before** anything that must
+only ever see the real execution.
+
+Errors: `IDEMPOTENCY_KEY_REUSED` (422), `IDEMPOTENCY_IN_FLIGHT` (409), `IDEMPOTENCY_NOT_REPLAYABLE` (409), all in `HttpErrorCodes`.
+
+### Upgrading
+
+The stored format and the cache key changed (`idem:{user}:{hash}`; entries now hold the status and the fingerprint). Entries from the
+previous version are never read, so a retry that spans the deploy runs once more; nothing else is affected.
+
 ## Rate limiting and idempotency need a cache
 
 `RateLimitGuard` and `IdempotencyInterceptor` store their state in Valkey through

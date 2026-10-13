@@ -61,6 +61,15 @@ export const HttpErrorCodes = {
    * delivery log, making a configuration gap read as a rova fault.
    */
   SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
+  /** 422. The same `Idempotency-Key` was sent for a different request (method, URL or body). */
+  IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
+  /** 409. A request with this `Idempotency-Key` is still running; retry shortly (`Retry-After`). */
+  IDEMPOTENCY_IN_FLIGHT: 'IDEMPOTENCY_IN_FLIGHT',
+  /**
+   * 409. A request with this `Idempotency-Key` already completed but its response cannot be replayed (a stream,
+   * a file, or a body too large to keep). `details[0].originalStatus` is the status it completed with.
+   */
+  IDEMPOTENCY_NOT_REPLAYABLE: 'IDEMPOTENCY_NOT_REPLAYABLE',
 } as const;
 
 /** Map a raw HTTP status (from a framework HttpException) to a stable error code. */

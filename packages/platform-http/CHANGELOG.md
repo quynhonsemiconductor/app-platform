@@ -1,5 +1,22 @@
 # Changelog
 
+## [5.0.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v4.3.0...platform-http-v5.0.0) (2026-10-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **platform-http:** a product whose guard only sets req.user must call setRequestPrincipal (observability >= 0.2.3) after it authenticates, or its authenticated callers are rate-limited per client address and missing from the access log. The adapter that fed REQUEST_CONTEXT can be deleted.
+
+### ✨ Features
+
+* **platform-http:** read the authenticated user from the request context, not from req.user ([017f46c](https://github.com/quynhonsemiconductor/app-platform/commit/017f46c9dede004e1cf66426e404a1c305b9072f))
+* **platform-http:** the Idempotency-Key is a guarantee, not a response cache ([#231](https://github.com/quynhonsemiconductor/app-platform/issues/231)) ([70af81d](https://github.com/quynhonsemiconductor/app-platform/commit/70af81d9b69be1b2e51d035356055e919a88757e))
+
+
+### 🐛 Bug Fixes
+
+* **platform-http:** the idempotency record and claim share a cluster hash tag ([#238](https://github.com/quynhonsemiconductor/app-platform/issues/238)) ([f52fc44](https://github.com/quynhonsemiconductor/app-platform/commit/f52fc440e9d1ed13e2f06fe024f081b1e8989293))
+
 ## [4.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v4.2.0...platform-http-v4.3.0) (2026-10-12)
 
 

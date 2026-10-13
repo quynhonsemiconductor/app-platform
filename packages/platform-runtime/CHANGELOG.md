@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.1.3...platform-runtime-v0.1.4) (2026-10-13)
+
+
+### ✨ Features
+
+* **platform-cache:** tryLock, a lock with an owner token; ExclusiveJob releases only its own ([#232](https://github.com/quynhonsemiconductor/app-platform/issues/232)) ([3b08830](https://github.com/quynhonsemiconductor/app-platform/commit/3b088306eadadfbf5695df1338c82eb4f6421ddf))
+
+
+### 🐛 Bug Fixes
+
+* **platform-runtime:** enableHealth no longer ends the process when there is no database pool or CacheService ([#239](https://github.com/quynhonsemiconductor/app-platform/issues/239)) ([3a0682a](https://github.com/quynhonsemiconductor/app-platform/commit/3a0682ada131eaf63e0d108dd7195fe1b8d19864))
+
 ## [0.1.3](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.1.2...platform-runtime-v0.1.3) (2026-10-09)
 
 ### ✨ Features

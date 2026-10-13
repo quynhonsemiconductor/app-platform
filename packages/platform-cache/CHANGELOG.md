@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.2.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v3.1.1...platform-cache-v3.2.0) (2026-10-13)
+
+
+### ✨ Features
+
+* **platform-cache:** tryLock, a lock with an owner token; ExclusiveJob releases only its own ([#232](https://github.com/quynhonsemiconductor/app-platform/issues/232)) ([3b08830](https://github.com/quynhonsemiconductor/app-platform/commit/3b088306eadadfbf5695df1338c82eb4f6421ddf))
+
+
+### 🐛 Bug Fixes
+
+* **platform-cache:** the deprecated releaseLock cannot free a lock a second holder in the same process took over ([#236](https://github.com/quynhonsemiconductor/app-platform/issues/236)) ([5126502](https://github.com/quynhonsemiconductor/app-platform/commit/51265028783e2d4a55e902e5c02a77883dafdd1c))
+
 ## [3.1.1](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v3.1.0...platform-cache-v3.1.1) (2026-10-09)
 
 ### 🐛 Bug Fixes

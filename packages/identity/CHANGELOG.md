@@ -1,5 +1,19 @@
 # Changelog
 
+## [8.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.2.0...identity-v8.3.0) (2026-10-13)
+
+
+### ✨ Features
+
+* **identity:** one Microsoft identity per user; unlinkMicrosoftAccount; the member's UPN on a staff domain ([#229](https://github.com/quynhonsemiconductor/app-platform/issues/229)) ([51630ce](https://github.com/quynhonsemiconductor/app-platform/commit/51630ce34f0f11bc0b39edd2bf7877413d09cd6f))
+* **identity:** SessionGuard records the principal in the request context; a principal hook for product fields ([81c0b83](https://github.com/quynhonsemiconductor/app-platform/commit/81c0b834aa8d12cc24d71eb8171c4ce955433ef3))
+
+
+### 🐛 Bug Fixes
+
+* **identity:** remove the user a refused staff sign-in created ([#227](https://github.com/quynhonsemiconductor/app-platform/issues/227)) ([d755660](https://github.com/quynhonsemiconductor/app-platform/commit/d75566090bc50aa60e53f466d0a00e8ddd1567b1))
+* **identity:** remove the user a refused staff sign-in created in one transaction, re-checking for a session inside it ([#235](https://github.com/quynhonsemiconductor/app-platform/issues/235)) ([68b6214](https://github.com/quynhonsemiconductor/app-platform/commit/68b62147db5fd8e80fae27dbdfd476aa7fd57abc))
+
 ## [8.2.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.1.0...identity-v8.2.0) (2026-10-12)
 
 

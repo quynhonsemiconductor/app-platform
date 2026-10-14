@@ -408,8 +408,10 @@ reads. With `OTEL_ENABLED` unset, `startOtel` is a no-op and tests run without a
 
 ## Unused series and the log `env` field
 
-- **`unusedSeries`** (`startOtel`, default `'drop'`): drops, at the SDK with Views, `v8js.gc.duration`, `v8js.memory.heap.space.*` and
-  instrumentation-http's `http.client.request.duration`. Kept: `v8js.memory.heap.used`/`.limit` and the legacy `http.client.duration` (the products'
-  "Outbound HTTP client calls" panel reads `http_client_duration_milliseconds_count`). Pass `'keep'` if a dashboard or alert reads a dropped name.
+- **`unusedSeries`** (`startOtel`, default `'drop'`): drops, at the SDK with Views, `v8js.gc.duration` and `v8js.memory.heap.space.*`
+  (`available_size`, `physical_size`, `size`). Kept: `v8js.memory.heap.used` and `.limit`. **`http.client.request.duration` is NOT dropped:** with
+  `@opentelemetry/instrumentation-http` 0.221 it is the only outbound-HTTP series (the legacy `http.client.duration` is no longer created), so the
+  products' "Outbound HTTP client calls" panels read `http_client_request_duration_seconds_count` by `server_address`. A test runs the real
+  instrumentation and fails if it is dropped. Pass `'keep'` if a dashboard or alert reads a dropped `v8js` name.
 - **Log `env`** is the deployment environment: `createLoggerOptions({ deploymentEnv })`, else `DEPLOYMENT_ENV`, else `nodeEnv`. It used to be `NODE_ENV`,
   which products pin to `production` in develop, so every develop line said `"env":"production"`.

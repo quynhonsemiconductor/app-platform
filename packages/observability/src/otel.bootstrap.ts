@@ -94,6 +94,19 @@ export interface OtelBootstrapOptions {
    *   `http.server.request.duration`. With an old instrumentation version AND `HttpMetrics` it double-reports.
    */
   httpInstrumentationDuration?: 'drop' | 'keep';
+  /**
+   * What to do with the instrument series that nothing reads, and that cost money on the metrics backend (billed per active series).
+   *
+   * - `'drop'` (default): drop, at the SDK, with Views (nothing is created, sent or stored):
+   *   - `v8js.gc.duration`: a histogram per GC type, per process;
+   *   - `v8js.memory.heap.space.*` (`available_size`, `physical_size`, `size`): a series per heap space (7 or so), per process, per instrument;
+   *   - `http.client.request.duration`: the stable-semconv outbound-call histogram (seconds) of instrumentation-http 0.221.
+   *   KEPT: `v8js.memory.heap.used` (the heap panel), `v8js.memory.heap.limit`, and the legacy `http.client.duration` (ms, `net.peer.name`),
+   *   which the products' "Outbound HTTP client calls" dashboard panel queries as `http_client_duration_milliseconds_count`. Checked
+   *   2026-10-14 across infra, rova, opshub and qnsc-kb-backend: no dashboard or alert reads any dropped name.
+   * - `'keep'`: export all of them again, for a product that has a dashboard or alert on one of them.
+   */
+  unusedSeries?: 'drop' | 'keep';
 }
 
 /** The meter `HttpMetrics` (and every `getMeter()` with no argument) records on. */
@@ -108,6 +121,21 @@ const HTTP_INSTRUMENTATION_METER = '@opentelemetry/instrumentation-http';
  * `HttpMetrics` uses, hence the need to select by meter).
  */
 const HTTP_INSTRUMENTATION_DURATIONS = ['http.server.duration', 'http.server.request.duration'];
+
+/** The meter `@opentelemetry/instrumentation-runtime-node` (the `v8js.*` series) records on. */
+const RUNTIME_INSTRUMENTATION_METER = '@opentelemetry/instrumentation-runtime-node';
+
+/**
+ * Series nothing reads (see {@link OtelBootstrapOptions.unusedSeries}), as `[meter, instrument]`. Selected by METER AND NAME so a product's
+ * own instrument that happens to share a name is never touched. `v8js.memory.heap.used` and `.limit` are deliberately absent.
+ */
+const UNUSED_SERIES: readonly (readonly [string, string])[] = [
+  [RUNTIME_INSTRUMENTATION_METER, 'v8js.gc.duration'],
+  [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.available_size'],
+  [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.physical_size'],
+  [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.size'],
+  [HTTP_INSTRUMENTATION_METER, 'http.client.request.duration'],
+];
 
 /**
  * Instrument name the histogram View selects.
@@ -294,7 +322,15 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
   // which clashes, and is dropped as well. The buckets view is scoped to the `qnsc` meter so that, on such an
   // older version, it cannot create a stream for the instrumentation's histogram and bring it back.
   const dropInstrumentation = (options.httpInstrumentationDuration ?? 'drop') === 'drop';
+  const dropUnused = (options.unusedSeries ?? 'drop') === 'drop';
   const views: ViewOptions[] = [
+    ...(dropUnused
+      ? UNUSED_SERIES.map(([meterName, instrumentName]): ViewOptions => ({
+          meterName,
+          instrumentName,
+          aggregation: { type: AggregationType.DROP },
+        }))
+      : []),
     ...(dropInstrumentation
       ? HTTP_INSTRUMENTATION_DURATIONS.map((instrumentName): ViewOptions => ({
           meterName: HTTP_INSTRUMENTATION_METER,

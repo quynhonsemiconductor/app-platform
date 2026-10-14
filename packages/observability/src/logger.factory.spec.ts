@@ -61,6 +61,31 @@ describe('createLoggerOptions', () => {
     expect(props).toEqual({ service: 'rova-api', env: 'test', version: '1.2.3' });
   });
 
+  it('logs the DEPLOYMENT environment in `env`, not NODE_ENV (which products pin to production in develop)', () => {
+    const prev = process.env['DEPLOYMENT_ENV'];
+    try {
+      delete process.env['DEPLOYMENT_ENV'];
+      const base = {
+        serviceName: 'rova-api',
+        nodeEnv: 'production',
+        serviceVersion: 'v1',
+        level: 'info',
+      };
+      const envOf = (o: object) =>
+        (
+          createLoggerOptions({ ...base, ...o }).pinoHttp as { customProps: () => { env: string } }
+        ).customProps().env;
+      expect(envOf({})).toBe('production'); // nothing else known: the old behaviour
+      expect(envOf({ deploymentEnv: 'develop' })).toBe('develop'); // explicit
+      process.env['DEPLOYMENT_ENV'] = 'develop';
+      expect(envOf({})).toBe('develop'); // from the environment, like the OTel resource
+      expect(envOf({ deploymentEnv: 'production' })).toBe('production'); // explicit wins
+    } finally {
+      if (prev === undefined) delete process.env['DEPLOYMENT_ENV'];
+      else process.env['DEPLOYMENT_ENV'] = prev;
+    }
+  });
+
   it('takes the service name from the caller, so api and worker differ', () => {
     const worker = optionsOf(
       createLoggerOptions({ ...base, serviceName: 'rova-worker' }),

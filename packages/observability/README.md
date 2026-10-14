@@ -405,3 +405,11 @@ reads. With `OTEL_ENABLED` unset, `startOtel` is a no-op and tests run without a
 - Auto-instrumentation covers HTTP, `pg` and `ioredis`; the AWS SDK, filesystem, DNS and raw sockets are
   off.
 - **Node and pino only** (`nestjs-pino`). No log shipping and no health controller.
+
+## Unused series and the log `env` field
+
+- **`unusedSeries`** (`startOtel`, default `'drop'`): drops, at the SDK with Views, `v8js.gc.duration`, `v8js.memory.heap.space.*` and
+  instrumentation-http's `http.client.request.duration`. Kept: `v8js.memory.heap.used`/`.limit` and the legacy `http.client.duration` (the products'
+  "Outbound HTTP client calls" panel reads `http_client_duration_milliseconds_count`). Pass `'keep'` if a dashboard or alert reads a dropped name.
+- **Log `env`** is the deployment environment: `createLoggerOptions({ deploymentEnv })`, else `DEPLOYMENT_ENV`, else `nodeEnv`. It used to be `NODE_ENV`,
+  which products pin to `production` in develop, so every develop line said `"env":"production"`.

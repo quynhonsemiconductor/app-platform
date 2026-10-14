@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.3.0...observability-v0.4.0) (2026-10-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** the unused v8js.gc.duration and v8js.memory.heap.space.* series are no longer exported by default (pass unusedSeries: 'keep' to restore them), and the log env field now reports DEPLOYMENT_ENV when set instead of NODE_ENV.
+
+### ✨ Features
+
+* **observability:** drop the unused v8js series at the SDK; log the deployment environment in env ([#240](https://github.com/quynhonsemiconductor/app-platform/issues/240)) ([0960a2c](https://github.com/quynhonsemiconductor/app-platform/commit/0960a2cd6b014d65b9338137da4477ed69972e32))
+
 ## [0.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.2.2...observability-v0.3.0) (2026-10-13)
 
 

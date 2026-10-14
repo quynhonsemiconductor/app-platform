@@ -172,7 +172,11 @@ describe('startOtel', () => {
 
     // `httpInstrumentationDuration: 'keep'` with no buckets is the old configuration exactly: nothing in `views`.
     it("adds no views key at all when the buckets are omitted and the instrumentation's duration is kept", () => {
-      startOtel({ defaultServiceName: 'svc', httpInstrumentationDuration: 'keep' });
+      startOtel({
+        defaultServiceName: 'svc',
+        httpInstrumentationDuration: 'keep',
+        unusedSeries: 'keep',
+      });
 
       const config = nodeSdkConstructor.mock.calls[0][0] as Record<string, unknown>;
       expect('views' in config).toBe(false);
@@ -202,6 +206,7 @@ describe('startOtel', () => {
         defaultServiceName: 'svc',
         httpDurationBoundaries: [1, 2, 3],
         httpInstrumentationDuration: 'keep',
+        unusedSeries: 'keep',
       });
       const { views } = nodeSdkConstructor.mock.calls[0][0] as { views: unknown[] };
       expect(views).toEqual([
@@ -302,6 +307,164 @@ describe('startOtel', () => {
   });
 
   /**
+   * `unusedSeries`: the v8js heap-space and GC series are dropped at the SDK by default. `v8js.memory.heap.used` and instrumentation-http's
+   * `http.client.request.duration` (the ONLY outbound-HTTP series in 0.221) are NOT.
+   */
+  describe('unusedSeries', () => {
+    beforeEach(() => {
+      process.env['OTEL_ENABLED'] = 'true';
+    });
+
+    const viewsOf = () =>
+      (nodeSdkConstructor.mock.calls[0][0] as { views?: Record<string, unknown>[] }).views;
+    const dropped = () =>
+      (viewsOf() ?? [])
+        .filter((v) => (v['aggregation'] as { type: unknown }).type === AggregationType.DROP)
+        .map((v) => `${v['meterName'] as string}|${v['instrumentName'] as string}`);
+
+    it('drops exactly the unused series by default, selected by meter AND name', () => {
+      startOtel({ defaultServiceName: 'svc', httpInstrumentationDuration: 'keep' });
+      expect(dropped().sort()).toEqual(
+        [
+          '@opentelemetry/instrumentation-runtime-node|v8js.gc.duration',
+          '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.available_size',
+          '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.physical_size',
+          '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.size',
+        ].sort(),
+      );
+    });
+
+    it('never drops the heap-used series or the outbound-HTTP client duration', () => {
+      startOtel({ defaultServiceName: 'svc' });
+      const names = dropped().map((d) => d.split('|')[1]);
+      expect(names).not.toContain('v8js.memory.heap.used');
+      expect(names).not.toContain('v8js.memory.heap.limit');
+      expect(names).not.toContain('http.client.request.duration');
+      expect(names).not.toContain('http.client.duration');
+    });
+
+    it('"keep" adds no drop view of this kind', () => {
+      startOtel({
+        defaultServiceName: 'svc',
+        httpInstrumentationDuration: 'keep',
+        unusedSeries: 'keep',
+      });
+      expect(viewsOf()).toBeUndefined();
+    });
+
+    // The REAL runtime instrumentation, from the version this repository locks: the meter and instrument names are what the views
+    // select, so a version that renames them fails HERE, not on the metrics bill. (Two tests, not one: startOtel is idempotent.)
+    const exportRuntimeNames = async (options: Parameters<typeof startOtel>[0]) => {
+      const { createRequire } = await import('node:module');
+      const fromAuto = createRequire(
+        createRequire(import.meta.url).resolve('@opentelemetry/auto-instrumentations-node'),
+      );
+      const { RuntimeNodeInstrumentation } = fromAuto(
+        '@opentelemetry/instrumentation-runtime-node',
+      ) as {
+        RuntimeNodeInstrumentation: new () => {
+          setMeterProvider(p: unknown): void;
+          disable(): void;
+        };
+      };
+      const {
+        MeterProvider,
+        PeriodicExportingMetricReader,
+        InMemoryMetricExporter,
+        AggregationTemporality,
+      } = await import('@opentelemetry/sdk-metrics');
+      startOtel(options);
+      const config = nodeSdkConstructor.mock.calls.at(-1)![0] as { views?: never[] };
+      const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+      const reader = new PeriodicExportingMetricReader({
+        exporter,
+        exportIntervalMillis: 3_600_000,
+      });
+      const provider = new MeterProvider({ readers: [reader], views: config.views ?? [] });
+      const instrumentation = new RuntimeNodeInstrumentation();
+      instrumentation.setMeterProvider(provider);
+      try {
+        await reader.forceFlush();
+        return exporter
+          .getMetrics()
+          .flatMap((m) => m.scopeMetrics)
+          .flatMap((scope) => scope.metrics.map((metric) => metric.descriptor.name));
+      } finally {
+        instrumentation.disable();
+        await provider.shutdown();
+      }
+    };
+
+    it('against the REAL instrumentation-runtime-node: heap.used survives, GC and heap-space series do not exist', async () => {
+      const names = await exportRuntimeNames({
+        defaultServiceName: 'svc',
+        httpInstrumentationDuration: 'keep',
+      });
+      expect(names).toContain('v8js.memory.heap.used');
+      expect(names.some((n) => n.startsWith('v8js.memory.heap.space.'))).toBe(false);
+      expect(names).not.toContain('v8js.gc.duration');
+    });
+
+    it("against the REAL instrumentation-runtime-node: with 'keep' the heap-space series are exported (so the drop test above proves something)", async () => {
+      const names = await exportRuntimeNames({
+        defaultServiceName: 'svc',
+        httpInstrumentationDuration: 'keep',
+        unusedSeries: 'keep',
+      });
+      expect(names.some((n) => n.startsWith('v8js.memory.heap.space.'))).toBe(true);
+    });
+
+    // The REAL instrumentation-http (0.221, the version rova and opshub lock). The first version of this option dropped
+    // `http.client.request.duration` on the premise that `http.client.duration` was the series a dashboard reads. 0.221 does not create the
+    // legacy name at all, so that dropped the ONLY outbound-HTTP series. This test is what would have failed.
+    it('against the REAL instrumentation-http: the outbound-HTTP duration is exported by default, and the legacy name does not exist', async () => {
+      const { createRequire } = await import('node:module');
+      const fromAuto = createRequire(
+        createRequire(import.meta.url).resolve('@opentelemetry/auto-instrumentations-node'),
+      );
+      const { HttpInstrumentation } = fromAuto('@opentelemetry/instrumentation-http') as {
+        HttpInstrumentation: new () => {
+          setMeterProvider(p: unknown): void;
+          disable(): void;
+          _httpClientDurationHistogram: { record(value: number, attributes: object): void };
+        };
+      };
+      const {
+        MeterProvider,
+        PeriodicExportingMetricReader,
+        InMemoryMetricExporter,
+        AggregationTemporality,
+      } = await import('@opentelemetry/sdk-metrics');
+      startOtel({ defaultServiceName: 'svc' });
+      const config = nodeSdkConstructor.mock.calls.at(-1)![0] as { views?: never[] };
+      const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+      const reader = new PeriodicExportingMetricReader({
+        exporter,
+        exportIntervalMillis: 3_600_000,
+      });
+      const provider = new MeterProvider({ readers: [reader], views: config.views ?? [] });
+      const instrumentation = new HttpInstrumentation();
+      instrumentation.setMeterProvider(provider);
+      try {
+        instrumentation._httpClientDurationHistogram.record(0.01, {
+          'http.request.method': 'GET',
+          'server.address': 'graph.microsoft.com',
+        });
+        await reader.forceFlush();
+        const names = exporter
+          .getMetrics()
+          .flatMap((m) => m.scopeMetrics)
+          .flatMap((scope) => scope.metrics.map((metric) => metric.descriptor.name));
+        expect(names).toContain('http.client.request.duration');
+        expect(names).not.toContain('http.client.duration');
+      } finally {
+        instrumentation.disable();
+        await provider.shutdown();
+      }
+    });
+  });
+
+  /**
    * ONE source of truth for the inbound request duration: `HttpMetrics`' route-labelled `http.server.duration`.
    * `startOtel` drops instrumentation-http's own server duration histogram, by meter and name.
    *
@@ -320,7 +483,7 @@ describe('startOtel', () => {
       (nodeSdkConstructor.mock.calls[0][0] as { views?: Record<string, unknown>[] }).views;
 
     it('drops instrumentation-http’s server duration histograms (legacy and stable names) by default', () => {
-      startOtel({ defaultServiceName: 'svc' });
+      startOtel({ defaultServiceName: 'svc', unusedSeries: 'keep' });
       expect(viewsOf()).toEqual([
         {
           meterName: '@opentelemetry/instrumentation-http',
@@ -336,7 +499,11 @@ describe('startOtel', () => {
     });
 
     it('"keep" leaves it alone', () => {
-      startOtel({ defaultServiceName: 'svc', httpInstrumentationDuration: 'keep' });
+      startOtel({
+        defaultServiceName: 'svc',
+        httpInstrumentationDuration: 'keep',
+        unusedSeries: 'keep',
+      });
       expect(viewsOf()).toBeUndefined();
     });
 
@@ -344,7 +511,8 @@ describe('startOtel', () => {
       startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: [1, 2] });
       for (const view of viewsOf()!) {
         if ((view['aggregation'] as { type: unknown }).type === AggregationType.DROP) {
-          expect(view['meterName']).toBe('@opentelemetry/instrumentation-http');
+          // every drop names a THIRD-PARTY instrumentation's meter, never `qnsc` (and always names one)
+          expect(view['meterName']).toMatch(/^@opentelemetry\/instrumentation-/);
         }
       }
     });

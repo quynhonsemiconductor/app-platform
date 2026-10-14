@@ -29,8 +29,16 @@ const REDACTED_PATHS: readonly string[] = [
 export interface LoggerFactoryOptions {
   /** Value of the `service` field on every line — `rova-api`, `rova-worker`. */
   serviceName: string;
-  /** `NODE_ENV`, used for the `env` field and the pretty-print default. */
+  /** `NODE_ENV`: the runtime mode. Drives the pretty-print default, and is the `env` field only when no deployment environment is known. */
   nodeEnv: string;
+  /**
+   * The DEPLOYMENT environment (`develop` / `production`), for the `env` field. Defaults to `DEPLOYMENT_ENV`, then to `nodeEnv`.
+   *
+   * Not `NODE_ENV`: products pin `NODE_ENV=production` in develop on purpose (it selects the security posture), so logging it as `env`
+   * labelled every develop line `"env":"production"`, indistinguishable from real production in Loki. The OTel resource already uses
+   * `DEPLOYMENT_ENV` for `deployment.environment.name`; the log field now agrees with it.
+   */
+  deploymentEnv?: string;
   /** `SERVICE_VERSION`, so a log line can be traced to a release. */
   serviceVersion: string;
   /** Pino level from config. */
@@ -67,7 +75,8 @@ export function createLoggerOptions(options: LoggerFactoryOptions): PinoParams {
       autoLogging: false,
       customProps: () => ({
         service: options.serviceName,
-        env: options.nodeEnv,
+        // `||`, not `??`: an EMPTY DEPLOYMENT_ENV (a blank variable) must fall back, not be logged as "".
+        env: options.deploymentEnv || process.env['DEPLOYMENT_ENV'] || options.nodeEnv,
         version: options.serviceVersion,
       }),
       mixin: () => {

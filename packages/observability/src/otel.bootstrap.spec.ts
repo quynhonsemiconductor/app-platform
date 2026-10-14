@@ -307,8 +307,8 @@ describe('startOtel', () => {
   });
 
   /**
-   * `unusedSeries`: the v8js heap-space and GC series, and instrumentation-http's `http.client.request.duration`, are dropped at the SDK by
-   * default. `v8js.memory.heap.used` and the legacy `http.client.duration` (a dashboard panel reads it) are NOT.
+   * `unusedSeries`: the v8js heap-space and GC series are dropped at the SDK by default. `v8js.memory.heap.used` and instrumentation-http's
+   * `http.client.request.duration` (the ONLY outbound-HTTP series in 0.221) are NOT.
    */
   describe('unusedSeries', () => {
     beforeEach(() => {
@@ -326,7 +326,6 @@ describe('startOtel', () => {
       startOtel({ defaultServiceName: 'svc', httpInstrumentationDuration: 'keep' });
       expect(dropped().sort()).toEqual(
         [
-          '@opentelemetry/instrumentation-http|http.client.request.duration',
           '@opentelemetry/instrumentation-runtime-node|v8js.gc.duration',
           '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.available_size',
           '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.physical_size',
@@ -335,11 +334,12 @@ describe('startOtel', () => {
       );
     });
 
-    it('never drops the heap-used series or the legacy client duration a dashboard reads', () => {
+    it('never drops the heap-used series or the outbound-HTTP client duration', () => {
       startOtel({ defaultServiceName: 'svc' });
       const names = dropped().map((d) => d.split('|')[1]);
       expect(names).not.toContain('v8js.memory.heap.used');
       expect(names).not.toContain('v8js.memory.heap.limit');
+      expect(names).not.toContain('http.client.request.duration');
       expect(names).not.toContain('http.client.duration');
     });
 
@@ -412,6 +412,55 @@ describe('startOtel', () => {
         unusedSeries: 'keep',
       });
       expect(names.some((n) => n.startsWith('v8js.memory.heap.space.'))).toBe(true);
+    });
+
+    // The REAL instrumentation-http (0.221, the version rova and opshub lock). The first version of this option dropped
+    // `http.client.request.duration` on the premise that `http.client.duration` was the series a dashboard reads. 0.221 does not create the
+    // legacy name at all, so that dropped the ONLY outbound-HTTP series. This test is what would have failed.
+    it('against the REAL instrumentation-http: the outbound-HTTP duration is exported by default, and the legacy name does not exist', async () => {
+      const { createRequire } = await import('node:module');
+      const fromAuto = createRequire(
+        createRequire(import.meta.url).resolve('@opentelemetry/auto-instrumentations-node'),
+      );
+      const { HttpInstrumentation } = fromAuto('@opentelemetry/instrumentation-http') as {
+        HttpInstrumentation: new () => {
+          setMeterProvider(p: unknown): void;
+          disable(): void;
+          _httpClientDurationHistogram: { record(value: number, attributes: object): void };
+        };
+      };
+      const {
+        MeterProvider,
+        PeriodicExportingMetricReader,
+        InMemoryMetricExporter,
+        AggregationTemporality,
+      } = await import('@opentelemetry/sdk-metrics');
+      startOtel({ defaultServiceName: 'svc' });
+      const config = nodeSdkConstructor.mock.calls.at(-1)![0] as { views?: never[] };
+      const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+      const reader = new PeriodicExportingMetricReader({
+        exporter,
+        exportIntervalMillis: 3_600_000,
+      });
+      const provider = new MeterProvider({ readers: [reader], views: config.views ?? [] });
+      const instrumentation = new HttpInstrumentation();
+      instrumentation.setMeterProvider(provider);
+      try {
+        instrumentation._httpClientDurationHistogram.record(0.01, {
+          'http.request.method': 'GET',
+          'server.address': 'graph.microsoft.com',
+        });
+        await reader.forceFlush();
+        const names = exporter
+          .getMetrics()
+          .flatMap((m) => m.scopeMetrics)
+          .flatMap((scope) => scope.metrics.map((metric) => metric.descriptor.name));
+        expect(names).toContain('http.client.request.duration');
+        expect(names).not.toContain('http.client.duration');
+      } finally {
+        instrumentation.disable();
+        await provider.shutdown();
+      }
     });
   });
 

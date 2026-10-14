@@ -75,7 +75,8 @@ export function createLoggerOptions(options: LoggerFactoryOptions): PinoParams {
       autoLogging: false,
       customProps: () => ({
         service: options.serviceName,
-        env: options.deploymentEnv ?? process.env['DEPLOYMENT_ENV'] ?? options.nodeEnv,
+        // `||`, not `??`: an EMPTY DEPLOYMENT_ENV (a blank variable) must fall back, not be logged as "".
+        env: options.deploymentEnv || process.env['DEPLOYMENT_ENV'] || options.nodeEnv,
         version: options.serviceVersion,
       }),
       mixin: () => {

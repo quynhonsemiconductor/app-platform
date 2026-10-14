@@ -99,11 +99,11 @@ export interface OtelBootstrapOptions {
    *
    * - `'drop'` (default): drop, at the SDK, with Views (nothing is created, sent or stored):
    *   - `v8js.gc.duration`: a histogram per GC type, per process;
-   *   - `v8js.memory.heap.space.*` (`available_size`, `physical_size`, `size`): a series per heap space (7 or so), per process, per instrument;
-   *   - `http.client.request.duration`: the stable-semconv outbound-call histogram (seconds) of instrumentation-http 0.221.
-   *   KEPT: `v8js.memory.heap.used` (the heap panel), `v8js.memory.heap.limit`, and the legacy `http.client.duration` (ms, `net.peer.name`),
-   *   which the products' "Outbound HTTP client calls" dashboard panel queries as `http_client_duration_milliseconds_count`. Checked
-   *   2026-10-14 across infra, rova, opshub and qnsc-kb-backend: no dashboard or alert reads any dropped name.
+   *   - `v8js.memory.heap.space.*` (`available_size`, `physical_size`, `size`): a series per heap space (7 or so), per process, per instrument.
+   *   KEPT: `v8js.memory.heap.used` (the heap panel) and `.limit`. NOT dropped, on purpose: `http.client.request.duration`. With
+   *   `@opentelemetry/instrumentation-http` 0.221 (the version rova and opshub lock) it is the ONLY outbound-HTTP series (the legacy
+   *   `http.client.duration` is no longer created), so the "Outbound HTTP client calls" panels must read it
+   *   (`http_client_request_duration_seconds_*`, by `server_address`). An earlier draft of this option dropped it on the wrong premise.
    * - `'keep'`: export all of them again, for a product that has a dashboard or alert on one of them.
    */
   unusedSeries?: 'drop' | 'keep';
@@ -134,7 +134,6 @@ const UNUSED_SERIES: readonly (readonly [string, string])[] = [
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.available_size'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.physical_size'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.size'],
-  [HTTP_INSTRUMENTATION_METER, 'http.client.request.duration'],
 ];
 
 /**

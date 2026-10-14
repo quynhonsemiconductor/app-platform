@@ -80,6 +80,9 @@ describe('createLoggerOptions', () => {
       process.env['DEPLOYMENT_ENV'] = 'develop';
       expect(envOf({})).toBe('develop'); // from the environment, like the OTel resource
       expect(envOf({ deploymentEnv: 'production' })).toBe('production'); // explicit wins
+      process.env['DEPLOYMENT_ENV'] = '';
+      expect(envOf({})).toBe('production'); // blank falls back to nodeEnv
+      expect(envOf({ deploymentEnv: '' })).toBe('production');
     } finally {
       if (prev === undefined) delete process.env['DEPLOYMENT_ENV'];
       else process.env['DEPLOYMENT_ENV'] = prev;

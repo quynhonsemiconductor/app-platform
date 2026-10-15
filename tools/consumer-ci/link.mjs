@@ -23,7 +23,16 @@
 //                                              green and prove nothing.
 //
 // A range `semver` cannot parse (`latest`, a git URL) is linked: there is no range to be outside of.
-import { appendFileSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+//
+// ALSO AT THE WORKSPACE ROOT, as an override. Rewriting only the manifests that name a package misses every workspace that
+// reaches it WITHOUT naming it: a nested workspace such as `apps/web` that depends on platform-http gets observability as a
+// PEER, which pnpm (auto-install-peers) resolves from the registry, so a release PR whose version is not published yet fails
+// with ERR_PNPM_NO_MATCHING_VERSION there while the root, which names it, installs fine. So every package that was linked
+// anywhere is also overridden for the whole workspace, in the ONE place the product already keeps its overrides (see
+// `overridesTarget`): pnpm reads a single source, so a second one makes it IGNORE the first (opshub's fastify pin in
+// pnpm-workspace.yaml was dropped when package.json grew a `pnpm.overrides`, and two fastify copies broke its typecheck). A package that was SKIPPED everywhere (out of range)
+// gets no override: forcing it in would defeat the skip above.
+import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -58,6 +67,54 @@ export function linkManifest(json, tarballs) {
   return { linked, skipped };
 }
 
+/**
+ * Add `overrides` entries to the text of a pnpm-workspace.yaml: into an existing `overrides:` block, or as a new one.
+ * Entries already present are left alone (idempotent). `entries` maps package name -> `file:` spec.
+ */
+export function addWorkspaceOverrides(text, entries) {
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const lines = Object.entries(entries)
+    .filter(([name]) => !new RegExp(`^\\s+["']?${escape(name)}["']?\\s*:`, 'm').test(text))
+    .map(([name, spec]) => `  ${JSON.stringify(name)}: ${JSON.stringify(spec)}`);
+  if (lines.length === 0) return text;
+  const block = /^overrides:[ \t]*$/m.exec(text);
+  if (block) {
+    const at = block.index + block[0].length;
+    return `${text.slice(0, at)}\n${lines.join('\n')}${text.slice(at)}`;
+  }
+  const sep = text.endsWith('\n') || text === '' ? '' : '\n';
+  return `${text}${sep}overrides:\n${lines.join('\n')}\n`;
+}
+
+/**
+ * WHERE the product already keeps its overrides: `'yaml'` (pnpm-workspace.yaml) or `'package'` (root package.json `pnpm.overrides`).
+ *
+ * pnpm reads ONE source. Adding a second one makes it ignore the first: writing `pnpm.overrides` into opshub's package.json silently
+ * dropped the overrides it keeps in pnpm-workspace.yaml (its fastify pin among them), two fastify copies resolved and its typecheck
+ * failed. So never create a second source:
+ *  - overrides only in the yaml        -> yaml
+ *  - overrides only in package.json    -> package
+ *  - both (pnpm 11 reads the yaml, pnpm 10 the package.json) -> by the pnpm major in `packageManager` (11+ yaml, else package)
+ *  - neither: a pnpm-workspace.yaml exists -> yaml (pnpm 10.5+ and 11 both read it); otherwise package.json for pnpm < 11,
+ *    and a new yaml for pnpm 11+, which no longer reads package.json's `pnpm` field at all.
+ */
+export function overridesTarget({ workspaceYaml, rootJson }) {
+  const inYaml = workspaceYaml !== null && /^overrides:/m.test(workspaceYaml);
+  const inPackage = Boolean(rootJson?.pnpm?.overrides);
+  const major = Number(/^pnpm@(\d+)/.exec(rootJson?.packageManager ?? '')?.[1] ?? 0);
+  if (inYaml && !inPackage) return 'yaml';
+  if (inPackage && !inYaml) return 'package';
+  if (inYaml && inPackage) return major >= 11 ? 'yaml' : 'package';
+  if (workspaceYaml !== null) return 'yaml';
+  return major >= 11 ? 'yaml' : 'package';
+}
+
+/** Set `pnpm.overrides` in a parsed root package.json (in place). */
+export function addPackageJsonOverrides(json, entries) {
+  json.pnpm = json.pnpm ?? {};
+  json.pnpm.overrides = { ...(json.pnpm.overrides ?? {}), ...entries };
+}
+
 function option(name) {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? undefined : process.argv[i + 1];
@@ -77,6 +134,7 @@ function main() {
 
   let linkedCount = 0;
   let skippedCount = 0;
+  const linkedNames = new Set();
   for (const file of findManifests(product)) {
     const json = JSON.parse(readFileSync(file, 'utf8'));
     const { linked, skipped } = linkManifest(json, tarballs);
@@ -91,6 +149,29 @@ function main() {
     }
     linkedCount += linked.length;
     skippedCount += skipped.length;
+    for (const name of linked) linkedNames.add(name);
+  }
+
+  if (linkedNames.size > 0) {
+    const entries = Object.fromEntries(
+      [...linkedNames].map((name) => [name, `file:${tarballs.get(name).file}`]),
+    );
+    const workspaceFile = join(product, 'pnpm-workspace.yaml');
+    const rootManifest = join(product, 'package.json');
+    const rootJson = existsSync(rootManifest) ? JSON.parse(readFileSync(rootManifest, 'utf8')) : {};
+    const target = overridesTarget({
+      workspaceYaml: existsSync(workspaceFile) ? readFileSync(workspaceFile, 'utf8') : null,
+      rootJson,
+    });
+    if (target === 'yaml') {
+      const text = existsSync(workspaceFile) ? readFileSync(workspaceFile, 'utf8') : '';
+      writeFileSync(workspaceFile, addWorkspaceOverrides(text, entries));
+      process.stdout.write(`pnpm-workspace.yaml: overrides ${[...linkedNames].join(', ')}\n`);
+    } else {
+      addPackageJsonOverrides(rootJson, entries);
+      writeFileSync(rootManifest, `${JSON.stringify(rootJson, null, 2)}\n`);
+      process.stdout.write(`package.json: pnpm.overrides ${[...linkedNames].join(', ')}\n`);
+    }
   }
 
   if (linkedCount === 0 && skippedCount === 0) {

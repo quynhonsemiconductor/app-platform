@@ -81,6 +81,5 @@
     "reflect-metadata": "^0.2.2",
     "@nestjs/common": "^11.0.0",
     "@opentelemetry/context-async-hooks": "^2.10.0"
-  },
-  "peerDependenciesMeta": {}
+  }
 }

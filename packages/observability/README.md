@@ -288,7 +288,34 @@ A worker that built the pino logger but never installed it fails with the offend
 ### Lint: `@quynhonsemiconductor/observability/eslint`
 
 `loggingLintConfig()` returns flat-config entries: `no-console` (allow CI tooling with `consoleAllowedIn`) and a ban on
-`NestFactory.create*` outside tests, which is how a hand-written bootstrap is kept out. Nest's `new Logger(context)` stays allowed: it
+`NestFactory.create*` outside tests, which is how a hand-written bootstrap is kept out.
+
+**Merging with your own rules.** ESLint flat config does not merge rule options: the last config that sets `no-restricted-syntax` replaces the earlier one wholesale, so a product rule set after this preset silently drops these checks. Spread the exported entries into yours:
+
+```js
+import {
+  LOGGING_RESTRICTED_SYNTAX,
+  LOGGING_RESTRICTED_IMPORT_PATHS,
+  loggingLintConfig,
+} from '@quynhonsemiconductor/observability/eslint';
+
+export default [
+  ...loggingLintConfig(),
+  {
+    rules: {
+      'no-restricted-syntax': ['error', ...myEntries, ...LOGGING_RESTRICTED_SYNTAX],
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { paths: [...myPaths, ...LOGGING_RESTRICTED_IMPORT_PATHS] },
+      ],
+    },
+  },
+];
+```
+
+The imports rule is `@typescript-eslint/no-restricted-imports` (the `typescript-eslint` plugin every Nest product already registers), so `import type { Logger } from 'pino'` stays allowed. It catches `NestFactory` however it is bound (alias, namespace, destructure, `{ NestFactory: F } = await import(...)`) and `pino` / `pino-http` by `import`, `require` and `import()`.
+
+Nest's `new Logger(context)` stays allowed: it
 delegates to the installed pino logger.
 
 ## Request and job context

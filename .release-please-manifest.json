@@ -2,7 +2,7 @@
   "packages/identity": "8.3.0",
   "packages/platform-cache": "3.2.0",
   "packages/platform-http": "5.0.0",
-  "packages/observability": "0.4.0",
+  "packages/observability": "0.4.1",
   "packages/platform-runtime": "0.1.4",
   "packages/platform-db": "0.1.2",
   "packages/platform-jobs": "0.1.2",

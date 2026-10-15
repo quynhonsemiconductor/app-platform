@@ -14,6 +14,12 @@ import { requestContextStorage } from './request-context';
  * putting it here rather than documenting it.
  */
 
+/** The keys under which an error travels in a log call: `{ err }`, `{ error }` (what the products pass), `{ reason }` (unhandledRejection). */
+const ERROR_KEYS = ['err', 'error', 'reason'] as const;
+
+/** Headers that carry a credential, in a request or response, wherever they are nested. */
+const SECRET_HEADERS = ['authorization', 'cookie', 'set-cookie', 'x-api-key', 'x-csrf-token'];
+
 /** Credential-bearing paths. Never log these, in any environment. */
 const REDACTED_PATHS: readonly string[] = [
   'req.headers.authorization',
@@ -21,11 +27,54 @@ const REDACTED_PATHS: readonly string[] = [
   'res.headers["set-cookie"]',
   'req.headers["x-api-key"]',
   'req.headers["x-csrf-token"]',
-  // SDK errors nest the original request, which is the realistic leak path in
-  // background workers that never see an inbound HTTP header.
-  'err.config.headers.authorization',
-  'err.request.headers.authorization',
+  // Belt and braces behind `serializeError`, which already drops these keys: SDK and HTTP-client errors nest the original request, which is
+  // the realistic leak path in background workers that never see an inbound HTTP header. Covers every key an error is logged under.
+  ...ERROR_KEYS.flatMap((key) =>
+    ['config', 'request', 'response'].flatMap((holder) =>
+      SECRET_HEADERS.map((h) => `${key}.${holder}.headers["${h}"]`),
+    ),
+  ),
+  ...ERROR_KEYS.flatMap((key) => SECRET_HEADERS.map((h) => `${key}.headers["${h}"]`)),
 ];
+
+/** Keys an HTTP-client error carries that hold the whole request or response, headers and bodies included. Never logged. */
+const DROPPED_ERROR_KEYS = new Set([
+  'config',
+  'request',
+  'response',
+  'headers',
+  'req',
+  'res',
+  'options',
+  'body',
+  'data',
+]);
+
+/**
+ * The ONE serializer for an error logged under `err`, `error` or `reason`.
+ *
+ * pino's standard error serializer copies every enumerable property, and an axios-style error has `config` and `request` with the request's
+ * `Authorization` header: logging `{ error: sdkErr }` wrote `"authorization":"Bearer ..."` in clear. This keeps `type`, `message`, `stack`,
+ * `code`, `status` and the `cause` chain, and drops the keys that hold a request or response. Anything that is not an Error is passed through
+ * for the redact paths above to cover.
+ */
+export function serializeError(value: unknown, depth = 0): unknown {
+  if (!(value instanceof Error)) return value;
+  const out: Record<string, unknown> = {
+    type: value.constructor?.name ?? value.name,
+    message: value.message,
+    stack: value.stack,
+  };
+  const extra = value as unknown as Record<string, unknown>;
+  for (const key of Object.keys(extra)) {
+    if (key in out || DROPPED_ERROR_KEYS.has(key)) continue;
+    const v = extra[key];
+    // Scalars only (`code`, `status`, `errno`, `syscall`): an object property is where a request would be hiding.
+    if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) out[key] = v;
+  }
+  if (value.cause !== undefined && depth < 5) out['cause'] = serializeError(value.cause, depth + 1);
+  return out;
+}
 
 export interface LoggerFactoryOptions {
   /** Value of the `service` field on every line — `rova-api`, `rova-worker`. */
@@ -70,6 +119,8 @@ export function createLoggerOptions(options: LoggerFactoryOptions): PinoParams {
       transport: pretty
         ? { target: 'pino-pretty', options: { colorize: true, singleLine: false } }
         : undefined,
+      // Every key an error is logged under goes through ONE serializer that drops the request/response it carries (see `serializeError`).
+      serializers: Object.fromEntries(ERROR_KEYS.map((key) => [key, serializeError])),
       redact: { paths: [...REDACTED_PATHS], censor: '[REDACTED]' },
       // HttpLoggingInterceptor emits the per-request summary line instead, so the
       // default req/res pair would duplicate it.

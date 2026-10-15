@@ -59,6 +59,36 @@ the shell.
 A real environment variable always wins over the file, so this is safe in every
 environment rather than only locally.
 
+## Bootstrap: `createHttpApp` / `createWorkerApp`
+
+The whole process bootstrap, so no product wires it by hand (`@quynhonsemiconductor/platform-runtime/bootstrap`):
+
+```ts
+// apps/api/src/main.ts
+import { createHttpApp } from '@quynhonsemiconductor/platform-runtime/bootstrap';
+createHttpApp({
+  module: () => import('./app.module').then((m) => m.AppModule), // LAZY: see below
+  configure: (app) => bootstrapApp(app), // helmet, CSP, swagger, prefix: yours
+  http: { bodyLimit: 10 * 1024 * 1024, rawBody: true }, // optional
+  otel: { httpDurationBoundaries: [...] }, // optional
+});
+
+// apps/worker/src/main.ts
+createWorkerApp({ module: () => import('./worker.module').then((m) => m.WorkerModule) });
+```
+
+In order: `.env` -> OpenTelemetry -> your `before` hook -> **then** your module is imported -> Nest created with `bufferLogs` -> the shared
+pino logger installed (`useLogger`) and the buffered lines flushed -> your `configure` -> graceful shutdown -> listen -> unhandled-error
+handlers. A failure anywhere is **one JSON line on stderr** and exit code 1.
+
+**Why `module` is a function.** OpenTelemetry's auto-instrumentation has to patch `pg`, `http` and `ioredis` before they load. Importing
+your root module loads them, so a helper that was handed an already-imported module would be too late. The lazy import is the only way
+to guarantee the order, and it is the same discipline the old `import './otel'` first line enforced by hand.
+
+`service`, `env` and `version` come from `OTEL_SERVICE_NAME`, `DEPLOYMENT_ENV` and `SERVICE_VERSION`; the logger needs nothing from you.
+`createHttpApp` is Fastify-only. `prepareHttpApp` / `prepareWorkerApp` do everything except listening, signal handlers and the exit, for a
+conformance test (`@quynhonsemiconductor/observability/testing`) to boot the real path.
+
 ## Config
 
 The `Env` type is yours — it is your service's own variable set, so it cannot come
@@ -292,10 +322,11 @@ shared with the chart are listed in [PLATFORM-CONTRACT.md](../../docs/PLATFORM-C
 
 ## Subpaths
 
-| import                                            | what                                                                           |
-| ------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `@quynhonsemiconductor/platform-runtime`          | config, health, shutdown, `ExclusiveJob` (deprecated), request timing          |
-| `@quynhonsemiconductor/platform-runtime/load-env` | `.env` loading — a leaf module, import it **first**, before the OTel bootstrap |
+| import                                             | what                                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `@quynhonsemiconductor/platform-runtime`           | config, health, shutdown, `ExclusiveJob` (deprecated), request timing          |
+| `@quynhonsemiconductor/platform-runtime/load-env`  | `.env` loading — a leaf module, import it **first**, before the OTel bootstrap |
+| `@quynhonsemiconductor/platform-runtime/bootstrap` | `createHttpApp`, `createWorkerApp`, `prepareHttpApp`, `prepareWorkerApp`       |
 
 ## Testing your code
 

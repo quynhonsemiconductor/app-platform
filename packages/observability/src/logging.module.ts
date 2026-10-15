@@ -1,4 +1,5 @@
 import { Module, type DynamicModule } from '@nestjs/common';
+import type { DestinationStream } from 'pino';
 import { LoggerModule } from 'nestjs-pino';
 import { createLoggerOptions } from './logger.factory';
 import { loggerOptionsFromEnv } from './logger-env';
@@ -15,10 +16,18 @@ export class LoggingModule {
   static forRoot(
     env: NodeJS.ProcessEnv = process.env,
     defaults: { defaultServiceName?: string } = {},
+    /** Test seam: where the logger writes. Default: stdout. */
+    stream?: DestinationStream,
   ): DynamicModule {
+    const params = createLoggerOptions(loggerOptionsFromEnv(env, defaults));
+    const pinoHttp = params.pinoHttp as object;
     return {
       module: LoggingModule,
-      imports: [LoggerModule.forRoot(createLoggerOptions(loggerOptionsFromEnv(env, defaults)))],
+      imports: [
+        LoggerModule.forRoot(
+          stream ? { ...params, pinoHttp: [pinoHttp, stream] as never } : params,
+        ),
+      ],
     };
   }
 }

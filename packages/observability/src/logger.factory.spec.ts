@@ -154,7 +154,13 @@ describe('createLoggerOptions', () => {
       const { logger, lines } = capture();
       logger.error({ err: new Error('boom') }, 'failed');
       logger.error({ msg: 'Uncaught exception', error: new TypeError('bad') }, 'Bootstrap');
-      const [a, b] = lines.map((l) => JSON.parse(l) as Record<string, any>);
+      const [a, b] = lines.map(
+        (l) =>
+          JSON.parse(l) as Record<
+            string,
+            { stack?: string; type?: string; message?: string } | undefined
+          >,
+      );
       expect(a?.['err']).toMatchObject({ type: 'Error', message: 'boom' });
       expect(String(a?.['err']?.stack)).toContain('boom');
       expect(b?.['error']).toMatchObject({ type: 'TypeError', message: 'bad' });

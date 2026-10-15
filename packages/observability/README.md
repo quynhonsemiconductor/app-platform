@@ -214,30 +214,80 @@ affected: only the metric.
 
 ## Logger
 
+**Do not wire this by hand.** `createHttpApp` / `createWorkerApp` (`@quynhonsemiconductor/platform-runtime/bootstrap`) register
+`LoggingModule.forRoot()` around your root module and install it with `app.useLogger(...)`. Service name, environment and
+version come from the environment by convention:
+
+| field     | from                                                    |
+| --------- | ------------------------------------------------------- |
+| `service` | `OTEL_SERVICE_NAME` (each task sets its own)            |
+| `env`     | `DEPLOYMENT_ENV`, falling back to `NODE_ENV`            |
+| `version` | `SERVICE_VERSION` (the deploy sets it to the image tag) |
+| level     | `LOG_LEVEL` (default `info`)                            |
+| pretty    | `LOG_PRETTY=true` (default: pretty outside production)  |
+
+`createLoggerOptions(options)` is still exported for anything that needs the `nestjs-pino` options directly.
+
+### Log field contract
+
+Every runtime emits this, one JSON object per line. The Node implementation is `createPinoOptions`; KB (Python/structlog) is aligned to
+the same contract separately.
+
+| field                       | when                    | notes                                                                                                |
+| --------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| `level`                     | always                  | a **label**: `trace` `debug` `info` `warn` `error` `fatal`. Not pino's numeric 30/50.                |
+| `time`                      | always                  | ISO-8601 UTC, e.g. `2026-10-15T07:00:00.000Z`. Not epoch milliseconds.                               |
+| `msg`                       | always                  |                                                                                                      |
+| `service`, `env`, `version` | always                  | root bindings: on **every** line, not only request-bound ones. `env` is the deployment environment.  |
+| `context`                   | when known              | the Nest class / context name                                                                        |
+| `trace.id`, `span.id`       | when a span is active   |                                                                                                      |
+| `correlationId`             | inside a request        | plus `workspaceId` / `userId` where known                                                            |
+| `err`                       | when an error is logged | `{ type, message, stack }`. Both `err` and the `error` key are serialised; an `Error` is never `{}`. |
+
+**Redaction**, on every line: `req.headers.authorization`, `req.headers.cookie`, `req.headers["x-api-key"]`,
+`req.headers["x-csrf-token"]`, `res.headers["set-cookie"]`, and `err.config.headers.authorization` / `err.request.headers.authorization`
+(the SDK-error leak path) are written as `[REDACTED]`.
+
+**Breaking in 0.5.0:** `level` and `time` changed from pino's numeric level and epoch milliseconds. A query that parses either must change.
+
+### Scripts: `createScriptLogger(name)`
+
+For code that is not a Nest app (the migrator, seed and ops scripts): the same lines, to stdout, with no Nest dependency.
+`console.*` wrote free text the log pipeline could not parse. A human-facing report (a table someone reads) is output, not a log: write
+it with `process.stdout.write`.
+
 ```ts
-LoggerModule.forRootAsync({
-  inject: [AppConfigService],
-  useFactory: (config: AppConfigService) =>
-    createLoggerOptions({
-      serviceName: 'rova-api',
-      nodeEnv: config.get('NODE_ENV'),
-      serviceVersion: config.get('SERVICE_VERSION'),
-      level: config.get('LOG_LEVEL'),
-      pretty: config.get('LOG_PRETTY'),
+const log = createScriptLogger('rova-migrator'); // service = OTEL_SERVICE_NAME, else the name
+log.info('Running migrations');
+```
+
+### Conformance: `@quynhonsemiconductor/observability/testing`
+
+Run it in your CI. Boot your real API and worker through the shared bootstrap with the capture, and it asserts that **every** captured
+line, boot and shutdown included, is a JSON object with every contract field, that `env` is the deployment environment, that no
+line is Nest's `[Nest] ...` text, and that credentials are redacted:
+
+```ts
+const lines = await runLoggingConformance({
+  expected: { service: 'rova-worker', env: 'develop' },
+  boot: async (logStream) => ({
+    app: await prepareWorkerApp({
+      module: () => import('./worker.module').then((m) => m.WorkerModule),
+      env,
+      logStream,
     }),
+  }),
 });
 ```
 
-What you get on every line, without any call site passing it:
+A worker that built the pino logger but never installed it fails with the offending text lines. Also exported: `assertLogContract`,
+`assertRedacted`, `createLogCapture`.
 
-- `trace.id` / `span.id` from the active span, so a log links to its trace
-- `workspaceId` / `userId` / `correlationId` from AsyncLocalStorage
-- `service` / `env` / `version`
-- credentials redacted — `authorization`, `cookie`, `set-cookie`, `x-api-key`,
-  `x-csrf-token`, and the same headers nested inside SDK error objects
-- `autoLogging: false`, on the assumption the app emits its own request-summary line
+### Lint: `@quynhonsemiconductor/observability/eslint`
 
-Pretty-printed outside production, raw JSON in deployed environments.
+`loggingLintConfig()` returns flat-config entries: `no-console` (allow CI tooling with `consoleAllowedIn`) and a ban on
+`NestFactory.create*` outside tests, which is how a hand-written bootstrap is kept out. Nest's `new Logger(context)` stays allowed: it
+delegates to the installed pino logger.
 
 ## Request and job context
 
@@ -382,14 +432,16 @@ the auto-instrumented baseline is what guarantees nothing is blind.
 
 ## Subpaths
 
-| import                                     | what                                                                                         |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `@quynhonsemiconductor/observability`      | logger options, request and job context, metrics, `failOpenLog`, `PROBE_PATHS`, `@Span`      |
-| `@quynhonsemiconductor/observability/otel` | `startOtel`, `shutdownOtel` — import this **first** in `main`, never through the root barrel |
+| import                                        | what                                                                                         |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `@quynhonsemiconductor/observability`         | logger options, request and job context, metrics, `failOpenLog`, `PROBE_PATHS`, `@Span`      |
+| `@quynhonsemiconductor/observability/otel`    | `startOtel`, `shutdownOtel` — import this **first** in `main`, never through the root barrel |
+| `@quynhonsemiconductor/observability/testing` | the log contract as an executable check (`runLoggingConformance`, `assertLogContract`)       |
+| `@quynhonsemiconductor/observability/eslint`  | `loggingLintConfig()`: no `console`, no hand-written Nest bootstrap                          |
 
 ## Testing your code
 
-There is no `/testing` subpath. The recorders (`HttpMetrics`, `JobMetrics`, `QueueMetrics`,
+Run the logging conformance check (see Logger above). The recorders (`HttpMetrics`, `JobMetrics`, `QueueMetrics`,
 `SecurityMetrics`, `AuthMetrics`) are plain classes over the OpenTelemetry API, so a test asserts against
 an in-memory metric reader; `withJobContext` and `requestContextStorage.run` seed the context a log line
 reads. With `OTEL_ENABLED` unset, `startOtel` is a no-op and tests run without a collector.

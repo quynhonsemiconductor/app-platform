@@ -244,9 +244,9 @@ the same contract separately.
 | `correlationId`             | inside a request        | plus `workspaceId` / `userId` where known                                                            |
 | `err`                       | when an error is logged | `{ type, message, stack }`. Both `err` and the `error` key are serialised; an `Error` is never `{}`. |
 
-**Redaction**, on every line: `req.headers.authorization`, `req.headers.cookie`, `req.headers["x-api-key"]`,
-`req.headers["x-csrf-token"]`, `res.headers["set-cookie"]`, and `err.config.headers.authorization` / `err.request.headers.authorization`
-(the SDK-error leak path) are written as `[REDACTED]`.
+**Errors** logged under `err`, `error` or `reason` (`reason` is what `unhandledRejection` hands over) go through one serializer: `type`, `message`, `stack`, scalar fields such as `code` and `status`, and the `cause` chain. The keys that hold the request or response an HTTP client attached (`config`, `request`, `response`, `headers`, `data`, ...) are **dropped**, so an `Authorization` header never reaches the log. A non-Error object logged under those keys is covered by the redact paths below.
+
+**Redaction**, on every line: `req.headers.authorization`, `.cookie`, `x-api-key`, `x-csrf-token`, `res.headers["set-cookie"]`, and, under each of `err` / `error` / `reason`, the same credential headers in `config.headers`, `request.headers`, `response.headers` and `headers` are written as `[REDACTED]`.
 
 **Breaking in 0.5.0:** `level` and `time` changed from pino's numeric level and epoch milliseconds. A query that parses either must change.
 
@@ -257,6 +257,8 @@ For code that is not a Nest app (the migrator, seed and ops scripts): the same l
 it with `process.stdout.write`.
 
 ```ts
+import { createScriptLogger } from '@quynhonsemiconductor/observability/script-logger'; // Nest-free: not the root barrel
+
 const log = createScriptLogger('rova-migrator'); // service = OTEL_SERVICE_NAME, else the name
 log.info('Running migrations');
 ```
@@ -432,12 +434,13 @@ the auto-instrumented baseline is what guarantees nothing is blind.
 
 ## Subpaths
 
-| import                                        | what                                                                                         |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `@quynhonsemiconductor/observability`         | logger options, request and job context, metrics, `failOpenLog`, `PROBE_PATHS`, `@Span`      |
-| `@quynhonsemiconductor/observability/otel`    | `startOtel`, `shutdownOtel` — import this **first** in `main`, never through the root barrel |
-| `@quynhonsemiconductor/observability/testing` | the log contract as an executable check (`runLoggingConformance`, `assertLogContract`)       |
-| `@quynhonsemiconductor/observability/eslint`  | `loggingLintConfig()`: no `console`, no hand-written Nest bootstrap                          |
+| import                                              | what                                                                                         |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `@quynhonsemiconductor/observability`               | logger options, request and job context, metrics, `failOpenLog`, `PROBE_PATHS`, `@Span`      |
+| `@quynhonsemiconductor/observability/otel`          | `startOtel`, `shutdownOtel` — import this **first** in `main`, never through the root barrel |
+| `@quynhonsemiconductor/observability/script-logger` | `createScriptLogger` without the Nest-importing root barrel (migrators, ops scripts)         |
+| `@quynhonsemiconductor/observability/testing`       | the log contract as an executable check (`runLoggingConformance`, `assertLogContract`)       |
+| `@quynhonsemiconductor/observability/eslint`        | `loggingLintConfig()`: no `console`, no hand-written Nest bootstrap                          |
 
 ## Testing your code
 

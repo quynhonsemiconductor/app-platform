@@ -21,6 +21,10 @@
     "./eslint": {
       "types": "./dist/eslint.d.ts",
       "default": "./dist/eslint.js"
+    },
+    "./script-logger": {
+      "types": "./dist/script-logger.d.ts",
+      "default": "./dist/script-logger.js"
     }
   },
   "files": [
@@ -29,6 +33,8 @@
     "eslint.js",
     "otel.d.ts",
     "otel.js",
+    "script-logger.d.ts",
+    "script-logger.js",
     "testing.d.ts",
     "testing.js"
   ],
@@ -75,5 +81,6 @@
     "reflect-metadata": "^0.2.2",
     "@nestjs/common": "^11.0.0",
     "@opentelemetry/context-async-hooks": "^2.10.0"
-  }
+  },
+  "peerDependenciesMeta": {}
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { loggerOptionsFromEnv } from './logger-env';
@@ -88,5 +90,39 @@ describe('createScriptLogger', () => {
       'x',
     );
     expect((JSON.parse(lines[0]!) as { service: string }).service).toBe('custom');
+  });
+});
+
+describe('the script logger stays Nest-free (the ./script-logger subpath)', () => {
+  // A migrator has no Nest. Importing the logger must not drag `@nestjs/*` or `nestjs-pino` in through any file it reaches
+  // (the root barrel pulled in 166 modules). A TYPE-only import is erased and does not count.
+  const root = join(__dirname, 'script-logger.ts');
+  const reached = new Set<string>();
+  const offenders: string[] = [];
+  const walk = (file: string): void => {
+    if (reached.has(file)) return;
+    reached.add(file);
+    const source = readFileSync(file, 'utf8');
+    for (const m of source.matchAll(/^import\s+(?!type\b)[^;]*?from\s+'([^']+)';/gms)) {
+      const spec = m[1] as string;
+      if (spec.startsWith('.')) walk(join(dirname(file), `${spec}.ts`));
+      else if (spec.startsWith('@nestjs/') || spec === 'nestjs-pino')
+        offenders.push(`${file} -> ${spec}`);
+    }
+  };
+
+  it('reaches no @nestjs/* or nestjs-pino import', () => {
+    walk(root);
+    expect(reached.size).toBeGreaterThan(2); // it did walk logger.factory and the request-context leaf
+    expect(offenders).toEqual([]);
+  });
+
+  it('is exported as a subpath, with the legacy-resolution shim', () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
+      exports: Record<string, unknown>;
+      files: string[];
+    };
+    expect(pkg.exports['./script-logger']).toBeDefined();
+    expect(pkg.files).toEqual(expect.arrayContaining(['script-logger.js', 'script-logger.d.ts']));
   });
 });

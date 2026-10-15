@@ -2,7 +2,7 @@ import { hostname } from 'node:os';
 import { trace, isSpanContextValid } from '@opentelemetry/api';
 import pino from 'pino';
 import type { Params as PinoParams } from 'nestjs-pino';
-import { requestContextStorage } from './request-context';
+import { requestContextStorage } from './request-context-storage';
 
 /**
  * The one pino configuration, shared by every app.
@@ -104,8 +104,8 @@ export interface LoggerFactoryOptions {
  *
  *  - `level` is the LABEL (`info`, `error`), not pino's numeric 30/50: every runtime emits a string, so one query works for all.
  *  - `time` is ISO-8601 UTC, not epoch milliseconds, for the same reason.
- *  - `err` (and the `error` key the products pass) go through pino's standard error serializer, so an Error is `{type, message, stack}` and
- *    not `{}`.
+ *  - `err`, `error` (what the products pass) and `reason` (unhandledRejection) go through {@link serializeError}: an Error is
+ *    `{type, message, stack, code?, status?, cause?}`, never `{}`, and never carries the request it made (its headers hold credentials).
  *  - `service`, `env` and `version` are ROOT bindings (`base`), so they are on every line, not only request-bound ones.
  *  - `trace.id` / `span.id` and the request business context come from the mixin on every write.
  */
@@ -122,7 +122,7 @@ export function createPinoOptions(options: LoggerFactoryOptions): pino.LoggerOpt
     },
     formatters: { level: (label) => ({ level: label }) },
     timestamp: pino.stdTimeFunctions.isoTime,
-    serializers: { err: pino.stdSerializers.errWithCause, error: pino.stdSerializers.errWithCause },
+    serializers: Object.fromEntries(ERROR_KEYS.map((key) => [key, serializeError])),
     redact: { paths: [...REDACTED_PATHS], censor: '[REDACTED]' },
     mixin: () => {
       const fields: Record<string, unknown> = {};

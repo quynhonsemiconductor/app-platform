@@ -36,4 +36,22 @@ describe('loggingLintConfig', () => {
     expect(await lint('NestFactory.create(M);', 'apps/api/src/x.spec.ts')).toEqual([]);
     expect(await lint("new Logger('Ctx').log('x');", 'apps/api/src/svc.ts')).toEqual([]);
   });
+
+  it.each([
+    ["import { NestFactory as NF } from '@nestjs/core';\nvoid NF;", 'an aliased import'],
+    ["import * as core from '@nestjs/core';\ncore.NestFactory.create(M);", 'a namespace import'],
+    ['const { create } = NestFactory;\nvoid create;', 'a destructure'],
+  ])('catches what a call-site selector misses: %#', async (code, _what) => {
+    const msgs = await lint(code, 'apps/api/src/main.ts');
+    expect(msgs.length).toBeGreaterThan(0);
+    expect(msgs.join('\n')).toMatch(/no-restricted-(syntax|imports)/);
+  });
+
+  it('forbids building pino in app code, and allows it in tests', async () => {
+    for (const mod of ['pino', 'pino-http']) {
+      const msgs = await lint(`import p from '${mod}';\nvoid p;`, 'apps/api/src/logger.ts');
+      expect(msgs).toEqual([expect.stringContaining('no-restricted-imports')]);
+    }
+    expect(await lint("import p from 'pino';\nvoid p;", 'apps/api/src/x.spec.ts')).toEqual([]);
+  });
 });

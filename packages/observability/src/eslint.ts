@@ -21,8 +21,17 @@ export interface LoggingLintOptions {
   nestFactoryAllowedIn?: string[];
 }
 
-const NEST_FACTORY_SELECTOR =
-  "CallExpression[callee.object.name='NestFactory'][callee.property.name=/^(create|createApplicationContext|createMicroservice)$/]";
+/** `NestFactory.create*(...)`, and any other use of the name through a namespace import (`core.NestFactory`) or a destructure. */
+const NEST_FACTORY_SELECTORS = [
+  "CallExpression[callee.object.name='NestFactory'][callee.property.name=/^(create|createApplicationContext|createMicroservice)$/]",
+  "MemberExpression[property.name='NestFactory']",
+  "VariableDeclarator[init.name='NestFactory']",
+];
+
+const BOOTSTRAP_MESSAGE =
+  'Do not bootstrap Nest by hand: use createHttpApp / createWorkerApp from @quynhonsemiconductor/platform-runtime/bootstrap. They install the shared pino logger (a hand-written bootstrap logs Nest text, not JSON), OpenTelemetry, graceful shutdown and the fatal handler.';
+const PINO_MESSAGE =
+  "Do not build a pino logger in app code: inject Nest's Logger (it is the shared pino logger), or use createScriptLogger from @quynhonsemiconductor/observability/script-logger in a script. A second configuration drops the redaction, the field contract and the trace ids.";
 
 export function loggingLintConfig(options: LoggingLintOptions = {}): object[] {
   const consoleAllowed = options.consoleAllowedIn ?? [];
@@ -47,10 +56,18 @@ export function loggingLintConfig(options: LoggingLintOptions = {}): object[] {
       rules: {
         'no-restricted-syntax': [
           'error',
+          ...NEST_FACTORY_SELECTORS.map((selector) => ({ selector, message: BOOTSTRAP_MESSAGE })),
+        ],
+        // The import itself, which catches an ALIAS (`import { NestFactory as NF }`) that no call-site selector can see; and the raw pino
+        // constructors, so app code logs through the injected Nest logger and scripts through `createScriptLogger` (one configuration).
+        'no-restricted-imports': [
+          'error',
           {
-            selector: NEST_FACTORY_SELECTOR,
-            message:
-              'Do not bootstrap Nest by hand: use createHttpApp / createWorkerApp from @quynhonsemiconductor/platform-runtime/bootstrap. They install the shared pino logger (a hand-written bootstrap logs Nest text, not JSON), OpenTelemetry, graceful shutdown and the fatal handler.',
+            paths: [
+              { name: '@nestjs/core', importNames: ['NestFactory'], message: BOOTSTRAP_MESSAGE },
+              { name: 'pino', message: PINO_MESSAGE },
+              { name: 'pino-http', message: PINO_MESSAGE },
+            ],
           },
         ],
       },

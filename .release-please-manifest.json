@@ -2,8 +2,8 @@
   "packages/identity": "8.3.0",
   "packages/platform-cache": "3.2.0",
   "packages/platform-http": "5.0.0",
-  "packages/observability": "0.4.2",
-  "packages/platform-runtime": "0.1.4",
+  "packages/observability": "0.5.0",
+  "packages/platform-runtime": "0.2.0",
   "packages/platform-db": "0.1.2",
   "packages/platform-jobs": "0.1.2",
   "packages/platform-mail": "0.1.3"

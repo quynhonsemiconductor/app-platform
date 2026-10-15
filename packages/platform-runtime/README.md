@@ -86,7 +86,7 @@ your root module loads them, so a helper that was handed an already-imported mod
 to guarantee the order, and it is the same discipline the old `import './otel'` first line enforced by hand.
 
 `service`, `env` and `version` come from `OTEL_SERVICE_NAME`, `DEPLOYMENT_ENV` and `SERVICE_VERSION`; the logger needs nothing from you.
-`createHttpApp` is Fastify-only. `prepareHttpApp` / `prepareWorkerApp` do everything except listening, signal handlers and the exit, for a
+A repo whose api and worker share one `.env` and name themselves independently passes `otel: { serviceNameEnvVar: 'OTEL_WORKER_SERVICE_NAME' }`; OpenTelemetry and the logger then both read that variable. `createHttpApp` is Fastify-only. `prepareHttpApp` / `prepareWorkerApp` do everything except listening, signal handlers and the exit, for a
 conformance test (`@quynhonsemiconductor/observability/testing`) to boot the real path.
 
 ## Config

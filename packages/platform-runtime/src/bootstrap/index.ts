@@ -24,7 +24,15 @@ export interface BootstrapOptions {
   /** The product's root module, imported LAZILY so OpenTelemetry is installed before pg/http/ioredis load. */
   module: () => Promise<Type<unknown>>;
   /** OpenTelemetry extras. Service name, environment and version come from the environment. */
-  otel?: { defaultServiceName?: string; httpDurationBoundaries?: number[] };
+  otel?: {
+    defaultServiceName?: string;
+    httpDurationBoundaries?: number[];
+    /**
+     * Read the service name from THIS variable instead of `OTEL_SERVICE_NAME`, for a repo whose api and worker share one `.env` and name
+     * themselves independently (opshub: `OTEL_WORKER_SERVICE_NAME`). The logger's `service` follows the same rule as OpenTelemetry's.
+     */
+    serviceNameEnvVar?: string;
+  };
   /** Runs after OTel and before the module is imported (e.g. set the process role that `@platform` reads on import). */
   before?: () => void | Promise<void>;
   /** Test seam: where the shared logger writes. Default: stdout. */
@@ -61,9 +69,19 @@ async function installLogging(
 }
 
 async function composeRoot(options: BootstrapOptions): Promise<Type<unknown>> {
+  const envVar = options.otel?.serviceNameEnvVar;
+  const baseEnv = options.env ?? process.env;
+  // Logger and OpenTelemetry must agree on the service name. OTel reads `envVar` (else the default); give the logger the same answer.
+  const loggerEnv: NodeJS.ProcessEnv = envVar
+    ? {
+        ...baseEnv,
+        OTEL_SERVICE_NAME: baseEnv[envVar] ?? options.otel?.defaultServiceName ?? 'app',
+      }
+    : baseEnv;
   startOtel({
     defaultServiceName:
       options.otel?.defaultServiceName ?? options.env?.['OTEL_SERVICE_NAME'] ?? 'app',
+    ...(envVar ? { serviceNameEnvVar: envVar } : {}),
     ...(options.otel?.httpDurationBoundaries
       ? { httpDurationBoundaries: options.otel.httpDurationBoundaries }
       : {}),
@@ -77,10 +95,7 @@ async function composeRoot(options: BootstrapOptions): Promise<Type<unknown>> {
   ]);
   class RootModule {}
   Module({
-    imports: [
-      LoggingModule.forRoot(options.env ?? process.env, {}, options.logStream),
-      productModule,
-    ],
+    imports: [LoggingModule.forRoot(loggerEnv, {}, options.logStream), productModule],
   })(RootModule);
   return RootModule;
 }

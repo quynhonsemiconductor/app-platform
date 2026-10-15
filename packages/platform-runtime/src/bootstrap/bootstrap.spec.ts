@@ -92,6 +92,23 @@ describe('the shared bootstrap writes the log contract', () => {
   });
 
   // The regression the kit exists for: the pino logger built but never installed.
+  it('serviceNameEnvVar: the logger names the process from that variable, not OTEL_SERVICE_NAME (api and worker share one .env)', async () => {
+    const lines = await runLoggingConformance({
+      expected: { service: 'svc-worker', env: 'develop', version: 'sha-abc123' },
+      boot: async (logStream) => ({
+        app: await prepareWorkerApp({
+          module: async () => WorkerProductModule,
+          env: { ...ENV, OTEL_SERVICE_NAME: 'svc-api', OTEL_WORKER_SERVICE_NAME: 'svc-worker' },
+          otel: { defaultServiceName: 'svc-worker', serviceNameEnvVar: 'OTEL_WORKER_SERVICE_NAME' },
+          logStream,
+        }),
+      }),
+    });
+    expect(
+      lines.every((l) => (JSON.parse(l) as { service: string }).service === 'svc-worker'),
+    ).toBe(true);
+  });
+
   it('two boots in ONE process each capture their own lines (nestjs-pino keeps a process-wide out-of-context logger)', async () => {
     for (const round of [1, 2]) {
       const lines = await runLoggingConformance({

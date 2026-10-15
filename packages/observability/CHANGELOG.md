@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.4.1...observability-v0.4.2) (2026-10-15)
+
+
+### 🐛 Bug Fixes
+
+* **observability:** never log the request an error carries ([#246](https://github.com/quynhonsemiconductor/app-platform/issues/246)) ([c83402d](https://github.com/quynhonsemiconductor/app-platform/commit/c83402d30840f9446fb6504b114de6f0908f9aad))
+
 ## [0.4.1](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.4.0...observability-v0.4.1) (2026-10-15)
 
 

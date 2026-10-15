@@ -72,10 +72,7 @@ async function assertSingleLoggerModule(app: INestApplicationContext): Promise<v
   }
 }
 
-async function installLogging(
-  app: INestApplicationContext,
-  options: BootstrapOptions,
-): Promise<{
+async function installLogging(app: INestApplicationContext): Promise<{
   log: (message: string, context: string) => void;
   error: (o: object, context: string) => void;
 }> {
@@ -85,7 +82,6 @@ async function installLogging(
   app.useLogger(logger);
   // Hand the lines buffered during creation to the pino logger, so the bootstrap lines are JSON too.
   app.flushLogs();
-  void options;
   return {
     log: (message, context) => logger.log(message, context),
     error: (o, context) => logger.error(o, context),
@@ -194,7 +190,7 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
       ...(options.http?.rawBody ? { rawBody: true } : {}),
     },
   );
-  await installLogging(app, options);
+  await installLogging(app);
   await options.configure?.(app);
   return app;
 }
@@ -211,7 +207,7 @@ export async function prepareWorkerApp(
     logger: bootstrapLogger, // see prepareHttpApp
     abortOnError: false,
   });
-  await installLogging(app, options);
+  await installLogging(app);
   return app;
 }
 
@@ -252,6 +248,12 @@ export function installProcessErrorHandlers(
   });
 }
 
+/** The port the server is actually bound to: with `PORT=0` the OS picks one, and the requested `0` is useless in a log line. */
+export function boundPort(app: INestApplication, requested: number): number {
+  const address = app.getHttpServer().address() as { port?: number } | string | null;
+  return typeof address === 'object' && address?.port ? address.port : requested;
+}
+
 /** Start an HTTP service. Never rejects: a failure is one JSON line on stderr and exit code 1. */
 export async function createHttpApp(options: HttpAppOptions): Promise<void> {
   try {
@@ -264,7 +266,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<void> {
     enableGracefulShutdown(app as INestApplication);
     await app.listen(port, host);
     const logger = app.get(Logger);
-    logger.log(`Listening on ${host}:${port}`, 'Bootstrap');
+    logger.log(`Listening on ${host}:${boundPort(app, port)}`, 'Bootstrap');
     installProcessErrorHandlers({ error: (o, c) => logger.error(o, c) });
   } catch (error) {
     await failFatal(error, options);

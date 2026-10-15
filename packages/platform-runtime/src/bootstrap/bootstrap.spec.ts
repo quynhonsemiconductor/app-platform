@@ -6,7 +6,7 @@ import {
   createLogCapture,
   runLoggingConformance,
 } from '@quynhonsemiconductor/observability/testing';
-import { installProcessErrorHandlers, prepareHttpApp, prepareWorkerApp } from './index';
+import { boundPort, installProcessErrorHandlers, prepareHttpApp, prepareWorkerApp } from './index';
 
 const ENV = {
   NODE_ENV: 'production', // pinned to production in deployed environments on purpose
@@ -109,50 +109,69 @@ describe('the shared bootstrap writes the log contract', () => {
     ).toBe(true);
   });
 
-  it('a boot failure is ONE JSON fatal line and exit 1, not Nest text and SIGABRT', async () => {
-    // A provider that throws while Nest builds the instances: the path where Nest's default is to log TEXT and process.abort().
-    @Module({
-      providers: [
-        {
-          provide: 'EXPLODING',
-          useFactory: () => {
-            throw new Error('DATABASE_URL is required');
+  it.each(['createWorkerApp', 'createHttpApp'] as const)(
+    '%s: a boot failure is ONE JSON fatal line and exit 1, not Nest text and SIGABRT',
+    async (factory) => {
+      // A provider that throws while Nest builds the instances: the path where Nest's default is to log TEXT and process.abort().
+      @Module({
+        providers: [
+          {
+            provide: 'EXPLODING',
+            useFactory: () => {
+              throw new Error('DATABASE_URL is required');
+            },
           },
-        },
-      ],
-    })
-    class ExplodingModule {}
-    const { createWorkerApp } = await import('./index');
-    const { createLogCapture } = await import('@quynhonsemiconductor/observability/testing');
-    const capture = createLogCapture();
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    capture.install();
-    try {
-      await createWorkerApp({
-        module: async () => ExplodingModule,
-        env: ENV,
-        logStream: capture.stream,
+        ],
+      })
+      class ExplodingModule {}
+      const bootstrap = await import('./index');
+      const { createLogCapture } = await import('@quynhonsemiconductor/observability/testing');
+      const capture = createLogCapture();
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      capture.install();
+      try {
+        await bootstrap[factory]({
+          module: async () => ExplodingModule,
+          env: ENV,
+          logStream: capture.stream,
+        });
+      } finally {
+        capture.restore();
+      }
+      const exitCalls = exit.mock.calls.map((c) => c[0]);
+      exit.mockRestore();
+      expect(exitCalls).toEqual([1]);
+      // EVERY captured line, not only the fatal one: what Nest wrote while creating the app (the buffered "Starting Nest application" lines and
+      // the ExceptionHandler stack) must be JSON in the contract shape too, never coloured ConsoleLogger text.
+      const all = capture.lines();
+      expect(all.length).toBeGreaterThan(1);
+      assertLogContract(all, expected);
+      expect(all.some((l) => l.includes('ExceptionHandler'))).toBe(true);
+      const fatal = capture.lines().filter((l) => l.includes('Fatal bootstrap error'));
+      expect(fatal).toHaveLength(1);
+      expect(JSON.parse(fatal[0] as string)).toMatchObject({
+        level: 'fatal',
+        service: 'svc-under-test',
+        env: 'develop',
+        err: { message: 'DATABASE_URL is required' },
       });
-    } finally {
-      capture.restore();
-    }
-    const exitCalls = exit.mock.calls.map((c) => c[0]);
-    exit.mockRestore();
-    expect(exitCalls).toEqual([1]);
-    // EVERY captured line, not only the fatal one: what Nest wrote while creating the app (the buffered "Starting Nest application" lines and
-    // the ExceptionHandler stack) must be JSON in the contract shape too, never coloured ConsoleLogger text.
-    const all = capture.lines();
-    expect(all.length).toBeGreaterThan(1);
-    assertLogContract(all, expected);
-    expect(all.some((l) => l.includes('ExceptionHandler'))).toBe(true);
-    const fatal = capture.lines().filter((l) => l.includes('Fatal bootstrap error'));
-    expect(fatal).toHaveLength(1);
-    expect(JSON.parse(fatal[0] as string)).toMatchObject({
-      level: 'fatal',
-      service: 'svc-under-test',
-      env: 'develop',
-      err: { message: 'DATABASE_URL is required' },
+    },
+  );
+
+  it('boundPort returns the port the OS gave for PORT=0, not the requested 0', async () => {
+    const app = await prepareHttpApp({
+      module: async () => HttpProductModule,
+      env: ENV,
+      logStream: createLogCapture().stream,
     });
+    await app.listen(0, '127.0.0.1');
+    try {
+      const port = boundPort(app, 0);
+      expect(port).toBeGreaterThan(0);
+      expect(boundPort(app, 0)).toBe((app.getHttpServer().address() as { port: number }).port);
+    } finally {
+      await app.close();
+    }
   });
 
   it('two boots in ONE process each capture their own lines (nestjs-pino keeps a process-wide out-of-context logger)', async () => {

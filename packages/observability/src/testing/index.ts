@@ -180,6 +180,16 @@ export async function runLoggingConformance(options: LoggingConformanceOptions):
     // Nest's logger override is PROCESS-GLOBAL: a logger installed by an earlier boot in this process would otherwise swallow the lines of an
     // app that never installed one, and the check would see "no output" instead of the text lines it exists to catch.
     NestLogger.overrideLogger(new ConsoleLogger());
+    // nestjs-pino keeps ONE out-of-context pino logger per process, created by the first LoggingModule and reused by every later one. A second
+    // boot in the same process (an API test, then a worker test) would write to the FIRST boot's stream and capture nothing.
+    try {
+      const { __resetOutOfContextForTests } = (await import('nestjs-pino/PinoLogger')) as {
+        __resetOutOfContextForTests?: () => void;
+      };
+      __resetOutOfContextForTests?.();
+    } catch {
+      /* a nestjs-pino without the reset hook: a single boot per process still works */
+    }
     const booted = await options.boot(capture.stream);
     new NestLogger('Conformance').log('conformance: a Nest Logger line');
     const pinoLogger = booted.app.get(Logger as never) as InstanceType<typeof Logger>;
@@ -206,6 +216,8 @@ export async function runLoggingConformance(options: LoggingConformanceOptions):
     capture.restore();
   }
   const lines = capture.lines();
+  // A boot that threw before anything was logged: the boot error IS the finding; "no log line" would only hide it.
+  if (failure && lines.length === 0) throw failure;
   // The lines first: a process that never installed the logger fails here with the offending text lines, which is far more useful than the
   // secondary error (no Logger to inject) that followed from it.
   assertLogContract(lines, options.expected);

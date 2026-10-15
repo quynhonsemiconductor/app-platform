@@ -92,6 +92,33 @@ describe('the shared bootstrap writes the log contract', () => {
   });
 
   // The regression the kit exists for: the pino logger built but never installed.
+  it('two boots in ONE process each capture their own lines (nestjs-pino keeps a process-wide out-of-context logger)', async () => {
+    for (const round of [1, 2]) {
+      const lines = await runLoggingConformance({
+        expected,
+        boot: async (logStream) => ({
+          app: await prepareWorkerApp({
+            module: async () => WorkerProductModule,
+            env: ENV,
+            logStream,
+          }),
+        }),
+      });
+      expect(lines.length, `boot ${round} captured nothing`).toBeGreaterThan(0);
+    }
+  });
+
+  it('a boot that throws before anything is logged surfaces the boot error, not "no log line was captured"', async () => {
+    await expect(
+      runLoggingConformance({
+        expected,
+        boot: async () => {
+          throw new Error('DATABASE_URL is required');
+        },
+      }),
+    ).rejects.toThrow('DATABASE_URL is required');
+  });
+
   it('the conformance check FAILS for a worker that never installed the logger (Nest text lines)', async () => {
     const { NestFactory } = await import('@nestjs/core');
     await expect(

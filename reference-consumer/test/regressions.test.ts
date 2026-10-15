@@ -91,7 +91,7 @@ describe('regressions (no worker)', () => {
 
       // The cause is logged, with the request's id, as identity.mail_enqueue_failed (README promises this).
       const failure = await stack.api.waitFor(/mail_enqueue_failed/, 10_000, id);
-      expect(failure['level']).toBe(50);
+      expect(failure['level']).toBe('error'); // a label since observability 0.5.0 (was pino's 50)
     } finally {
       await stack.admin.query('GRANT INSERT ON ALL TABLES IN SCHEMA pgboss TO m6_app');
     }

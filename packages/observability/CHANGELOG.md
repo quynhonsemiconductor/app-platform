@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.4.0...observability-v0.4.1) (2026-10-15)
+
+
+### 🐛 Bug Fixes
+
+* **observability:** service, env and version on every log line, not only request lines ([#242](https://github.com/quynhonsemiconductor/app-platform/issues/242)) ([7313f25](https://github.com/quynhonsemiconductor/app-platform/commit/7313f259b4df14239a3c095709f446405db3162c))
+
 ## [0.4.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.3.0...observability-v0.4.0) (2026-10-14)
 
 

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { Controller, Get, Logger, Module } from '@nestjs/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assertLogContract,
   createLogCapture,
@@ -107,6 +107,46 @@ describe('the shared bootstrap writes the log contract', () => {
     expect(
       lines.every((l) => (JSON.parse(l) as { service: string }).service === 'svc-worker'),
     ).toBe(true);
+  });
+
+  it('a boot failure is ONE JSON fatal line and exit 1, not Nest text and SIGABRT', async () => {
+    // A provider that throws while Nest builds the instances: the path where Nest's default is to log TEXT and process.abort().
+    @Module({
+      providers: [
+        {
+          provide: 'EXPLODING',
+          useFactory: () => {
+            throw new Error('DATABASE_URL is required');
+          },
+        },
+      ],
+    })
+    class ExplodingModule {}
+    const { createWorkerApp } = await import('./index');
+    const { createLogCapture } = await import('@quynhonsemiconductor/observability/testing');
+    const capture = createLogCapture();
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    capture.install();
+    try {
+      await createWorkerApp({
+        module: async () => ExplodingModule,
+        env: ENV,
+        logStream: capture.stream,
+      });
+    } finally {
+      capture.restore();
+    }
+    const exitCalls = exit.mock.calls.map((c) => c[0]);
+    exit.mockRestore();
+    expect(exitCalls).toEqual([1]);
+    const fatal = capture.lines().filter((l) => l.includes('Fatal bootstrap error'));
+    expect(fatal).toHaveLength(1);
+    expect(JSON.parse(fatal[0] as string)).toMatchObject({
+      level: 'fatal',
+      service: 'svc-under-test',
+      env: 'develop',
+      err: { message: 'DATABASE_URL is required' },
+    });
   });
 
   it('two boots in ONE process each capture their own lines (nestjs-pino keeps a process-wide out-of-context logger)', async () => {

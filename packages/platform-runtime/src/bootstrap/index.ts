@@ -35,7 +35,7 @@ export interface BootstrapOptions {
   };
   /** Runs after OTel and before the module is imported (e.g. set the process role that `@platform` reads on import). */
   before?: () => void | Promise<void>;
-  /** Test seam: where the shared logger writes. Default: stdout. */
+  /** Test seam: where the shared logger writes (and the fatal line). Default: stdout (the fatal line: stderr). */
   logStream?: DestinationStream;
   /** Test seam: the environment. Default: process.env. */
   env?: NodeJS.ProcessEnv;
@@ -118,7 +118,13 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
       trustProxy: options.http?.trustProxy ?? true,
       ...(options.http?.bodyLimit ? { bodyLimit: options.http.bodyLimit } : {}),
     }),
-    { bufferLogs: true, ...(options.http?.rawBody ? { rawBody: true } : {}) },
+    // `abortOnError: false`: Nest's default is to log the error as TEXT and `process.abort()` (SIGABRT, exit 134). Let it reject instead, so
+    // `createHttpApp` reports it as the one JSON line and exits 1.
+    {
+      bufferLogs: true,
+      abortOnError: false,
+      ...(options.http?.rawBody ? { rawBody: true } : {}),
+    },
   );
   await installLogging(app, options);
   await options.configure?.(app);
@@ -132,7 +138,10 @@ export async function prepareWorkerApp(
   const Root = await composeRoot(options);
   const { NestFactory } = await import('@nestjs/core');
   // createApplicationContext: no HTTP driver; a worker is queue/cron only.
-  const app = await NestFactory.createApplicationContext(Root, { bufferLogs: true });
+  const app = await NestFactory.createApplicationContext(Root, {
+    bufferLogs: true,
+    abortOnError: false, // see prepareHttpApp
+  });
   await installLogging(app, options);
   return app;
 }
@@ -150,7 +159,7 @@ async function failFatal(error: unknown, options: BootstrapOptions): Promise<nev
   const { createScriptLogger } = await import('@quynhonsemiconductor/observability');
   createScriptLogger('bootstrap', {
     env: options.env,
-    destination: pino.destination({ fd: 2, sync: true }),
+    destination: options.logStream ?? pino.destination({ fd: 2, sync: true }),
   }).fatal({ err: error }, 'Fatal bootstrap error');
   process.exit(1);
 }

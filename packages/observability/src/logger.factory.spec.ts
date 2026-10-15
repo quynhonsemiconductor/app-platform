@@ -55,8 +55,11 @@ describe('createLoggerOptions', () => {
   it('also redacts credentials nested in SDK error objects', () => {
     // The worker's realistic leak path: an AWS/GitHub SDK error carrying the
     // original request headers.
-    expect(__redactedPaths).toContain('err.config.headers.authorization');
-    expect(__redactedPaths).toContain('err.request.headers.authorization');
+    for (const key of ['err', 'error', 'reason']) {
+      expect(__redactedPaths).toContain(`${key}.config.headers["authorization"]`);
+      expect(__redactedPaths).toContain(`${key}.request.headers["authorization"]`);
+      expect(__redactedPaths).toContain(`${key}.headers["cookie"]`);
+    }
   });
 
   it('stamps service, env and version on every line', () => {
@@ -135,6 +138,77 @@ describe('createLoggerOptions', () => {
       for (const key of ['service', 'env', 'version']) {
         expect(lines[0]!.match(new RegExp(`"${key}":`, 'g'))).toHaveLength(1);
       }
+    });
+
+    // An axios-style error: `config` and `request` hold the request's headers. This is what `{ error: sdkErr }` and the process-level
+    // `{ reason }` handlers log. 0.4.1 serialised `error` / `reason` with no redaction at all and wrote the Authorization header in clear.
+    const sdkError = () =>
+      Object.assign(new Error('Request failed with status code 401'), {
+        code: 'ERR_BAD_REQUEST',
+        status: 401,
+        config: { headers: { authorization: 'Bearer SECRET1', cookie: 'sid=SECRET2' } },
+        request: { headers: { 'x-api-key': 'SECRET3' } },
+        response: {
+          status: 401,
+          headers: { 'set-cookie': 'sid=SECRET4' },
+          data: { token: 'SECRET5' },
+        },
+        cause: Object.assign(new Error('inner'), {
+          config: { headers: { authorization: 'SECRET6' } },
+        }),
+      });
+
+    it.each(['err', 'error', 'reason'])(
+      'never writes the request an error carries, logged as { %s } (headers, bodies, a nested cause)',
+      (key) => {
+        const { logger, lines } = capture();
+        logger.error({ [key]: sdkError() }, 'call failed');
+        expect(lines[0]).not.toMatch(/SECRET\d/);
+        const logged = (JSON.parse(lines[0] as string) as Record<string, Record<string, unknown>>)[
+          key
+        ];
+        // What is useful for diagnosis survives.
+        expect(logged).toMatchObject({
+          type: 'Error',
+          message: 'Request failed with status code 401',
+          code: 'ERR_BAD_REQUEST',
+          status: 401,
+        });
+        expect(String(logged?.['stack'])).toContain('Request failed');
+        expect(logged?.['cause']).toMatchObject({ message: 'inner' });
+        expect(logged).not.toHaveProperty('config');
+        expect(logged).not.toHaveProperty('request');
+        expect(logged).not.toHaveProperty('response');
+      },
+    );
+
+    it.each(['err', 'error', 'reason'])(
+      'redacts headers on a non-Error object logged as { %s } (the redact paths behind the serializer)',
+      (key) => {
+        const { logger, lines } = capture();
+        logger.error({
+          [key]: {
+            config: { headers: { authorization: 'Bearer SECRET1' } },
+            headers: { cookie: 'sid=SECRET2' },
+          },
+        });
+        expect(lines[0]).not.toMatch(/SECRET\d/);
+        expect(lines[0]).toContain('[REDACTED]');
+      },
+    );
+
+    it('serialises an Error under err, error AND reason instead of {} (message and stack survive)', () => {
+      const { logger, lines } = capture();
+      logger.error({ err: new Error('boom') }, 'a');
+      logger.error({ error: new TypeError('bad') }, 'b');
+      logger.error({ reason: new Error('late') }, 'c');
+      const [a, b, c] = lines.map(
+        (l) => JSON.parse(l) as Record<string, { type?: string; message?: string; stack?: string }>,
+      );
+      expect(a?.['err']).toMatchObject({ type: 'Error', message: 'boom' });
+      expect(b?.['error']).toMatchObject({ type: 'TypeError', message: 'bad' });
+      expect(c?.['reason']).toMatchObject({ message: 'late' });
+      expect(String(c?.['reason']?.stack)).toContain('late');
     });
 
     it('redacts credentials on a worker-style line (the SDK-error leak path)', () => {

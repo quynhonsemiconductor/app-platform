@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.4.2...observability-v0.5.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** the log 'level' is a label (info, error) and 'time' is ISO-8601 UTC, not pino's numeric level and epoch ms; Error values logged under err or error are serialised ({type,message,stack}) instead of {}. Queries that parse the numeric level or time must change.
+
+### ✨ Features
+
+* **observability:** one log shape and one bootstrap: createHttpApp / createWorkerApp, conformance kit ([#245](https://github.com/quynhonsemiconductor/app-platform/issues/245)) ([a228b5c](https://github.com/quynhonsemiconductor/app-platform/commit/a228b5c22a737d97b34067fde1ff5cbe34167ca6))
+
 ## [0.4.2](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.4.1...observability-v0.4.2) (2026-10-15)
 
 

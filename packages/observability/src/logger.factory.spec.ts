@@ -1,3 +1,5 @@
+import { Writable } from 'node:stream';
+import pino from 'pino';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { requestContextStorage } from './request-context';
 import { __redactedPaths, createLoggerOptions } from './logger.factory';
@@ -18,7 +20,8 @@ interface PinoHttpShape {
   transport?: unknown;
   redact?: { paths: string[]; censor: string };
   autoLogging?: boolean;
-  customProps?: () => Record<string, unknown>;
+  base?: Record<string, unknown>;
+  customProps?: unknown;
   mixin?: () => Record<string, unknown>;
 }
 
@@ -57,8 +60,12 @@ describe('createLoggerOptions', () => {
   });
 
   it('stamps service, env and version on every line', () => {
-    const props = optionsOf(createLoggerOptions(base)).customProps?.();
-    expect(props).toEqual({ service: 'rova-api', env: 'test', version: '1.2.3' });
+    const fields = optionsOf(createLoggerOptions(base)).base;
+    expect(fields).toMatchObject({ service: 'rova-api', env: 'test', version: '1.2.3' });
+    expect(fields).toHaveProperty('pid'); // pino's own defaults are kept
+    expect(fields).toHaveProperty('hostname');
+    // NOT customProps: that reaches only request-bound loggers, so a worker (no HTTP at all) logged without these fields.
+    expect(optionsOf(createLoggerOptions(base)).customProps).toBeUndefined();
   });
 
   it('logs the DEPLOYMENT environment in `env`, not NODE_ENV (which products pin to production in develop)', () => {
@@ -72,9 +79,7 @@ describe('createLoggerOptions', () => {
         level: 'info',
       };
       const envOf = (o: object) =>
-        (
-          createLoggerOptions({ ...base, ...o }).pinoHttp as { customProps: () => { env: string } }
-        ).customProps().env;
+        (createLoggerOptions({ ...base, ...o }).pinoHttp as { base: { env: string } }).base.env;
       expect(envOf({})).toBe('production'); // nothing else known: the old behaviour
       expect(envOf({ deploymentEnv: 'develop' })).toBe('develop'); // explicit
       process.env['DEPLOYMENT_ENV'] = 'develop';
@@ -90,10 +95,57 @@ describe('createLoggerOptions', () => {
   });
 
   it('takes the service name from the caller, so api and worker differ', () => {
-    const worker = optionsOf(
-      createLoggerOptions({ ...base, serviceName: 'rova-worker' }),
-    ).customProps?.();
+    const worker = optionsOf(createLoggerOptions({ ...base, serviceName: 'rova-worker' })).base;
     expect(worker?.['service']).toBe('rova-worker');
+  });
+
+  describe('through a REAL pino logger (what a worker, or a bootstrap line, actually writes)', () => {
+    const capture = () => {
+      const lines: string[] = [];
+      const stream = new Writable({
+        write(chunk, _enc, cb) {
+          lines.push(String(chunk));
+          cb();
+        },
+      });
+      const opts = optionsOf(
+        createLoggerOptions({
+          ...base,
+          serviceName: 'rova-worker',
+          deploymentEnv: 'develop',
+          serviceVersion: 'sha-abc123',
+          pretty: false,
+        }),
+      );
+      // pino-http hands exactly these to pino(); the nestjs-pino-only keys are ignored by pino itself
+      const logger = pino(opts as pino.LoggerOptions, stream);
+      return { logger, lines };
+    };
+
+    it('stamps service, env and version on a line written OUTSIDE any request', () => {
+      const { logger, lines } = capture();
+      logger.info({ context: 'Bootstrap' }, 'Worker process started');
+      const line = JSON.parse(lines[0]!) as Record<string, unknown>;
+      expect(line).toMatchObject({ service: 'rova-worker', env: 'develop', version: 'sha-abc123' });
+    });
+
+    it('stamps a child (request-bound) logger once, with no duplicate keys', () => {
+      const { logger, lines } = capture();
+      logger.child({ req: { id: 1 } }).info('inside a request');
+      for (const key of ['service', 'env', 'version']) {
+        expect(lines[0]!.match(new RegExp(`"${key}":`, 'g'))).toHaveLength(1);
+      }
+    });
+
+    it('redacts credentials on a worker-style line (the SDK-error leak path)', () => {
+      const { logger, lines } = capture();
+      logger.error({
+        err: { config: { headers: { authorization: 'Bearer SECRET' } } },
+        req: { headers: { cookie: 'sid=SECRET' } },
+      });
+      expect(lines[0]).not.toContain('SECRET');
+      expect(lines[0]).toContain('[REDACTED]');
+    });
   });
 
   it('disables autoLogging so the interceptor owns the request line', () => {

@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import { trace, isSpanContextValid } from '@opentelemetry/api';
 import type { Params as PinoParams } from 'nestjs-pino';
 import { requestContextStorage } from './request-context';
@@ -73,12 +74,18 @@ export function createLoggerOptions(options: LoggerFactoryOptions): PinoParams {
       // HttpLoggingInterceptor emits the per-request summary line instead, so the
       // default req/res pair would duplicate it.
       autoLogging: false,
-      customProps: () => ({
+      // ROOT BINDINGS (`base`), not pino-http's `customProps`. customProps is applied only to lines written through a REQUEST-bound logger
+      // (`req.log`); anything logged outside a request (the bootstrap and shutdown lines, every worker relay and cron, a process with no HTTP
+      // server at all) went out WITHOUT service, env and version, which is why a worker's logs carried none of them. `base` is on every line of
+      // every logger, request-bound children included, and replaces pino's default {pid, hostname}, which are kept below.
+      base: {
+        pid: process.pid,
+        hostname: hostname(),
         service: options.serviceName,
         // `||`, not `??`: an EMPTY DEPLOYMENT_ENV (a blank variable) must fall back, not be logged as "".
         env: options.deploymentEnv || process.env['DEPLOYMENT_ENV'] || options.nodeEnv,
         version: options.serviceVersion,
-      }),
+      },
       mixin: () => {
         const fields: Record<string, unknown> = {};
 

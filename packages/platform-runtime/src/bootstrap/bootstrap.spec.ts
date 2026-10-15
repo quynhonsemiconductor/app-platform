@@ -6,7 +6,7 @@ import {
   createLogCapture,
   runLoggingConformance,
 } from '@quynhonsemiconductor/observability/testing';
-import { prepareHttpApp, prepareWorkerApp } from './index';
+import { installProcessErrorHandlers, prepareHttpApp, prepareWorkerApp } from './index';
 
 const ENV = {
   NODE_ENV: 'production', // pinned to production in deployed environments on purpose
@@ -139,6 +139,12 @@ describe('the shared bootstrap writes the log contract', () => {
     const exitCalls = exit.mock.calls.map((c) => c[0]);
     exit.mockRestore();
     expect(exitCalls).toEqual([1]);
+    // EVERY captured line, not only the fatal one: what Nest wrote while creating the app (the buffered "Starting Nest application" lines and
+    // the ExceptionHandler stack) must be JSON in the contract shape too, never coloured ConsoleLogger text.
+    const all = capture.lines();
+    expect(all.length).toBeGreaterThan(1);
+    assertLogContract(all, expected);
+    expect(all.some((l) => l.includes('ExceptionHandler'))).toBe(true);
     const fatal = capture.lines().filter((l) => l.includes('Fatal bootstrap error'));
     expect(fatal).toHaveLength(1);
     expect(JSON.parse(fatal[0] as string)).toMatchObject({
@@ -192,5 +198,68 @@ describe('the shared bootstrap writes the log contract', () => {
     expect(() => assertLogContract(['[Nest] 7 - LOG [Shutdown] Received SIGTERM'])).toThrow(
       /NOT JSON/,
     );
+  });
+
+  it('refuses a second nestjs-pino LoggerModule, naming what to remove', async () => {
+    const { LoggerModule } = await import('nestjs-pino');
+    @Module({ imports: [LoggerModule.forRoot({ pinoHttp: { level: 'info' } })] })
+    class ProductWithOwnLogger {}
+    const capture = createLogCapture();
+    capture.install();
+    try {
+      await expect(
+        prepareWorkerApp({
+          module: async () => ProductWithOwnLogger,
+          env: ENV,
+          logStream: capture.stream,
+        }),
+      ).rejects.toThrow(/2 nestjs-pino LoggerModules.*Remove LoggerModule\.forRoot/s);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  describe('installProcessErrorHandlers', () => {
+    const fakeProcess = () => {
+      const handlers = new Map<string, (arg: unknown) => void>();
+      const exit = vi.fn();
+      return {
+        proc: {
+          on: (event: string, fn: (arg: unknown) => void) => {
+            handlers.set(event, fn);
+            return undefined as never;
+          },
+          exit: exit as unknown as (code?: number) => never,
+        },
+        handlers,
+        exit,
+      };
+    };
+
+    it('logs the rejection under `err` and EXITS 1: a listener disables Node’s default crash, so logging alone leaves the process running', () => {
+      const { proc, handlers, exit } = fakeProcess();
+      const log = { error: vi.fn() };
+      installProcessErrorHandlers(log, proc);
+      const reason = new Error('socket hang up');
+      handlers.get('unhandledRejection')?.(reason);
+      expect(log.error).toHaveBeenCalledWith(
+        { msg: 'Unhandled promise rejection', err: reason },
+        'Bootstrap',
+      );
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+
+    it('logs an uncaught exception under `err` and exits 1', () => {
+      const { proc, handlers, exit } = fakeProcess();
+      const log = { error: vi.fn() };
+      installProcessErrorHandlers(log, proc);
+      const error = new Error('boom');
+      handlers.get('uncaughtException')?.(error);
+      expect(log.error).toHaveBeenCalledWith(
+        { msg: 'Uncaught exception', err: error },
+        'Bootstrap',
+      );
+      expect(exit).toHaveBeenCalledWith(1);
+    });
   });
 });

@@ -6,7 +6,7 @@
  *
  * In order: `.env`, OpenTelemetry, the product's `before` hook, THEN the product module is imported (lazily: this is the only way to
  * guarantee OTel patches pg/http/ioredis before they load), Nest is created with `bufferLogs`, the shared pino logger is installed with
- * `useLogger` and the buffered lines flushed, the product's `configure`, graceful shutdown, listen, and the unhandled-error handlers. A
+ * `useLogger` and the buffered lines flushed, the product's `configure`, graceful shutdown, listen, and the unhandled-error handlers (log, then exit 1). A
  * failure anywhere is logged as one JSON line to stderr and exits 1.
  *
  * `service`, `env` and `version` come by convention from OTEL_SERVICE_NAME, DEPLOYMENT_ENV and SERVICE_VERSION.
@@ -16,7 +16,12 @@
  */
 import '../config/load-env';
 import { startOtel } from '@quynhonsemiconductor/observability/otel';
-import type { INestApplication, INestApplicationContext, Type } from '@nestjs/common';
+import type {
+  INestApplication,
+  INestApplicationContext,
+  LoggerService,
+  Type,
+} from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { DestinationStream } from 'pino';
 
@@ -49,6 +54,24 @@ export interface HttpAppOptions extends BootstrapOptions {
 
 export type WorkerAppOptions = BootstrapOptions;
 
+/**
+ * A second `nestjs-pino` LoggerModule (a product that still registers its own `LoggerModule.forRootAsync`) gives two global Logger providers
+ * and two pino-http middlewares: every request is logged twice, by two configurations, one of them without the shared redaction. Refuse to
+ * start rather than guess which one wins.
+ */
+async function assertSingleLoggerModule(app: INestApplicationContext): Promise<void> {
+  const { ModulesContainer } = await import('@nestjs/core');
+  const modules = app.get(ModulesContainer, { strict: false });
+  const loggerModules = [...modules.values()].filter((m) => m.metatype?.name === 'LoggerModule');
+  if (loggerModules.length > 1) {
+    throw new Error(
+      `${loggerModules.length} nestjs-pino LoggerModules are registered, but createHttpApp / createWorkerApp already register the one shared ` +
+        'logger. Remove LoggerModule.forRoot / forRootAsync (and createLoggerOptions) from your app and worker modules; ' +
+        'service, env and version come from OTEL_SERVICE_NAME, DEPLOYMENT_ENV and SERVICE_VERSION.',
+    );
+  }
+}
+
 async function installLogging(
   app: INestApplicationContext,
   options: BootstrapOptions,
@@ -56,6 +79,7 @@ async function installLogging(
   log: (message: string, context: string) => void;
   error: (o: object, context: string) => void;
 }> {
+  await assertSingleLoggerModule(app);
   const { Logger } = await import('nestjs-pino');
   const logger = app.get(Logger);
   app.useLogger(logger);
@@ -68,7 +92,49 @@ async function installLogging(
   };
 }
 
-async function composeRoot(options: BootstrapOptions): Promise<Type<unknown>> {
+/**
+ * Nest's logger BEFORE `useLogger` runs: a `LoggerService` over the same pino configuration (a script logger: JSON, the field contract,
+ * synchronous). Passed to `NestFactory` so what Nest writes while creating the app (the buffered "Starting Nest application" lines, and the
+ * `ExceptionHandler` error when a provider throws) is JSON, not coloured `ConsoleLogger` text.
+ */
+async function createBootstrapLogger(
+  options: BootstrapOptions,
+  loggerEnv: NodeJS.ProcessEnv,
+): Promise<LoggerService> {
+  const { createScriptLogger } = await import('@quynhonsemiconductor/observability/script-logger');
+  const pino = createScriptLogger('bootstrap', {
+    env: loggerEnv,
+    ...(options.logStream ? { destination: options.logStream } : {}),
+  });
+  type Level = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+  const write =
+    (level: Level) =>
+    (message: unknown, ...params: unknown[]): void => {
+      // Nest calls (message, context) and, for errors, (message, stack, context): the last string is the context.
+      const strings = params.filter((p): p is string => typeof p === 'string');
+      const context = strings.length > 0 ? strings[strings.length - 1] : undefined;
+      const stack = level === 'error' && strings.length > 1 ? strings[0] : undefined;
+      const fields: Record<string, unknown> = {};
+      if (context) fields['context'] = context;
+      if (stack) fields['stack'] = stack;
+      if (message instanceof Error) pino[level]({ ...fields, err: message }, message.message);
+      else if (message !== null && typeof message === 'object')
+        pino[level]({ ...fields, ...(message as object) });
+      else pino[level](fields, String(message));
+    };
+  return {
+    log: write('info'),
+    error: write('error'),
+    warn: write('warn'),
+    debug: write('debug'),
+    verbose: write('trace'),
+    fatal: write('fatal'),
+  };
+}
+
+async function composeRoot(
+  options: BootstrapOptions,
+): Promise<{ Root: Type<unknown>; bootstrapLogger: LoggerService }> {
   const envVar = options.otel?.serviceNameEnvVar;
   const baseEnv = options.env ?? process.env;
   // Logger and OpenTelemetry must agree on the service name. OTel reads `envVar` (else the default); give the logger the same answer.
@@ -87,6 +153,7 @@ async function composeRoot(options: BootstrapOptions): Promise<Type<unknown>> {
       : {}),
   });
   await options.before?.();
+  const bootstrapLogger = await createBootstrapLogger(options, loggerEnv);
 
   const [{ Module }, { LoggingModule }, productModule] = await Promise.all([
     import('@nestjs/common'),
@@ -97,7 +164,7 @@ async function composeRoot(options: BootstrapOptions): Promise<Type<unknown>> {
   Module({
     imports: [LoggingModule.forRoot(loggerEnv, {}, options.logStream), productModule],
   })(RootModule);
-  return RootModule;
+  return { Root: RootModule, bootstrapLogger };
 }
 
 /**
@@ -105,7 +172,7 @@ async function composeRoot(options: BootstrapOptions): Promise<Type<unknown>> {
  * the real bootstrap path (logger install order included) without a port or a process exit.
  */
 export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFastifyApplication> {
-  const Root = await composeRoot(options);
+  const { Root, bootstrapLogger } = await composeRoot(options);
   const [{ NestFactory }, { FastifyAdapter }] = await Promise.all([
     import('@nestjs/core'),
     import('@nestjs/platform-fastify'),
@@ -122,6 +189,7 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
     // `createHttpApp` reports it as the one JSON line and exits 1.
     {
       bufferLogs: true,
+      logger: bootstrapLogger,
       abortOnError: false,
       ...(options.http?.rawBody ? { rawBody: true } : {}),
     },
@@ -135,12 +203,13 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
 export async function prepareWorkerApp(
   options: WorkerAppOptions,
 ): Promise<INestApplicationContext> {
-  const Root = await composeRoot(options);
+  const { Root, bootstrapLogger } = await composeRoot(options);
   const { NestFactory } = await import('@nestjs/core');
   // createApplicationContext: no HTTP driver; a worker is queue/cron only.
   const app = await NestFactory.createApplicationContext(Root, {
     bufferLogs: true,
-    abortOnError: false, // see prepareHttpApp
+    logger: bootstrapLogger, // see prepareHttpApp
+    abortOnError: false,
   });
   await installLogging(app, options);
   return app;
@@ -156,7 +225,7 @@ async function failFatal(error: unknown, options: BootstrapOptions): Promise<nev
   }
   // One JSON line to stderr, in the same contract shape, from the script logger (no Nest, no transport, synchronous).
   const pino = (await import('pino')).default;
-  const { createScriptLogger } = await import('@quynhonsemiconductor/observability');
+  const { createScriptLogger } = await import('@quynhonsemiconductor/observability/script-logger');
   createScriptLogger('bootstrap', {
     env: options.env,
     destination: options.logStream ?? pino.destination({ fd: 2, sync: true }),
@@ -164,13 +233,22 @@ async function failFatal(error: unknown, options: BootstrapOptions): Promise<nev
   process.exit(1);
 }
 
-function handleProcessErrors(log: { error: (o: object, context: string) => void }): void {
-  process.on('unhandledRejection', (reason: unknown) => {
-    log.error({ msg: 'Unhandled promise rejection', reason }, 'Bootstrap');
+/**
+ * Last-resort handlers. Registering an `unhandledRejection` listener DISABLES Node's default (crash with exit code 1), so a handler that only
+ * logs leaves a process in an unknown state running: it must log AND exit. Both log the error under `err`, so it is serialised (and its
+ * request/headers dropped) like every other error.
+ */
+export function installProcessErrorHandlers(
+  log: { error: (o: object, context: string) => void },
+  proc: Pick<NodeJS.Process, 'on' | 'exit'> = process,
+): void {
+  proc.on('unhandledRejection', (reason: unknown) => {
+    log.error({ msg: 'Unhandled promise rejection', err: reason }, 'Bootstrap');
+    proc.exit(1);
   });
-  process.on('uncaughtException', (error: Error) => {
-    log.error({ msg: 'Uncaught exception', error }, 'Bootstrap');
-    process.exit(1);
+  proc.on('uncaughtException', (error: Error) => {
+    log.error({ msg: 'Uncaught exception', err: error }, 'Bootstrap');
+    proc.exit(1);
   });
 }
 
@@ -187,7 +265,7 @@ export async function createHttpApp(options: HttpAppOptions): Promise<void> {
     await app.listen(port, host);
     const logger = app.get(Logger);
     logger.log(`Listening on ${host}:${port}`, 'Bootstrap');
-    handleProcessErrors({ error: (o, c) => logger.error(o, c) });
+    installProcessErrorHandlers({ error: (o, c) => logger.error(o, c) });
   } catch (error) {
     await failFatal(error, options);
   }
@@ -203,7 +281,7 @@ export async function createWorkerApp(options: WorkerAppOptions): Promise<void> 
     enableGracefulShutdown(app);
     const logger = app.get(Logger);
     logger.log('Worker process started', 'Bootstrap');
-    handleProcessErrors({ error: (o, c) => logger.error(o, c) });
+    installProcessErrorHandlers({ error: (o, c) => logger.error(o, c) });
   } catch (error) {
     await failFatal(error, options);
   }

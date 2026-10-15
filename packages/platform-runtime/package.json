@@ -55,6 +55,15 @@
     },
     "@quynhonsemiconductor/platform-db": {
       "optional": true
+    },
+    "@nestjs/platform-fastify": {
+      "optional": true
+    },
+    "nestjs-pino": {
+      "optional": true
+    },
+    "pino": {
+      "optional": true
     }
   },
   "devDependencies": {

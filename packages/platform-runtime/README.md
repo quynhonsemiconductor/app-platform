@@ -86,7 +86,11 @@ your root module loads them, so a helper that was handed an already-imported mod
 to guarantee the order, and it is the same discipline the old `import './otel'` first line enforced by hand.
 
 `service`, `env` and `version` come from `OTEL_SERVICE_NAME`, `DEPLOYMENT_ENV` and `SERVICE_VERSION`; the logger needs nothing from you.
-A repo whose api and worker share one `.env` and name themselves independently passes `otel: { serviceNameEnvVar: 'OTEL_WORKER_SERVICE_NAME' }`; OpenTelemetry and the logger then both read that variable. `createHttpApp` is Fastify-only. `prepareHttpApp` / `prepareWorkerApp` do everything except listening, signal handlers and the exit, for a
+A repo whose api and worker share one `.env` and name themselves independently passes `otel: { serviceNameEnvVar: 'OTEL_WORKER_SERVICE_NAME' }`; OpenTelemetry and the logger then both read that variable. **Migrating a product that wired logging by hand.** Remove `LoggerModule.forRoot` / `forRootAsync` (and `createLoggerOptions`) from the app and worker modules, `app.useLogger(app.get(Logger))` and `flushLogs()` from `main.ts`, and the product's own `otel.ts`. The bootstrap registers the one shared logger; if a second `nestjs-pino` `LoggerModule` is still present it **refuses to start** (a second one means two global Loggers and every request logged twice, one copy without the shared redaction) and the error says what to remove.
+
+A boot failure (a provider that throws, a bad configuration) is one JSON `fatal` line and exit code 1; what Nest writes while creating the app is JSON as well. `unhandledRejection` and `uncaughtException` are logged under `err` and the process exits 1: a listener disables Node's default crash, so logging alone would leave a half-failed process running.
+
+`createHttpApp` is Fastify-only. `prepareHttpApp` / `prepareWorkerApp` do everything except listening, signal handlers and the exit, for a
 conformance test (`@quynhonsemiconductor/observability/testing`) to boot the real path.
 
 ## Config

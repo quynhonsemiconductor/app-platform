@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 // @ts-expect-error -- plain .mjs helpers, no declaration file
-import { linkManifest } from './link.mjs';
+import { addPackageJsonOverrides, addWorkspaceOverrides, linkManifest } from './link.mjs';
 // @ts-expect-error -- plain .mjs helpers, no declaration file
 import {
   changedPackageDirs,
@@ -169,6 +169,112 @@ describe('link.mjs (the command the consumer jobs run)', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('No dependency on');
     expect(readFileSync(f.output, 'utf8')).toBe('');
+  });
+});
+
+describe('workspace-wide overrides (rova apps/web, which reaches observability only as a PEER of platform-http)', () => {
+  const OBS = '@quynhonsemiconductor/observability';
+  const HTTP = '@quynhonsemiconductor/platform-http';
+  const entries = { [OBS]: 'file:/t/observability-0.4.1.tgz' };
+
+  it('adds a new overrides block to a pnpm-workspace.yaml that has none', () => {
+    const out = addWorkspaceOverrides('packages:\n  - "apps/web"\n', entries);
+    expect(out).toBe(
+      'packages:\n  - "apps/web"\noverrides:\n  "@quynhonsemiconductor/observability": "file:/t/observability-0.4.1.tgz"\n',
+    );
+  });
+
+  it('adds to an existing overrides block and keeps what is there', () => {
+    const out = addWorkspaceOverrides(
+      'packages:\n  - "a"\noverrides:\n  fastify: "5.12.5"\n',
+      entries,
+    );
+    expect(out).toContain('fastify: "5.12.5"');
+    expect(out).toContain(
+      '"@quynhonsemiconductor/observability": "file:/t/observability-0.4.1.tgz"',
+    );
+    expect(out.match(/^overrides:/gm)).toHaveLength(1);
+  });
+
+  it('is idempotent: an entry that is already there is not added twice', () => {
+    const once = addWorkspaceOverrides('packages: []\n', entries);
+    expect(addWorkspaceOverrides(once, entries)).toBe(once);
+  });
+
+  it('sets pnpm.overrides in a root package.json without dropping existing ones', () => {
+    const json = { name: 'p', pnpm: { overrides: { fastify: '5.12.5' } } };
+    addPackageJsonOverrides(json, entries);
+    expect(json.pnpm.overrides).toEqual({ fastify: '5.12.5', ...entries });
+  });
+
+  /** A product shaped like rova: root names observability; a nested workspace names only platform-http. */
+  function nested(opts: { rootRange: string; version: string }) {
+    const dir = mkdtempSync(join(scratch, 'nested-'));
+    const product = join(dir, 'product');
+    const tarballs = join(dir, 'tarballs');
+    mkdirSync(join(product, 'apps', 'web'), { recursive: true });
+    mkdirSync(tarballs, { recursive: true });
+    writeFileSync(
+      join(product, 'package.json'),
+      JSON.stringify({ name: 'p', dependencies: { [OBS]: opts.rootRange } }),
+    );
+    writeFileSync(
+      join(product, 'pnpm-workspace.yaml'),
+      'packages:\n  - "apps/web"\noverrides:\n  fastify: "5.12.5"\n',
+    );
+    writeFileSync(
+      join(product, 'apps', 'web', 'package.json'),
+      JSON.stringify({ name: 'web', dependencies: { [HTTP]: '4.3.0' } }), // exact pin: out of the tarball's range
+    );
+    writeFileSync(
+      join(tarballs, 'manifest.json'),
+      JSON.stringify([
+        {
+          name: OBS,
+          dir: 'observability',
+          version: opts.version,
+          file: `observability-${opts.version}.tgz`,
+        },
+        { name: HTTP, dir: 'platform-http', version: '4.4.0', file: 'platform-http-4.4.0.tgz' },
+      ]),
+    );
+    const output = join(dir, 'github-output');
+    writeFileSync(output, '');
+    const result = spawnSync(
+      'node',
+      ['tools/consumer-ci/link.mjs', '--product', product, '--tarballs', tarballs],
+      { cwd: repo, encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: output } },
+    );
+    return { result, product, tarballs };
+  }
+
+  it('overrides a linked package for the WHOLE workspace, so a nested workspace that gets it as a peer does not go to the registry', () => {
+    const { result, product, tarballs } = nested({ rootRange: '^0.4.0', version: '0.4.1' });
+    expect(result.status).toBe(0);
+    const workspace = readFileSync(join(product, 'pnpm-workspace.yaml'), 'utf8');
+    expect(workspace).toContain(`"${OBS}": "file:${join(tarballs, 'observability-0.4.1.tgz')}"`);
+    expect(workspace).toContain('fastify: "5.12.5"'); // untouched
+    const root = JSON.parse(readFileSync(join(product, 'package.json'), 'utf8'));
+    expect(root.pnpm.overrides[OBS]).toBe(`file:${join(tarballs, 'observability-0.4.1.tgz')}`);
+    expect(root.dependencies[OBS]).toBe(`file:${join(tarballs, 'observability-0.4.1.tgz')}`);
+  });
+
+  it('does NOT override a package that was skipped everywhere (out of range): the skip must still mean something', () => {
+    const { result, product } = nested({ rootRange: '^0.4.0', version: '0.4.1' });
+    expect(result.status).toBe(0);
+    // platform-http 4.4.0 is outside web's exact pin 4.3.0 -> skipped -> no override
+    const workspace = readFileSync(join(product, 'pnpm-workspace.yaml'), 'utf8');
+    expect(workspace).not.toContain(HTTP);
+    expect(
+      JSON.parse(readFileSync(join(product, 'package.json'), 'utf8')).pnpm.overrides[HTTP],
+    ).toBeUndefined();
+  });
+
+  it('adds no override at all when everything was out of range', () => {
+    const { result, product } = nested({ rootRange: '^0.3.0', version: '0.4.1' });
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(product, 'pnpm-workspace.yaml'), 'utf8')).not.toContain(OBS);
+    expect(JSON.parse(readFileSync(join(product, 'package.json'), 'utf8')).pnpm).toBeUndefined();
   });
 });
 

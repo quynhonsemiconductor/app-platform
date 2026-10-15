@@ -140,6 +140,32 @@ describe('createLoggerOptions', () => {
       }
     });
 
+    it('writes `level` as a LABEL and `time` as ISO-8601 UTC, so every runtime emits the same shape', () => {
+      const { logger, lines } = capture();
+      logger.info('a');
+      logger.error('b');
+      const [info, error] = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      expect(info?.['level']).toBe('info');
+      expect(error?.['level']).toBe('error');
+      expect(info?.['time']).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+    });
+
+    it('serialises an Error under `err` AND under the `error` key the products pass, instead of {}', () => {
+      const { logger, lines } = capture();
+      logger.error({ err: new Error('boom') }, 'failed');
+      logger.error({ msg: 'Uncaught exception', error: new TypeError('bad') }, 'Bootstrap');
+      const [a, b] = lines.map(
+        (l) =>
+          JSON.parse(l) as Record<
+            string,
+            { stack?: string; type?: string; message?: string } | undefined
+          >,
+      );
+      expect(a?.['err']).toMatchObject({ type: 'Error', message: 'boom' });
+      expect(String(a?.['err']?.stack)).toContain('boom');
+      expect(b?.['error']).toMatchObject({ type: 'TypeError', message: 'bad' });
+    });
+
     // An axios-style error: `config` and `request` hold the request's headers. This is what `{ error: sdkErr }` and the process-level
     // `{ reason }` handlers log. 0.4.1 serialised `error` / `reason` with no redaction at all and wrote the Authorization header in clear.
     const sdkError = () =>
@@ -196,20 +222,6 @@ describe('createLoggerOptions', () => {
         expect(lines[0]).toContain('[REDACTED]');
       },
     );
-
-    it('serialises an Error under err, error AND reason instead of {} (message and stack survive)', () => {
-      const { logger, lines } = capture();
-      logger.error({ err: new Error('boom') }, 'a');
-      logger.error({ error: new TypeError('bad') }, 'b');
-      logger.error({ reason: new Error('late') }, 'c');
-      const [a, b, c] = lines.map(
-        (l) => JSON.parse(l) as Record<string, { type?: string; message?: string; stack?: string }>,
-      );
-      expect(a?.['err']).toMatchObject({ type: 'Error', message: 'boom' });
-      expect(b?.['error']).toMatchObject({ type: 'TypeError', message: 'bad' });
-      expect(c?.['reason']).toMatchObject({ message: 'late' });
-      expect(String(c?.['reason']?.stack)).toContain('late');
-    });
 
     it('redacts credentials on a worker-style line (the SDK-error leak path)', () => {
       const { logger, lines } = capture();

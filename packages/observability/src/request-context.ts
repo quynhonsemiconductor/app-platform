@@ -1,19 +1,7 @@
-import { AsyncLocalStorage } from 'async_hooks';
 import { Injectable } from '@nestjs/common';
+import { requestContextStorage, type RequestContext } from './request-context-storage';
 
-export interface RequestContext {
-  workspaceId: string | undefined;
-  userId: string | undefined;
-  sessionId: string | undefined;
-  correlationId: string;
-  /** W3C traceparent from inbound request */
-  traceparent: string | undefined;
-  /**
-   * Fields a product adds to the authenticated principal (see {@link setRequestPrincipal}): they are put on
-   * every log line of the request. Bounded and validated when set; read-only afterwards.
-   */
-  principalFields?: Readonly<Record<string, string | number | boolean>> | undefined;
-}
+export { requestContextStorage, type RequestContext };
 
 /** What the authentication layer tells the rest of the process about the caller of THIS request. */
 export interface RequestPrincipal {
@@ -93,15 +81,6 @@ function validFields(
   }
   return Object.freeze(out);
 }
-
-/**
- * The AsyncLocalStorage holding per-request (or per-job) context.
- *
- * Exported so the pino mixin can read it without going through DI — a logger has
- * no injection point. Do NOT write to it directly: use {@link RequestContextService}
- * for requests and `withJobContext` for background work.
- */
-export const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 const als = requestContextStorage;
 

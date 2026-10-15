@@ -13,12 +13,30 @@
     "./otel": {
       "types": "./dist/otel.bootstrap.d.ts",
       "default": "./dist/otel.bootstrap.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./eslint": {
+      "types": "./dist/eslint.d.ts",
+      "default": "./dist/eslint.js"
+    },
+    "./script-logger": {
+      "types": "./dist/script-logger.d.ts",
+      "default": "./dist/script-logger.js"
     }
   },
   "files": [
     "dist",
+    "eslint.d.ts",
+    "eslint.js",
+    "otel.d.ts",
     "otel.js",
-    "otel.d.ts"
+    "script-logger.d.ts",
+    "script-logger.js",
+    "testing.d.ts",
+    "testing.js"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
@@ -45,7 +63,8 @@
     "@opentelemetry/sdk-trace-base": ">=2",
     "@opentelemetry/semantic-conventions": ">=1.41",
     "nestjs-pino": ">=4",
-    "@nestjs/common": ">=11"
+    "@nestjs/common": ">=11",
+    "pino": ">=9"
   },
   "devDependencies": {
     "@opentelemetry/api": "^1.9.1",

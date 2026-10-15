@@ -13,6 +13,10 @@
     "./load-env": {
       "types": "./dist/config/load-env.d.ts",
       "default": "./dist/config/load-env.js"
+    },
+    "./bootstrap": {
+      "types": "./dist/bootstrap/index.d.ts",
+      "default": "./dist/bootstrap/index.js"
     }
   },
   "files": [
@@ -36,17 +40,29 @@
     "@nestjs/common": ">=11",
     "@nestjs/config": ">=4",
     "@nestjs/core": ">=11",
-    "@quynhonsemiconductor/observability": ">=0.2.0",
+    "@quynhonsemiconductor/observability": ">=0.5.0",
     "@quynhonsemiconductor/platform-cache": ">=3.2.0",
     "fastify": ">=5",
     "zod": ">=4",
-    "@quynhonsemiconductor/platform-db": ">=0.1.0"
+    "@quynhonsemiconductor/platform-db": ">=0.1.0",
+    "@nestjs/platform-fastify": ">=11",
+    "nestjs-pino": ">=4",
+    "pino": ">=9"
   },
   "peerDependenciesMeta": {
     "fastify": {
       "optional": true
     },
     "@quynhonsemiconductor/platform-db": {
+      "optional": true
+    },
+    "@nestjs/platform-fastify": {
+      "optional": true
+    },
+    "nestjs-pino": {
+      "optional": true
+    },
+    "pino": {
       "optional": true
     }
   },
@@ -64,6 +80,8 @@
     "pg": "8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "nestjs-pino": "^4.6.1",
+    "pino": "^10.3.1"
   }
 }

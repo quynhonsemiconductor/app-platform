@@ -7,6 +7,9 @@
  * auto-instrumentation. Import them from `@quynhonsemiconductor/observability/otel` instead.
  */
 export * from './logger.factory';
+export * from './logger-env';
+export * from './script-logger';
+export * from './logging.module';
 export * from './request-context';
 export * from './job-context';
 export * from './metrics';

@@ -38,10 +38,10 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@types/node": "24.19.1",
+    "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
-    "testcontainers": "12.2.0",
+    "testcontainers": "12.2.1",
     "typescript": "6.0.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.12"
   }
 }

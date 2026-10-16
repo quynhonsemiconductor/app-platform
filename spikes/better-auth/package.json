@@ -34,14 +34,14 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@types/node": "24.19.1",
+    "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "argon2": "0.45.1",
-    "auth": "1.7.7",
+    "auth": "1.7.10",
     "drizzle-kit": "0.31.11",
-    "jose": "6.2.4",
-    "testcontainers": "12.2.0",
+    "jose": "6.2.12",
+    "testcontainers": "12.2.1",
     "typescript": "6.0.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.12"
   }
 }

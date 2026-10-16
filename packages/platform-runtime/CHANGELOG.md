@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.2.0...platform-runtime-v0.3.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** the `job` label on job.* metrics is now `job_name`; queries that group or filter by it must change.
+
+### ✨ Features
+
+* **observability:** name the job job_name on every job metric (job is overwritten by OTLP-&gt;Prometheus) ([#251](https://github.com/quynhonsemiconductor/app-platform/issues/251)) ([e2175d6](https://github.com/quynhonsemiconductor/app-platform/commit/e2175d6ea4f1c260439e92aaf7002a61bc927745))
+
 ## [0.2.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.1.4...platform-runtime-v0.2.0) (2026-10-15)
 
 

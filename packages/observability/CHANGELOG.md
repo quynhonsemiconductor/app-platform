@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.5.0...observability-v0.6.0) (2026-10-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** the `job` label on job.* metrics is now `job_name`; queries that group or filter by it must change.
+
+### ✨ Features
+
+* **observability:** name the job job_name on every job metric (job is overwritten by OTLP-&gt;Prometheus) ([#251](https://github.com/quynhonsemiconductor/app-platform/issues/251)) ([e2175d6](https://github.com/quynhonsemiconductor/app-platform/commit/e2175d6ea4f1c260439e92aaf7002a61bc927745))
+
+
+### 🐛 Bug Fixes
+
+* **observability:** create the job failure series at 0 before each run ([#250](https://github.com/quynhonsemiconductor/app-platform/issues/250)) ([8e08b29](https://github.com/quynhonsemiconductor/app-platform/commit/8e08b293fb534536024d10c4e69ff332d795932e))
+
 ## [0.5.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.4.2...observability-v0.5.0) (2026-10-15)
 
 

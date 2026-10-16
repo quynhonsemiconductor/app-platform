@@ -424,8 +424,8 @@ Never name a metric attribute `job` or `instance` (nor `le`, `quantile`, or anyt
 **overwritten from the resource**: `job` becomes `service.namespace/service.name` and `instance` becomes `service.instance.id`. A metric attribute with
 either name is silently replaced, which collapses every series that differed only by it into one (and several writers on one series at one
 timestamp are discarded as duplicates). `JobMetrics` did exactly this with `job` until 0.6.0: every cron of a worker was ONE series
-(`{job="rova/rova-worker"}`), so no alert could name the failing job. `metric-attributes.spec.ts` exports every instrument through the real SDK
-and fails on a reserved name or on two attributes that sanitise to the same Prometheus label.
+(`{job="rova/rova-worker"}`), so no alert could name the failing job. `metric-attributes.spec.ts` exports the instruments of this package's recorders (`HttpMetrics`, `JobMetrics`, `QueueMetrics`, `SecurityMetrics`,
+`AuthMetrics`) through the real SDK and fails on a reserved name or on two attributes that sanitise to the same Prometheus label.
 
 **Migrating to 0.6.0 (breaking).** On every `job.*` metric (`job_runs_total`, `job_failures_total`, the duration histogram, and platform-runtime's
 `job.unlocked_runs`) the label `job` is now **`job_name`**. A query that did `by (job)` or filtered `{job="daily-cleanup"}` must use `job_name`. Queries that sum everything

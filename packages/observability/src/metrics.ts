@@ -116,7 +116,7 @@ const DEFAULT_LABEL_LIMIT = 100;
 const LABEL_LIMITS: Readonly<Record<string, number>> = {
   route: 500,
   error_code: 200,
-  job: DEFAULT_LABEL_LIMIT,
+  job_name: DEFAULT_LABEL_LIMIT,
   queue: DEFAULT_LABEL_LIMIT,
 };
 
@@ -292,13 +292,19 @@ export class JobMetrics {
     description: 'Scheduled job runs that threw',
   });
 
-  /** `job` is a fixed name from the schedule, so its cardinality is the job count. */
+  /**
+   * `job_name` is a fixed name from the schedule, so its cardinality is the job count.
+   *
+   * NOT `job`. Through OTLP -> Prometheus, `job` is the scrape-job label and is OVERWRITTEN with `service.namespace/service.name`, so a metric
+   * attribute called `job` collapses every cron of a worker into ONE series (and several writers on one series at one timestamp are
+   * discarded as duplicates). `instance` has the same fate (from `service.instance.id`). See the README's "Metric attribute names".
+   */
   record(job: string, durationMs: number, outcome: 'success' | 'failure'): void {
     safely('JobMetrics.record', () => {
-      const name = labelGuard.bound('job', 'job', job);
-      this.duration.record(durationMs, { job: name, outcome });
-      this.runs.add(1, { job: name, outcome });
-      if (outcome === 'failure') this.failures.add(1, { job: name });
+      const name = labelGuard.bound('job', 'job_name', job);
+      this.duration.record(durationMs, { job_name: name, outcome });
+      this.runs.add(1, { job_name: name, outcome });
+      if (outcome === 'failure') this.failures.add(1, { job_name: name });
     });
   }
 
@@ -309,7 +315,7 @@ export class JobMetrics {
     // This does NOT cover a job whose very first run after a process start fails: the exporter sends on an interval (30 s), so the 0 and the 1
     // reach the backend in the same batch and the series still starts at 1. An alert has to cover that case itself (compare against `offset`).
     safely('JobMetrics.time', () =>
-      this.failures.add(0, { job: labelGuard.bound('job', 'job', job) }),
+      this.failures.add(0, { job_name: labelGuard.bound('job', 'job_name', job) }),
     );
     const startedAt = Date.now();
     try {

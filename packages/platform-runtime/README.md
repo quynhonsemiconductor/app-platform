@@ -265,7 +265,7 @@ still runs once across replicas, and a crashed holder frees the lock the moment 
 the lock is held elsewhere the tick is skipped.
 
 Only with **neither** a cache **nor** a database pool does it fail OPEN and run unlocked. That is
-logged at **ERROR** and counted in the `job.unlocked_runs` counter (label `job`); alert on
+logged at **ERROR** and counted in the `job.unlocked_runs` counter (label `job_name`); alert on
 `rate(job.unlocked_runs) > 0` in any deployment with more than one replica, where it means every
 replica is running the job.
 Every job behind this helper is idempotent, so running a sweep twice costs less than losing SLA-breach

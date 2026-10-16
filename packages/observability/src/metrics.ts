@@ -304,6 +304,13 @@ export class JobMetrics {
 
   /** Time `fn`, record the outcome, and re-throw so callers see failures. */
   async time<T>(job: string, fn: () => Promise<T>): Promise<T> {
+    // Create the failure series at 0 BEFORE the run, so that a failure after an EARLIER run (of any outcome) is an increase from 0 to 1 rather
+    // than a series that first appears at 1: Prometheus `increase()` sees no change in a series' first sample.
+    // This does NOT cover a job whose very first run after a process start fails: the exporter sends on an interval (30 s), so the 0 and the 1
+    // reach the backend in the same batch and the series still starts at 1. An alert has to cover that case itself (compare against `offset`).
+    safely('JobMetrics.time', () =>
+      this.failures.add(0, { job: labelGuard.bound('job', 'job', job) }),
+    );
     const startedAt = Date.now();
     try {
       const result = await fn();

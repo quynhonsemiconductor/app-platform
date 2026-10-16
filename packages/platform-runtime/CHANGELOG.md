@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.3.0...platform-runtime-v0.3.1) (2026-10-16)
+
+
+### 🐛 Bug Fixes
+
+* **platform-runtime:** the logger falls back to the default service name, like OpenTelemetry ([#253](https://github.com/quynhonsemiconductor/app-platform/issues/253)) ([5b91360](https://github.com/quynhonsemiconductor/app-platform/commit/5b91360711dba7cc35b18bcae5cfcd61a4f1641f))
+
 ## [0.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.2.0...platform-runtime-v0.3.0) (2026-10-16)
 
 

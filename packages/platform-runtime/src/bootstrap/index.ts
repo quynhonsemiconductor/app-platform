@@ -97,6 +97,19 @@ async function installLogging(app: INestApplicationContext): Promise<{
 }
 
 /**
+ * The environment the logger reads, ONE answer for every logger of the process (the pre-logger bootstrap lines, the shared pino logger and the
+ * fatal line). OpenTelemetry takes the service name from `serviceNameEnvVar` when the product names one (opshub, rova: the worker shares a `.env`
+ * that names the API), else from the default; the logger must report the same name, so `OTEL_SERVICE_NAME` is set from that variable here.
+ */
+function loggerEnvFor(options: BootstrapOptions): NodeJS.ProcessEnv {
+  const baseEnv = options.env ?? process.env;
+  const envVar = options.otel?.serviceNameEnvVar;
+  return envVar
+    ? { ...baseEnv, OTEL_SERVICE_NAME: baseEnv[envVar] ?? defaultServiceName(options) }
+    : baseEnv;
+}
+
+/**
  * Nest's logger BEFORE `useLogger` runs: a `LoggerService` over the same pino configuration (a script logger: JSON, the field contract,
  * synchronous). Passed to `NestFactory` so what Nest writes while creating the app (the buffered "Starting Nest application" lines, and the
  * `ExceptionHandler` error when a provider throws) is JSON, not coloured `ConsoleLogger` text.
@@ -140,14 +153,7 @@ async function composeRoot(
   options: BootstrapOptions,
 ): Promise<{ Root: Type<unknown>; bootstrapLogger: LoggerService }> {
   const envVar = options.otel?.serviceNameEnvVar;
-  const baseEnv = options.env ?? process.env;
-  // Logger and OpenTelemetry must agree on the service name. OTel reads `envVar` (else the default); give the logger the same answer.
-  const loggerEnv: NodeJS.ProcessEnv = envVar
-    ? {
-        ...baseEnv,
-        OTEL_SERVICE_NAME: baseEnv[envVar] ?? defaultServiceName(options),
-      }
-    : baseEnv;
+  const loggerEnv = loggerEnvFor(options);
   startOtel({
     defaultServiceName: defaultServiceName(options),
     ...(envVar ? { serviceNameEnvVar: envVar } : {}),
@@ -237,7 +243,7 @@ async function failFatal(error: unknown, options: BootstrapOptions): Promise<nev
   const pino = (await import('pino')).default;
   const { createScriptLogger } = await import('@quynhonsemiconductor/observability/script-logger');
   createScriptLogger(defaultServiceName(options), {
-    env: options.env,
+    env: loggerEnvFor(options),
     destination: options.logStream ?? pino.destination({ fd: 2, sync: true }),
   }).fatal({ err: error }, 'Fatal bootstrap error');
   process.exit(1);

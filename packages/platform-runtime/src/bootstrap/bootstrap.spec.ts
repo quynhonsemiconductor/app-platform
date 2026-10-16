@@ -226,6 +226,40 @@ describe('the shared bootstrap writes the log contract', () => {
     expect(new Set(services)).toEqual(new Set(['svc-default']));
   });
 
+  it('the fatal line is named by serviceNameEnvVar too (a local worker whose .env names the API)', async () => {
+    @Module({
+      providers: [
+        {
+          provide: 'EXPLODING',
+          useFactory: () => {
+            throw new Error('DATABASE_URL is required');
+          },
+        },
+      ],
+    })
+    class ExplodingModule {}
+    const { createWorkerApp } = await import('./index');
+    const { createLogCapture } = await import('@quynhonsemiconductor/observability/testing');
+    const capture = createLogCapture();
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    capture.install();
+    try {
+      await createWorkerApp({
+        module: async () => ExplodingModule,
+        env: { ...ENV, OTEL_SERVICE_NAME: 'svc-api', OTEL_WORKER_SERVICE_NAME: 'svc-worker' },
+        otel: { defaultServiceName: 'svc-default', serviceNameEnvVar: 'OTEL_WORKER_SERVICE_NAME' },
+        logStream: capture.stream,
+      });
+    } finally {
+      capture.restore();
+      exit.mockRestore();
+    }
+    const services = capture.lines().map((l) => (JSON.parse(l) as { service: string }).service);
+    expect(services.length).toBeGreaterThan(0);
+    // EVERY line, the Nest ones before the logger is installed and the fatal one included: none may say the API's name.
+    expect(new Set(services)).toEqual(new Set(['svc-worker']));
+  });
+
   it('two boots in ONE process each capture their own lines (nestjs-pino keeps a process-wide out-of-context logger)', async () => {
     for (const round of [1, 2]) {
       const lines = await runLoggingConformance({

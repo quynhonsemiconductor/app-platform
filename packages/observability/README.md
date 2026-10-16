@@ -405,18 +405,31 @@ methods to a fixed set plus `OTHER`, error labels take a domain code. Passing an
 a type error. IDs belong on spans and logs. `normalizeRoute()` is the safety net for
 when a framework cannot supply a route template.
 
-**…and by a runtime guard where the type cannot help.** `route`, `error_code`, `job` and
+**…and by a runtime guard where the type cannot help.** `route`, `error_code`, `job_name` and
 `queue` are plain strings — the vocabulary is the product's — so a per-id route or a job
 named after a tenant type-checks and mints a series per value. `LabelCardinalityGuard`
 remembers the distinct values each recorder has seen per label and, past a limit, records
 new ones as `__other__` instead (values already admitted keep their own series). It logs
 once per label, so the leak is visible without becoming a log flood.
 
-| Label          | Limit (distinct values) |
-| -------------- | ----------------------- |
-| `route`        | 500                     |
-| `error_code`   | 200                     |
-| `job`, `queue` | 100                     |
+| Label               | Limit (distinct values) |
+| ------------------- | ----------------------- |
+| `route`             | 500                     |
+| `error_code`        | 200                     |
+| `job_name`, `queue` | 100                     |
+
+### Metric attribute names
+
+Never name a metric attribute `job` or `instance` (nor `le`, `quantile`, or anything starting `__`). Through OTLP -> Prometheus the scrape labels are
+**overwritten from the resource**: `job` becomes `service.namespace/service.name` and `instance` becomes `service.instance.id`. A metric attribute with
+either name is silently replaced, which collapses every series that differed only by it into one (and several writers on one series at one
+timestamp are discarded as duplicates). `JobMetrics` did exactly this with `job` until 0.6.0: every cron of a worker was ONE series
+(`{job="rova/rova-worker"}`), so no alert could name the failing job. `metric-attributes.spec.ts` exports the instruments of this package's recorders (`HttpMetrics`, `JobMetrics`, `QueueMetrics`, `SecurityMetrics`,
+`AuthMetrics`) through the real SDK and fails on a reserved name or on two attributes that sanitise to the same Prometheus label.
+
+**Migrating to 0.6.0 (breaking).** On every `job.*` metric (`job_runs_total`, `job_failures_total`, the duration histogram, and platform-runtime's
+`job.unlocked_runs`) the label `job` is now **`job_name`**. A query that did `by (job)` or filtered `{job="daily-cleanup"}` must use `job_name`. Queries that sum everything
+(`sum(rate(job_runs_total[5m]))`) are unchanged. Dashboards keep working but now show one series per job instead of one per worker.
 
 **Label unmatched requests with a constant.** A request that matches no route (every 404
 from a scanner or a typo) has no template. If the product then labels it with the raw URL,
@@ -481,7 +494,7 @@ reads. With `OTEL_ENABLED` unset, `startOtel` is a no-op and tests run without a
 - **Head sampling only.** `OTEL_SAMPLING_PROBABILITY` below `1.0` drops most error traces; use
   collector-side tail sampling for those and leave this at `1.0` where the collector does it.
 - **`OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` are ignored** (the SDK is given its own sampler).
-- **Label caps are fixed** (`route` 500, `error_code` 200, `job`/`queue` 100) and there is deliberately
+- **Label caps are fixed** (`route` 500, `error_code` 200, `job_name`/`queue` 100) and there is deliberately
   no per-product setting. Reaching one means an id or raw path is a label; fix the call site.
 - Changing `httpDurationBoundaries` invalidates existing latency series (see the warning above).
 - Auto-instrumentation covers HTTP, `pg` and `ioredis`; the AWS SDK, filesystem, DNS and raw sockets are

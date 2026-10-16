@@ -165,7 +165,7 @@ export class ExclusiveJob {
           `Safe on a single replica; with more than one, EVERY replica runs it. Configure a cache ` +
           `or platform-db.`,
       );
-      this.unlockedRuns.add(1, { job: name });
+      this.unlockedRuns.add(1, { job_name: name });
       await fn();
       return;
     }

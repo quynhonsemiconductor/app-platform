@@ -188,7 +188,7 @@ describe('ExclusiveJob', () => {
 
       expect(ran, 'fail-open must still run the job').toBe(true);
       expect(errors).toHaveBeenCalledWith(expect.stringMatching(/WITHOUT a leader lock/));
-      expect(unlockedAdd).toHaveBeenCalledExactlyOnceWith(1, { job: 'sweep' });
+      expect(unlockedAdd).toHaveBeenCalledExactlyOnceWith(1, { job_name: 'sweep' });
     } finally {
       errors.mockRestore();
     }

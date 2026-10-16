@@ -152,18 +152,18 @@ describe('JobMetrics', () => {
 
   it('records a successful run', () => {
     new JobMetrics().record('daily-cleanup', 250, 'success');
-    expect(record).toHaveBeenCalledWith(250, { job: 'daily-cleanup', outcome: 'success' });
-    expect(add).toHaveBeenCalledWith(1, { job: 'daily-cleanup', outcome: 'success' });
+    expect(record).toHaveBeenCalledWith(250, { job_name: 'daily-cleanup', outcome: 'success' });
+    expect(add).toHaveBeenCalledWith(1, { job_name: 'daily-cleanup', outcome: 'success' });
   });
 
   it('adds a failure counter on failure', () => {
     new JobMetrics().record('daily-cleanup', 10, 'failure');
-    expect(add).toHaveBeenCalledWith(1, { job: 'daily-cleanup' });
+    expect(add).toHaveBeenCalledWith(1, { job_name: 'daily-cleanup' });
   });
 
   it('times a successful callback and returns its value', async () => {
     await expect(new JobMetrics().time('job', async () => 7)).resolves.toBe(7);
-    expect(add).toHaveBeenCalledWith(1, { job: 'job', outcome: 'success' });
+    expect(add).toHaveBeenCalledWith(1, { job_name: 'job', outcome: 'success' });
   });
 
   it('creates the failure series at 0 BEFORE the run, so the first failure is an increase an alert can see', async () => {
@@ -175,7 +175,7 @@ describe('JobMetrics', () => {
     });
     expect(order[0]).toBe('add:0');
     expect(order.indexOf('run')).toBeGreaterThan(0);
-    expect(add).toHaveBeenNthCalledWith(1, 0, { job: 'job' });
+    expect(add).toHaveBeenNthCalledWith(1, 0, { job_name: 'job' });
   });
 
   it('records a failure and re-throws, so a job cannot fail silently', async () => {
@@ -183,7 +183,7 @@ describe('JobMetrics', () => {
     await expect(metrics.time('job', () => Promise.reject(new Error('boom')))).rejects.toThrow(
       'boom',
     );
-    expect(add).toHaveBeenCalledWith(1, { job: 'job', outcome: 'failure' });
+    expect(add).toHaveBeenCalledWith(1, { job_name: 'job', outcome: 'failure' });
   });
 });
 
@@ -333,7 +333,7 @@ describe('LabelCardinalityGuard', () => {
 
   it('counts each (scope, label) separately', () => {
     const guard = new LabelCardinalityGuard({}, 1);
-    guard.bound('job', 'job', 'nightly');
+    guard.bound('job', 'job_name', 'nightly');
     // A different recorder has its own budget.
     expect(guard.bound('queue', 'queue', 'outbox')).toBe('outbox');
   });
@@ -385,7 +385,9 @@ describe('recorders apply the label guard', () => {
   it('JobMetrics stops a per-tenant job name from minting a series per tenant', () => {
     const jobs = new JobMetrics();
     for (let i = 0; i < 120; i += 1) jobs.record(`sync-tenant-${i}`, 1, 'success');
-    const names = new Set(add.mock.calls.map(([, labels]) => (labels as { job: string }).job));
+    const names = new Set(
+      add.mock.calls.map(([, labels]) => (labels as { job_name: string }).job_name),
+    );
 
     expect(names.size).toBeLessThanOrEqual(101);
     expect(names.size).toBeGreaterThan(90);

@@ -174,6 +174,58 @@ describe('the shared bootstrap writes the log contract', () => {
     }
   });
 
+  it('with no OTEL_SERVICE_NAME, every line says the product\'s default service name (as OpenTelemetry does), never "app" or "bootstrap"', async () => {
+    const withoutName = { ...ENV, OTEL_SERVICE_NAME: undefined } as NodeJS.ProcessEnv;
+    const lines = await runLoggingConformance({
+      expected: { service: 'svc-default', env: 'develop', version: 'sha-abc123' },
+      boot: async (logStream) => ({
+        app: await prepareWorkerApp({
+          module: async () => WorkerProductModule,
+          env: withoutName,
+          otel: { defaultServiceName: 'svc-default' },
+          logStream,
+        }),
+      }),
+    });
+    expect(
+      lines.every((l) => (JSON.parse(l) as { service: string }).service === 'svc-default'),
+    ).toBe(true);
+  });
+
+  it('the fatal line also carries the default service name when the environment names none', async () => {
+    @Module({
+      providers: [
+        {
+          provide: 'EXPLODING',
+          useFactory: () => {
+            throw new Error('DATABASE_URL is required');
+          },
+        },
+      ],
+    })
+    class ExplodingModule {}
+    const withoutName = { ...ENV, OTEL_SERVICE_NAME: undefined } as NodeJS.ProcessEnv;
+    const { createWorkerApp } = await import('./index');
+    const { createLogCapture } = await import('@quynhonsemiconductor/observability/testing');
+    const capture = createLogCapture();
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    capture.install();
+    try {
+      await createWorkerApp({
+        module: async () => ExplodingModule,
+        env: withoutName,
+        otel: { defaultServiceName: 'svc-default' },
+        logStream: capture.stream,
+      });
+    } finally {
+      capture.restore();
+      exit.mockRestore();
+    }
+    const services = capture.lines().map((l) => (JSON.parse(l) as { service: string }).service);
+    expect(services.length).toBeGreaterThan(0);
+    expect(new Set(services)).toEqual(new Set(['svc-default']));
+  });
+
   it('two boots in ONE process each capture their own lines (nestjs-pino keeps a process-wide out-of-context logger)', async () => {
     for (const round of [1, 2]) {
       const lines = await runLoggingConformance({

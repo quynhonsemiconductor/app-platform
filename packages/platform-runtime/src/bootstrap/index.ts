@@ -55,6 +55,14 @@ export interface HttpAppOptions extends BootstrapOptions {
 export type WorkerAppOptions = BootstrapOptions;
 
 /**
+ * The service name a process reports when its environment names none: the product's `otel.defaultServiceName`. OpenTelemetry already falls back
+ * to it; the logger must too, or a process with no OTEL_SERVICE_NAME logs `service:"app"` (or "bootstrap") while its spans say `rova-worker`.
+ */
+function defaultServiceName(options: BootstrapOptions): string {
+  return options.otel?.defaultServiceName ?? 'app';
+}
+
+/**
  * A second `nestjs-pino` LoggerModule (a product that still registers its own `LoggerModule.forRootAsync`) gives two global Logger providers
  * and two pino-http middlewares: every request is logged twice, by two configurations, one of them without the shared redaction. Refuse to
  * start rather than guess which one wins.
@@ -98,7 +106,7 @@ async function createBootstrapLogger(
   loggerEnv: NodeJS.ProcessEnv,
 ): Promise<LoggerService> {
   const { createScriptLogger } = await import('@quynhonsemiconductor/observability/script-logger');
-  const pino = createScriptLogger('bootstrap', {
+  const pino = createScriptLogger(defaultServiceName(options), {
     env: loggerEnv,
     ...(options.logStream ? { destination: options.logStream } : {}),
   });
@@ -137,12 +145,11 @@ async function composeRoot(
   const loggerEnv: NodeJS.ProcessEnv = envVar
     ? {
         ...baseEnv,
-        OTEL_SERVICE_NAME: baseEnv[envVar] ?? options.otel?.defaultServiceName ?? 'app',
+        OTEL_SERVICE_NAME: baseEnv[envVar] ?? defaultServiceName(options),
       }
     : baseEnv;
   startOtel({
-    defaultServiceName:
-      options.otel?.defaultServiceName ?? options.env?.['OTEL_SERVICE_NAME'] ?? 'app',
+    defaultServiceName: defaultServiceName(options),
     ...(envVar ? { serviceNameEnvVar: envVar } : {}),
     ...(options.otel?.httpDurationBoundaries
       ? { httpDurationBoundaries: options.otel.httpDurationBoundaries }
@@ -158,7 +165,14 @@ async function composeRoot(
   ]);
   class RootModule {}
   Module({
-    imports: [LoggingModule.forRoot(loggerEnv, {}, options.logStream), productModule],
+    imports: [
+      LoggingModule.forRoot(
+        loggerEnv,
+        { defaultServiceName: defaultServiceName(options) },
+        options.logStream,
+      ),
+      productModule,
+    ],
   })(RootModule);
   return { Root: RootModule, bootstrapLogger };
 }
@@ -222,7 +236,7 @@ async function failFatal(error: unknown, options: BootstrapOptions): Promise<nev
   // One JSON line to stderr, in the same contract shape, from the script logger (no Nest, no transport, synchronous).
   const pino = (await import('pino')).default;
   const { createScriptLogger } = await import('@quynhonsemiconductor/observability/script-logger');
-  createScriptLogger('bootstrap', {
+  createScriptLogger(defaultServiceName(options), {
     env: options.env,
     destination: options.logStream ?? pino.destination({ fd: 2, sync: true }),
   }).fatal({ err: error }, 'Fatal bootstrap error');

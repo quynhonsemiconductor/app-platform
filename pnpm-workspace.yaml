@@ -73,7 +73,7 @@ overrides:
   # is zero. Reached only through postcss, which calls it with a fixed non-zero size, so
   # the zero-size path is not reachable here; floored anyway so the scanner stays clean.
   # NOT forced across majors: postcss declares ^3.3.11 and nanoid 4.x+ is ESM-only.
-  "nanoid@>=3.0.0 <3.3.18": "3.3.18"
+  "nanoid@>=3.0.0 <3.3.18": "3.3.20"
   # GHSA-m9gg-hp2v-232j (CVSS 7.4) and GHSA-f596-whhp-79r4 (CVSS 3.7) — both fixed in
   # 1.14.5 on the 1.x line. Reached only through the OTLP gRPC exporters that
   # `@opentelemetry/sdk-node` pulls in; nothing here opens a gRPC server. Capped below 2.0.0.

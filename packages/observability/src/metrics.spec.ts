@@ -166,6 +166,18 @@ describe('JobMetrics', () => {
     expect(add).toHaveBeenCalledWith(1, { job: 'job', outcome: 'success' });
   });
 
+  it('creates the failure series at 0 BEFORE the run, so the first failure is an increase an alert can see', async () => {
+    const order: string[] = [];
+    add.mockImplementation((value: number) => void order.push(`add:${value}`));
+    await new JobMetrics().time('job', () => {
+      order.push('run');
+      return Promise.resolve();
+    });
+    expect(order[0]).toBe('add:0');
+    expect(order.indexOf('run')).toBeGreaterThan(0);
+    expect(add).toHaveBeenNthCalledWith(1, 0, { job: 'job' });
+  });
+
   it('records a failure and re-throws, so a job cannot fail silently', async () => {
     const metrics = new JobMetrics();
     await expect(metrics.time('job', () => Promise.reject(new Error('boom')))).rejects.toThrow(

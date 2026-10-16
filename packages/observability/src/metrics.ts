@@ -304,6 +304,12 @@ export class JobMetrics {
 
   /** Time `fn`, record the outcome, and re-throw so callers see failures. */
   async time<T>(job: string, fn: () => Promise<T>): Promise<T> {
+    // Create the failure series at 0 BEFORE the run. A counter that is first added to by its first failure appears at 1, and Prometheus `increase()`
+    // sees no change in a series' first sample: the first failure of a job (a daily cron that has never failed) would be invisible to an alert.
+    // With the series already at 0, that failure is an increase from 0 to 1.
+    safely('JobMetrics.time', () =>
+      this.failures.add(0, { job: labelGuard.bound('job', 'job', job) }),
+    );
     const startedAt = Date.now();
     try {
       const result = await fn();

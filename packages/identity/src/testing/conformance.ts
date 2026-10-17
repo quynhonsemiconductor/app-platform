@@ -1,3 +1,4 @@
+import { contextConformance } from './conformance-context';
 import { cookiesConformance } from './conformance-cookies';
 import { hardeningConformance } from './conformance-hardening';
 import { decisionsConformance } from './conformance-decisions';
@@ -36,5 +37,8 @@ export function runIdentityConformance(t: TestApi, infra: ConformanceInfra): voi
   );
   t.describe('identity conformance: one Microsoft identity per user (issue #228)', () =>
     microsoftIdentityConformance(t, infra),
+  );
+  t.describe('identity conformance: the active context of a session (identity 8.4)', () =>
+    contextConformance(t, infra),
   );
 }

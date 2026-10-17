@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.4.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.3.0...identity-v8.4.0) (2026-10-17)
+
+
+### ✨ Features
+
+* **identity:** the active context of a session, and markPreAuthenticated ([#257](https://github.com/quynhonsemiconductor/app-platform/issues/257)) ([35d8476](https://github.com/quynhonsemiconductor/app-platform/commit/35d8476799bb4c98fa071c7b588b3d1d4f247b49))
+
 ## [8.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.2.0...identity-v8.3.0) (2026-10-13)
 
 

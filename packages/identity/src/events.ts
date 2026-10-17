@@ -16,7 +16,10 @@ export type SecurityEventName =
   | 'admin.user_banned'
   | 'account.microsoft_link_refused'
   | 'account.microsoft_unlinked'
-  | 'staff.upn_refused';
+  | 'staff.upn_refused'
+  | 'context.switched'
+  | 'context.refused'
+  | 'context.revoked';
 
 export interface SecurityEvent {
   name: SecurityEventName;

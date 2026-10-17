@@ -362,3 +362,24 @@ amendment changes nothing in the decision; it only records what the references t
 - **Not done here:** `packages/identity/src/password.ts` still carries a comment that names solodesk's
   argon2 defaults as the example; the code does not depend on it. Whether to reword the comment is left to
   the identity owners.
+
+## Amendment 2026-10-18 (D19: `contextId` shipped in 8.4.0; identity owners)
+
+D19 listed `session.additionalFields.contextId` for rova as not exercised, and the 8.x documents said rova "waits for 8.1".
+It did not ship in 8.1, and 8.4.0 is the release that carries it. The decision is plan D6 unchanged: rova keeps its tenancy
+model and stores the active workspace on the session; it does **not** map workspaces to Better Auth organizations.
+
+- **What shipped.** An opt-in `context: { membership, initial?, revalidateSeconds? }` option; `session.contextId` (a nullable
+  uuid column, `input: false`); `POST /api/auth/context/set`; the service-side `setContext`, `clearContext` and
+  `clearContextEverywhere`; and a read-time re-check. The conformance kit asserts each.
+- **Policy stays with the product.** The package decides nothing about what a context is or what a member may do in it.
+  `membership` is the product's port; the context never authorizes anything (rova resolves permissions per request).
+- **A context is not authentication.** A session that loses its context stays signed in and falls back to `initial()` or none;
+  a `membership` that throws keeps the context on a read (fail-open) and refuses a set (500, nothing changes).
+- **Re-check is per process** (default 60 s), not in Valkey: it needs no extra storage and degrades the way the banned-user
+  check (30 s, per process) does. `clearContext` is the eager half.
+- **Also in 8.4.0, for the same adoption:** `markPreAuthenticated(req)`, so a product guard that authenticated a non-browser
+  credential (rova's API tokens) can tell the global `SessionGuard` to stand aside. It is a symbol on the in-process request,
+  not a header or a decorator.
+- **Not changed:** per-workspace SSO. The `organizations` preset still ties an SSO provider to a Better Auth organization
+  (D13, D15); mapping a product tenancy onto it is a separate decision, deferred until a partner IdP exists.

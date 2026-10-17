@@ -222,10 +222,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # `test/qnsc-dependency-ranges.spec.ts` (rova#704, opshub#391) asserts that every @quynhonsemiconductor/* range in the
+      # COMMITTED package.json is a caret. This job has just rewritten those ranges to `file:` tarballs on purpose, so
+      # that one spec can only fail here, on every pull request that changes a package. It is a check of the product's
+      # repository, not of the packages, and runs in the product's own CI.
       - name: Unit tests
         if: steps.link.outputs.applicable == 'true' && matrix.unit_tests
         working-directory: product
-        run: pnpm test
+        run: pnpm test --exclude test/qnsc-dependency-ranges.spec.ts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

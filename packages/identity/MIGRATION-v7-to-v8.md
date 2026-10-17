@@ -92,7 +92,7 @@ SELECT id,
        (email_verified                                   -- v7 proved the address, OR
         OR EXISTS (SELECT 1 FROM identity.sso_identities s    -- the tenant vouches for it (an Entra identity), OR
                    WHERE s.user_id = u.id AND s.provider = 'entra')
-        OR split_part(lower(email), '@', 2) = ANY (ARRAY['qnsc.vn'])),   -- it is on a staff.domains entry
+        OR substring(lower(email) from '@([^@]+)$') = ANY (ARRAY['qnsc.vn'])),   -- it is on a staff.domains entry
        avatar_url,
        status IN ('inactive', 'suspended'),              -- v7 lifecycle -> v8 ban
        CASE WHEN status IN ('inactive', 'suspended') THEN 'migrated from v7: ' || status END,
@@ -142,12 +142,14 @@ Two rules of the sign-in make the migration order-sensitive. Both were found whi
      SELECT count(*) INTO n FROM identity.users u
      WHERE u.deleted_at IS NULL
        AND NOT EXISTS (SELECT 1 FROM identity.sso_identities s WHERE s.user_id = u.id AND s.provider = 'entra')
-       AND split_part(lower(u.email), '@', 2) <> ALL (ARRAY['qnsc.vn']);      -- staff.domains
+       AND substring(lower(u.email) from '@([^@]+)$') <> ALL (ARRAY['qnsc.vn']);      -- staff.domains
      IF n > 0 THEN
        RAISE EXCEPTION '% user(s) have no Entra identity and an address outside staff.domains: decide per user', n;
      END IF;
    END $$;
    ```
+
+   The domain is the part after the LAST `@` (`substring(... from '@([^@]+)$')`): `split_part(email, '@', 2)` would read `a@qnsc.vn@evil.example` as a staff address. The array holds lowercased, exact domains; a `*.x.y` entry of `staff.domains` means sub-domains, so expand it to a suffix match (`... LIKE '%.x.y'`) rather than putting the literal in the array.
 
    (A product with password users migrates those with their credential account instead; this check is for products where every sign-in is
    Entra.)

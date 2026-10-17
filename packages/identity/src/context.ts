@@ -2,6 +2,7 @@ import { createAuthEndpoint, sensitiveSessionMiddleware, APIError } from 'better
 import { setSessionCookie } from 'better-auth/cookies';
 import type { BetterAuthPlugin } from 'better-auth';
 import * as z from 'zod';
+import { isUuid } from './ids';
 import { emitSafely, errorFields, type IdentityLogger, type SecurityEventSink } from './events';
 
 /**
@@ -41,7 +42,6 @@ export interface ContextOptions {
 export const DEFAULT_REVALIDATE_SECONDS = 60;
 const MAX_REVALIDATE_SECONDS = 3600;
 const MEMO_MAX = 10_000;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const CONTEXT_PATH = '/context/set';
 
@@ -97,8 +97,6 @@ export interface ContextRuntime {
   /** Wrap `findSession` of this context once (idempotent). */
   install(context: object): void;
 }
-
-const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v);
 
 export function createContextRuntime(
   options: ContextOptions,
@@ -293,8 +291,8 @@ export function createContextRuntime(
           );
           // Believed only AFTER the write: a membership that was true when asked but a write that failed (or lost a race with a
           // clearContext) must not leave a believed membership behind for a context the session does not hold.
-          if (next !== null) believe(user.id, next);
-          else forget(user.id, previous ?? undefined);
+          if (next === null) forget(user.id, previous ?? undefined);
+          else if (updated) believe(user.id, next);
           // The cookie cache (public preset) carries the session; refresh it, as `organization.setActive` does.
           await setSessionCookie(ctx, {
             session: (updated ?? { ...session, contextId: next }) as never,

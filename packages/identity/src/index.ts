@@ -23,6 +23,7 @@ export {
   type IdentityOptions,
 } from './create-identity';
 export { contextIdOf, type ContextOptions } from './context';
+export { isUuid, UUID_RE } from './ids';
 export { DEFAULTS, type Preset } from './defaults';
 export {
   AUTH_MAIL_PRIORITY,

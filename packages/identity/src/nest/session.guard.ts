@@ -18,6 +18,7 @@ import {
 import { UnauthorizedException } from '@quynhonsemiconductor/platform-http';
 import type { FastifyRequest } from 'fastify';
 import { isUserBanned, type Identity } from '../create-identity';
+import { isUuid } from '../ids';
 
 export const AUTH = Symbol.for('@quynhonsemiconductor/identity:auth');
 const PUBLIC = 'identity:public';
@@ -33,7 +34,9 @@ const PRE_AUTHENTICATED = Symbol.for('@quynhonsemiconductor/identity:pre-authent
  * with a credential that is not a browser session (rova: an API token), and has written the principal
  * with `setRequestPrincipal`.
  *
- * Call it only after the credential is verified, from a guard registered BEFORE `IdentityModule` (a global
+ * Pass the authenticated user's id (`markPreAuthenticated(req, { userId })`): it is what the ban check runs on when the request has no
+ * request context to read the principal back from, and it must equal the principal when both exist. Call it only after the credential is
+ * verified, from a guard registered BEFORE `IdentityModule` (a global
  * guard declared in a module imported earlier runs earlier). The request then has no `session`:
  * `@CurrentSession()` is `undefined`, and the product's own guard decides what the caller may do. Nothing
  * a client sends can set the flag (it is a symbol property of the in-process request object), and a route
@@ -41,11 +44,12 @@ const PRE_AUTHENTICATED = Symbol.for('@quynhonsemiconductor/identity:pre-authent
  *
  * This is the whole extension point: identity does not know what the credential is, and does not verify it. What it DOES do,
  * because the session path's checks never ran for this request: it refuses (401) a marked request whose principal was not
- * written (when a request context exists), and one whose user is banned (`isUserBanned`). A guard that authenticates outside
+ * written (when a request context exists), one it cannot name a user for (no principal and no `userId`), one whose user id is not a UUID,
+ * and one whose user is banned (`isUserBanned`). A guard that authenticates outside
  * `SessionGuard` altogether must call `isUserBanned` itself.
  */
-export function markPreAuthenticated(req: object): void {
-  (req as Record<symbol, unknown>)[PRE_AUTHENTICATED] = true;
+export function markPreAuthenticated(req: object, options: { userId?: string } = {}): void {
+  (req as Record<symbol, unknown>)[PRE_AUTHENTICATED] = { userId: options.userId };
 }
 
 /** Opt a route out of the global {@link SessionGuard}. */
@@ -105,8 +109,10 @@ export class SessionGuard implements CanActivate {
       return true;
     }
     const req = ctx.switchToHttp().getRequest<RequestWithSession>();
-    if ((req as unknown as Record<symbol, unknown>)[PRE_AUTHENTICATED] === true) {
-      await this.admitPreAuthenticated();
+    const mark = (req as unknown as Record<symbol, unknown>)[PRE_AUTHENTICATED] as
+      { userId?: string } | undefined;
+    if (mark !== undefined && typeof mark === 'object') {
+      await this.admitPreAuthenticated(mark);
       return true;
     }
     const session = await this.auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
@@ -120,27 +126,38 @@ export class SessionGuard implements CanActivate {
    * A product guard authenticated this request with something that is not a session and marked it. Two things stand between
    * that and `true`, because the session path's own checks never ran:
    *
-   *  - It MUST have written the principal. If a request context exists and holds none, the request is refused (401, logged at
-   *    error): a marked request nobody can name would skip authentication, the rate limit's per-user key and the access log,
-   *    and the way it got here is a bug in the product's guard. With NO request context at all (nothing seeded one) the
-   *    principal cannot be read back, so it is warned about once and let through: that is a misconfiguration of the app, and
-   *    refusing every API-token call because of it would be an outage.
+   *  - It MUST be nameable. With a request context, the product guard must have written the principal. Without one (nothing seeded
+   *    it) the principal cannot be read back, so the `userId` passed to `markPreAuthenticated` is used (and warned about once: the
+   *    rate limit and access log will not know the user). A request with neither, or whose id is not a UUID, is refused (401, error log).
    *  - Its user must not be banned. A session read refuses a banned user's session; a credential that never touches a session
    *    would otherwise outlive the ban.
    */
-  private async admitPreAuthenticated(): Promise<void> {
+  private async admitPreAuthenticated(mark: { userId?: string }): Promise<void> {
     const principal = getRequestPrincipal();
-    if (!principal) {
-      if (requestContextStorage.getStore()) {
-        this.logger.error(
-          'A request was marked with markPreAuthenticated() but the product guard wrote no principal (setRequestPrincipal): refused. Call setRequestPrincipal({ userId, sessionId }) before markPreAuthenticated().',
-        );
-        throw new UnauthorizedException('AUTH_UNAUTHENTICATED', 'Sign in required');
-      }
-      this.warnOnce('pre-authenticated-without-principal');
-      return;
+    const hasContext = requestContextStorage.getStore() !== undefined;
+    const refuse = (why: string): never => {
+      this.logger.error(`A request marked with markPreAuthenticated() was refused: ${why}`);
+      throw new UnauthorizedException('AUTH_UNAUTHENTICATED', 'Sign in required');
+    };
+    if (hasContext && !principal) {
+      refuse(
+        'the product guard wrote no principal. Call setRequestPrincipal({ userId, sessionId }) before markPreAuthenticated().',
+      );
     }
-    if (await isUserBanned(this.auth, principal.userId)) {
+    const userId = principal?.userId ?? mark.userId;
+    if (userId === undefined) {
+      refuse(
+        'there is no principal to read back (no request context) and no userId was passed. Call markPreAuthenticated(req, { userId }).',
+      );
+    }
+    if (!isUuid(userId)) refuse('the user id is not a UUID.');
+    if (principal && mark.userId !== undefined && mark.userId !== principal.userId) {
+      refuse(
+        'the userId passed to markPreAuthenticated() is not the principal the product guard wrote.',
+      );
+    }
+    if (!principal) this.warnOnce('pre-authenticated-without-principal');
+    if (await isUserBanned(this.auth, userId as string)) {
       throw new UnauthorizedException('AUTH_UNAUTHENTICATED', 'Sign in required');
     }
   }

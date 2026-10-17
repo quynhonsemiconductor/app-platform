@@ -419,7 +419,7 @@ canActivate(ctx) {
   const token = this.tokens.verify(bearerOf(req));          // your credential, your rules
   if (!token) return true;                                   // not ours: SessionGuard decides (a session, or 401)
   setRequestPrincipal({ userId: token.userId, sessionId: `apitoken:${token.id}`, workspaceId: token.workspaceId });
-  markPreAuthenticated(req);                                 // from '@quynhonsemiconductor/identity/nest'
+  markPreAuthenticated(req, { userId: token.userId });      // from '@quynhonsemiconductor/identity/nest'
   return true;
 }
 ```
@@ -428,7 +428,7 @@ The request then has no `session` (`@CurrentSession()` is `undefined`) and your 
 does not verify the credential and does not know what it is. The flag is a symbol on the in-process request, so nothing a client
 sends can carry it; **only call it after the credential is verified**. Write the principal first. `SessionGuard` does two things for a marked request, because the session path's checks never ran:
 
-- **It refuses (401, logged at error) a marked request whose principal was not written**, when a request context exists. With no request context at all it cannot read the principal back, so it warns once and lets the request through (a misconfigured app, not a reason to refuse every token call).
+- **It refuses (401, logged at error) a marked request whose principal was not written**, when a request context exists. With no request context at all it cannot read the principal back, so it uses the `userId` you passed to `markPreAuthenticated(req, { userId })` (warning once that the rate limit and access log will not know the user); a request with neither, or whose id is not a UUID, is refused. The ban check below therefore always runs.
 - **It refuses a banned user.** A session read refuses a banned user's session; a credential that never touches a session would outlive the ban. `SessionGuard` asks `isUserBanned` for the principal's user. A guard of yours that authenticates **outside** `SessionGuard` (a socket gateway, a job) must call `isUserBanned(auth, userId)` itself; it shares the ban guard's memo (a user not found banned is believed not banned for 30 s per process; a ban made by `setUserBanned` takes effect at once in that process). rova calls it from its API-token guard at cutover.
 
 ### Entra claims at sign-in: `hooks.onStaffSignIn`

@@ -53,6 +53,7 @@ import {
   withAtomicOrganizationCreate,
 } from './organization-atomic';
 import { withTimingFloor } from './timing';
+import { isUuid } from './ids';
 import { withTxCapture } from './tx-context';
 import {
   chainCreateBefore,
@@ -610,15 +611,13 @@ type PurgeContext = {
   };
 };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Ids are UUIDs (`uuidv7()` for everything identity creates). Checked up front so that a malformed id
  * is a plain error here and never reaches PostgreSQL, whose `invalid input syntax for type uuid` would
  * surface as a raw driver error quoting the value.
  */
 function assertUserId(userId: unknown, operation: string): asserts userId is string {
-  if (typeof userId !== 'string' || !UUID.test(userId)) {
+  if (!isUuid(userId)) {
     throw new TypeError(`identity: ${operation}: userId must be a UUID`);
   }
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { generateCertificatePem } from './__helpers__/certificate';
 import { readMailConfig } from './config';
 import { MailConfigError } from './errors';
 
@@ -55,6 +56,71 @@ describe('readMailConfig: graph', () => {
       AZURE_CLIENT_SECRET: 'x',
     });
     expect(config).toMatchObject({ credential: { kind: 'workload-identity' } });
+  });
+
+  describe('certificate (ECS, from a secret)', () => {
+    // A key and certificate generated for this run (never committed: a literal PEM, even a fake one, is what secret scanners flag).
+    const PEM = `${generateCertificatePem().trim()}\n`;
+    const block = (kind: 'PRIVATE KEY' | 'CERTIFICATE'): string =>
+      new RegExp(`-----BEGIN [A-Z ]*${kind}-----[\\s\\S]*?-----END [A-Z ]*${kind}-----\\n?`).exec(
+        PEM,
+      )![0];
+    /** A fragment of the key's base64 body: it must never appear in an error. */
+    const keyFragment = block('PRIVATE KEY').split('\n')[1]!.slice(0, 24);
+
+    it('reads a raw PEM, in production too (a certificate is not a stored secret)', () => {
+      const config = readMailConfig({
+        ...GRAPH,
+        NODE_ENV: 'production',
+        AZURE_CLIENT_CERTIFICATE: PEM,
+      });
+      expect(config).toMatchObject({ credential: { kind: 'certificate', pem: PEM.trim() } });
+    });
+
+    it('reads the same PEM base64-encoded (a secret store that holds one line)', () => {
+      const config = readMailConfig({
+        ...GRAPH,
+        AZURE_CLIENT_CERTIFICATE: Buffer.from(PEM).toString('base64'),
+      });
+      expect(config).toMatchObject({ credential: { kind: 'certificate', pem: PEM.trim() } });
+    });
+
+    it('ranks below the federated token (the k3s path drops in by setting it) and above a client secret', () => {
+      expect(
+        readMailConfig({
+          ...GRAPH,
+          AZURE_FEDERATED_TOKEN_FILE: '/t',
+          AZURE_CLIENT_CERTIFICATE: PEM,
+        }),
+      ).toMatchObject({ credential: { kind: 'workload-identity' } });
+      expect(
+        readMailConfig({ ...GRAPH, AZURE_CLIENT_CERTIFICATE: PEM, AZURE_CLIENT_SECRET: 'x' }),
+      ).toMatchObject({ credential: { kind: 'certificate' } });
+    });
+
+    it.each([
+      ['a key and no certificate', () => block('PRIVATE KEY'), /no certificate/],
+      ['a certificate and no key', () => block('CERTIFICATE'), /no private key/],
+      ['neither', () => 'not-a-pem', /neither/],
+    ])('refuses %s, naming the variable and never echoing the value', (_name, value, message) => {
+      let thrown: unknown;
+      try {
+        readMailConfig({ ...GRAPH, AZURE_CLIENT_CERTIFICATE: value() });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(MailConfigError);
+      expect((thrown as Error).message).toMatch(/AZURE_CLIENT_CERTIFICATE/);
+      expect((thrown as Error).message).toMatch(message);
+      expect(keyFragment.length).toBeGreaterThan(10);
+      expect((thrown as Error).message).not.toContain(keyFragment);
+    });
+
+    it('still refuses a client secret in production, and the message offers the certificate', () => {
+      expect(() =>
+        readMailConfig({ ...GRAPH, NODE_ENV: 'production', AZURE_CLIENT_SECRET: 'x' }),
+      ).toThrow(/AZURE_CLIENT_CERTIFICATE/);
+    });
   });
 
   it('accepts a client secret for local testing', () => {

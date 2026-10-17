@@ -34,34 +34,45 @@ pnpm add nodemailer                           # MAIL_TRANSPORT=smtp (development
 pnpm add @nestjs/common @nestjs/core          # /nest
 ```
 
-`platform-jobs` and `observability` are **required** peers: the queue handler imports
+`observability` is a **required** peer, and `platform-jobs` is required **by the package root and `/nest`**, not by `/sender`: the queue handler imports
 `PermanentJobError` and the job context from them, and the published types name `platform-jobs`'
 `Jobs`, `SendOptions` and `JobContext`. The rest are optional because no entry point needs all of
 them; a transport's library is needed only when that transport is selected, and **no declaration
 names `nodemailer`, `@azure/identity` or `pg-boss`**, so a product that installs none of them still
 compiles. `/nest` without `@nestjs/common` throws a message naming it.
 
-| import                                        | what                                                               | framework |
-| --------------------------------------------- | ------------------------------------------------------------------ | --------- |
-| `@quynhonsemiconductor/platform-mail`         | contract, `createEmailSender`, `registerMailJobs`, Valkey state    | none      |
-| `@quynhonsemiconductor/platform-mail/nest`    | `MailModule.forRoot / forRootAsync`, `MailService`, `EMAIL_SENDER` | NestJS    |
-| `@quynhonsemiconductor/platform-mail/testing` | `MemoryEmailSender`, `MemoryMailState`, conformance suites         | vitest    |
+| import                                        | what                                                                  | framework |
+| --------------------------------------------- | --------------------------------------------------------------------- | --------- |
+| `@quynhonsemiconductor/platform-mail`         | contract, `createEmailSender`, `registerMailJobs`, Valkey state       | none      |
+| `@quynhonsemiconductor/platform-mail/sender`  | contract, errors, `readMailConfig`, `createEmailSender`: **no queue** | none      |
+| `@quynhonsemiconductor/platform-mail/nest`    | `MailModule.forRoot / forRootAsync`, `MailService`, `EMAIL_SENDER`    | NestJS    |
+| `@quynhonsemiconductor/platform-mail/testing` | `MemoryEmailSender`, `MemoryMailState`, conformance suites            | vitest    |
+
+### Sending without the queue: `/sender`
+
+A product that already has its own outbox and relay (it retries, dedupes and paces in its own tables) needs only the transport. Import
+`@quynhonsemiconductor/platform-mail/sender`: it exports the contract, the errors, `readMailConfig` and `createEmailSender`, and **imports
+neither `platform-jobs` nor pg-boss** (a test walks the imports to keep it so), so those need not be installed. Map `MailSendError.retryable` to
+your relay's retry decision, and `retryAfterSeconds` to its back-off. The pacing, the ledger and the cooldown of the `mail.send` queue are not part of
+`/sender`: a relay that sends more than ~20 a minute must pace itself.
 
 ## Environment
 
 Configuration comes from the environment only; there are no options besides it.
 
-| variable                     | for   | notes                                                                                         |
-| ---------------------------- | ----- | --------------------------------------------------------------------------------------------- |
-| `MAIL_TRANSPORT`             | all   | `graph` or `smtp`. **Required** — no silent default                                           |
-| `MAIL_GRAPH_SENDER`          | graph | the product's shared mailbox, e.g. `noreply-academy@qnsc.vn`                                  |
-| `AZURE_TENANT_ID`            | graph | Entra tenant                                                                                  |
-| `AZURE_CLIENT_ID`            | graph | the product's **own** Entra app (the one its staff login already uses)                        |
-| `AZURE_FEDERATED_TOKEN_FILE` | graph | projected ServiceAccount token: workload identity federation, **no stored secret**. Preferred |
-| `AZURE_CLIENT_SECRET`        | graph | local testing only — **refused when `NODE_ENV=production`**                                   |
-| `MAIL_SMTP_HOST` / `_PORT`   | smtp  | default `localhost` / `1025` (Mailpit)                                                        |
-| `MAIL_SMTP_FROM`             | smtp  | default `noreply@localhost.test`                                                              |
+| variable                     | for   | notes                                                                                                                           |
+| ---------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `MAIL_TRANSPORT`             | all   | `graph` or `smtp`. **Required** — no silent default                                                                             |
+| `MAIL_GRAPH_SENDER`          | graph | the product's shared mailbox, e.g. `noreply-academy@qnsc.vn`                                                                    |
+| `AZURE_TENANT_ID`            | graph | Entra tenant                                                                                                                    |
+| `AZURE_CLIENT_ID`            | graph | the product's **own** Entra app (the one its staff login already uses)                                                          |
+| `AZURE_FEDERATED_TOKEN_FILE` | graph | projected ServiceAccount token: workload identity federation, **no stored secret**. Preferred (k3s)                             |
+| `AZURE_CLIENT_CERTIFICATE`   | graph | a PEM holding the private key **and** the certificate, raw or base64, injected from a secret store (ECS). Allowed in production |
+| `AZURE_CLIENT_SECRET`        | graph | local testing only — **refused when `NODE_ENV=production`**                                                                     |
+| `MAIL_SMTP_HOST` / `_PORT`   | smtp  | default `localhost` / `1025` (Mailpit)                                                                                          |
+| `MAIL_SMTP_FROM`             | smtp  | default `noreply@localhost.test`                                                                                                |
 
+- Credential order: the federated token, then the certificate, then a client secret. The federated token wins whenever it is set, even next to a certificate or a client secret, so moving a service from ECS to k3s is: mount the token, set `AZURE_FEDERATED_TOKEN_FILE`, delete the certificate.
 - The federated token wins whenever it is set, even next to a client secret: a pod may keep its
   login flow's secret while its mail uses the federated credential.
 - `smtp` **refuses to load when `NODE_ENV=production`**: the factory throws, and the module itself
@@ -415,6 +426,24 @@ done
 In the cluster (workload identity, no secret): `kubectl exec` into a pod of the product and run the
 second snippet with `MAIL_TRANSPORT=graph` and `NODE_ENV=production`; the credential is the projected
 token at `AZURE_FEDERATED_TOKEN_FILE`.
+
+## Proving the setup: `platform-mail-check` (TOKEN / SEND / DENIED)
+
+The owner's check after the Exchange setup, the same three steps and output as the Python products' `graph_mail_check.py`, so one runbook serves
+every product. It sends through this package's own Graph transport, from a workstation that holds the certificate and the key:
+
+```bash
+platform-mail-check --tenant <tenant-guid> --client-id <app-client-id> --cert mail.crt --key mail.key \
+  --sender noreply-<product>@qnsc.vn --to you@qnsc.vn --denied-mailbox <any other real mailbox>
+# PASS  TOKEN   issued for appid=<client-id>; roles in the token: none (expected when authority comes from Exchange RBAC only)
+# PASS  SEND    sent as noreply-<product>@qnsc.vn to you@qnsc.vn (HTTP 202)
+# PASS  DENIED  as <other>: forbidden HTTP 403 (request-id ...)
+```
+
+`DENIED` is the negative test and the proof that the Exchange RBAC scope, not the app, limits who it can send as: if sending as the other mailbox is
+**accepted**, the app can send as anyone (an unscoped `Mail.Send` consent is still granted in Entra; Entra grants and Exchange grants are additive).
+A token whose `roles` lists `Mail.Send` fails a `SCOPE` line for the same reason. Only a refusal with **403** counts as proof. Exit 1 on any FAIL;
+with no `--denied-mailbox` the run says the scope has not been proven. It prints no key, certificate or token.
 
 ## Post-deploy smoke test
 

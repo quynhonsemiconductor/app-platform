@@ -53,7 +53,14 @@ import {
   withAtomicOrganizationCreate,
 } from './organization-atomic';
 import { withTimingFloor } from './timing';
+import { isUuid } from './ids';
 import { withTxCapture } from './tx-context';
+import {
+  chainCreateBefore,
+  createContextRuntime,
+  type ContextOptions,
+  type ContextRuntime,
+} from './context';
 
 export const AUTH_BASE_PATH = '/api/auth';
 
@@ -116,6 +123,12 @@ export interface IdentityOptions {
    * every OAuth sign-in lands on.
    */
   hostCookies?: boolean;
+  /**
+   * The active context of a session (rova: the workspace). Off unless given. Adds `session.contextId`
+   * (a nullable uuid column: `context_id`), `POST /context/set`, and the service-side `setContext`,
+   * `clearContext` and `clearContextEverywhere`. See {@link ContextOptions} and README, "Context".
+   */
+  context?: ContextOptions;
   /** Required with the `staff` preset. */
   staff?: StaffOptions;
   /** Optional with the `public` preset. */
@@ -190,8 +203,12 @@ const internals = new WeakMap<
     cache: CacheService;
     /** Forget that a user was believed not banned (see `banned-guard.ts`). */
     forgetBan: (userId: string) => void;
+    /** Is this user banned right now (the ban guard's memo, 30 s per process). */
+    isBanned: (userId: string) => Promise<boolean>;
     /** How many times the session store (Valkey) has failed so far; see `revokeAllSessions`. */
     degradedCount: () => number;
+    /** Present when the `context` option is. */
+    context?: ContextRuntime | undefined;
   }
 >();
 
@@ -300,6 +317,38 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
   const staffBecame = classifier ? staffBecameHooks(staffPolicy, classifier) : undefined;
   const refreshGuard = classifier ? staffRefreshGuard(staffPolicy, classifier) : undefined;
   const bannedGuard = bannedSessionGuard();
+  const contextRuntime: ContextRuntime | undefined = o.context
+    ? createContextRuntime(o.context, {
+        sink,
+        onSinkError,
+        logger: o.logger ?? consoleLogger,
+        degradedCount: () => degraded,
+      })
+    : undefined;
+  // Staff first: a refused staff sign-in must not reach the context hook. Then the context a new session
+  // starts in. Better Auth takes ONE `create.before`, so they are chained.
+  const staffHooks = staffPreset
+    ? staffSessionHooks({
+        staffDomains,
+        getContext,
+        onStaffSignIn: o.hooks?.onStaffSignIn as never,
+        logger: o.logger ?? consoleLogger,
+      })
+    : undefined;
+  const sessionHooks =
+    staffHooks || contextRuntime
+      ? {
+          ...(staffHooks ?? {}),
+          create: {
+            before: chainCreateBefore(
+              staffHooks?.create.before as never,
+              contextRuntime
+                ? (s: Record<string, unknown>) => contextRuntime.createBefore(s)
+                : undefined,
+            ),
+          },
+        }
+      : undefined;
 
   const options = {
     appName: o.product,
@@ -400,6 +449,15 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       // Sessions live in Postgres too: a Valkey restart must not sign everyone out, and the `sso`
       // resolver requires database-backed sessions.
       storeSessionInDatabase: true,
+      // The active context (rova: the workspace). `input: false`: no request body can set it; only
+      // `POST /context/set` (which asks the product's `membership`) and the server-side hooks do.
+      ...(contextRuntime
+        ? {
+            additionalFields: {
+              contextId: { type: 'string', required: false, input: false },
+            },
+          }
+        : {}),
     },
     // Verification rows (reset tokens, OAuth state) in the DATABASE, identifiers hashed.
     verification: { storeInDatabase: true, storeIdentifier: 'hashed' },
@@ -427,16 +485,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       database: { generateId: () => uuidv7() },
     },
     databaseHooks: {
-      ...(staffPreset
-        ? {
-            session: staffSessionHooks({
-              staffDomains,
-              getContext,
-              onStaffSignIn: o.hooks?.onStaffSignIn as never,
-              logger: o.logger ?? consoleLogger,
-            }) as never,
-          }
-        : {}),
+      ...(sessionHooks ? { session: sessionHooks as never } : {}),
       ...(staffPreset ? { account: staffBecame!.account as never } : {}),
       user: {
         create: {
@@ -460,6 +509,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       admin({ allowImpersonatingAdmins: false }),
       ...(publicPreset ? [twoFactor({ issuer: o.product })] : []),
       ...(refreshGuard ? [refreshGuard] : []),
+      ...(contextRuntime ? [contextRuntime.plugin] : []),
       bannedGuard,
       accountLockout(sink),
       companyDomainSignUpGuard(isReserved),
@@ -481,6 +531,12 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
       () => undefined,
     );
   }
+  if (contextRuntime) {
+    void (auth.$context as Promise<object>).then(
+      (context) => contextRuntime.install(context),
+      () => undefined,
+    );
+  }
   // The organization and its owner commit together (identity#206), for both entry points.
   let handler = auth.handler;
   if (orgPreset) {
@@ -497,7 +553,9 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     sink,
     cache: o.cache,
     forgetBan: bannedGuard.forget,
+    isBanned: async (userId) => bannedGuard.isBanned(await getContext(), userId),
     degradedCount: () => degraded,
+    context: contextRuntime,
   });
   return auth;
 }
@@ -553,15 +611,13 @@ type PurgeContext = {
   };
 };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Ids are UUIDs (`uuidv7()` for everything identity creates). Checked up front so that a malformed id
  * is a plain error here and never reaches PostgreSQL, whose `invalid input syntax for type uuid` would
  * surface as a raw driver error quoting the value.
  */
 function assertUserId(userId: unknown, operation: string): asserts userId is string {
-  if (typeof userId !== 'string' || !UUID.test(userId)) {
+  if (!isUuid(userId)) {
     throw new TypeError(`identity: ${operation}: userId must be a UUID`);
   }
 }
@@ -682,6 +738,22 @@ export async function revokeUserSessions(auth: Identity, userId: string): Promis
 }
 
 /**
+ * Is this user banned right now? The question a guard has to ask when it authenticates a request by something other than a
+ * session: a session read refuses a banned user's session (Better Auth checks `banned`, and identity re-checks it on every read),
+ * but a credential that never touches a session (rova's `Bearer rly_…` API tokens, see `markPreAuthenticated`) skips all of that,
+ * so a banned user's token would keep working. `SessionGuard` asks it itself for a request a product guard marked; a
+ * product guard that authenticates OUTSIDE `SessionGuard` (a socket gateway, a job) must ask it too.
+ *
+ * Same memo as the session read: a user not found banned is believed not banned for 30 s per process; a ban made by
+ * {@link setUserBanned} takes effect at once in the process that made it. An unknown user is not banned (`false`): whether
+ * they may act at all is the caller's question.
+ */
+export async function isUserBanned(auth: Identity, userId: string): Promise<boolean> {
+  assertUserId(userId, 'isUserBanned');
+  return internalOf(auth, 'isUserBanned').isBanned(userId);
+}
+
+/**
  * Ban or unban a user, service side (no admin session needed). A banned user cannot sign in (Better
  * Auth's admin plugin refuses the session, for every provider) and every session they hold is ended
  * as {@link revokeUserSessions} does. `reason` is stored in `user.ban_reason` as given (at most 500
@@ -723,6 +795,126 @@ export async function setUserBanned(
   if (!banned) return;
   await emitSafely(internal.sink, { name: 'admin.user_banned', userId });
   await revokeUserSessions(auth, userId);
+}
+
+type ContextSessionContext = {
+  options: { secondaryStorage?: { delete(key: string): Promise<void> } };
+  adapter: {
+    findMany(args: {
+      model: string;
+      limit: number;
+      where?: Array<{ field: string; value: unknown }>;
+    }): Promise<Array<{ token?: unknown; userId?: unknown }>>;
+  };
+  internalAdapter: {
+    updateSession(token: string, data: Record<string, unknown>): Promise<unknown>;
+  };
+};
+
+function contextOf(
+  auth: Identity,
+  operation: string,
+): { internal: Internal; runtime: ContextRuntime } {
+  const internal = internalOf(auth, operation);
+  if (!internal.context) {
+    throw new Error(`identity: ${operation} needs the \`context\` option of createIdentity()`);
+  }
+  return { internal, runtime: internal.context };
+}
+
+/**
+ * Set the active context of the caller's session, service side: the product's own endpoint (rova:
+ * `POST /v1/auth/switch-workspace`) calls this so that its route keeps its own decorators and CSRF
+ * check. It is `POST /api/auth/context/set` made callable from a controller, with the same rules: the
+ * session in `headers` must be valid, and `contextId` must be one the product's `membership` approves
+ * (a UUID, or `null` to clear). Throws Better Auth's `APIError` (`CONTEXT_FORBIDDEN` 403,
+ * `CONTEXT_CHECK_FAILED` 500, 401 without a session); {@link AuthApiErrorFilter} maps it to the platform
+ * envelope.
+ *
+ * Returns the response `headers`. With the public preset's cookie cache the response carries a
+ * refreshed session cookie: forward every `set-cookie` to the browser, or the cached copy keeps the old
+ * context for up to 5 minutes. The `staff` preset has no cookie cache and sets nothing that matters.
+ */
+export async function setContext(
+  auth: Identity,
+  request: { headers: Headers | Record<string, string>; contextId: string | null },
+): Promise<{ contextId: string | null; headers: Headers }> {
+  contextOf(auth, 'setContext');
+  const api = auth.api as unknown as {
+    setContext(args: {
+      headers: Headers;
+      body: { contextId: string | null };
+      returnHeaders: true;
+    }): Promise<{ headers: Headers; response: { contextId: string | null } }>;
+  };
+  const headers =
+    request.headers instanceof Headers ? request.headers : new Headers(request.headers);
+  const result = await api.setContext({
+    headers,
+    body: { contextId: request.contextId },
+    returnHeaders: true,
+  });
+  return { contextId: result.response.contextId, headers: result.headers };
+}
+
+/**
+ * Take a context away from the sessions that hold it: of ONE user (`clearContext`), because they left
+ * the context (rova: the member was suspended or removed), or of everyone (`clearContextEverywhere`),
+ * because the context is gone (a workspace archived). Their sessions stay valid with `contextId = null`;
+ * the next `setContext` or sign-in picks one again. It is the eager half of the pair: a session that is
+ * read without it being called notices on its own within `context.revalidateSeconds` (and falls back to
+ * `context.initial`).
+ *
+ * Updates the row and the cache copy of each session. If the cache degrades during a write the cached copy is dropped (and
+ * `identity.context_cache_stale` is logged if that fails too); the count is of the rows updated. With the public preset's cookie
+ * cache a browser can still present the old context for up to 5 minutes. Safe to re-run. Returns how many sessions held the context.
+ */
+export async function clearContext(
+  auth: Identity,
+  target: { userId: string; contextId: string },
+): Promise<number> {
+  assertUserId(target.userId, 'clearContext');
+  assertUserId(target.contextId, 'clearContext');
+  const { internal, runtime } = contextOf(auth, 'clearContext');
+  const cleared = await clearContextSessions(internal, target.contextId, target.userId);
+  runtime.forget(target.userId, target.contextId);
+  return cleared;
+}
+
+export async function clearContextEverywhere(auth: Identity, contextId: string): Promise<number> {
+  assertUserId(contextId, 'clearContextEverywhere');
+  const { internal } = contextOf(auth, 'clearContextEverywhere');
+  return clearContextSessions(internal, contextId);
+}
+
+async function clearContextSessions(
+  internal: Internal,
+  contextId: string,
+  userId?: string,
+): Promise<number> {
+  const ctx = (await internal.getContext()) as unknown as ContextSessionContext;
+  const where = [
+    { field: 'contextId', value: contextId },
+    ...(userId === undefined ? [] : [{ field: 'userId', value: userId }]),
+  ];
+  const seen = new Set<string>();
+  let cleared = 0;
+  for (;;) {
+    const rows = await ctx.adapter.findMany({ model: 'session', limit: 500, where });
+    const batch = rows.filter((r) => typeof r.token === 'string' && !seen.has(r.token as string));
+    // The database decides when it is done; a row that did not change would loop forever.
+    if (batch.length === 0) break;
+    for (const row of batch) {
+      const token = row.token as string;
+      seen.add(token);
+      const degradedBefore = internal.context!.degradedCount();
+      await ctx.internalAdapter.updateSession(token, { contextId: null });
+      await internal.context!.reconcile(ctx.options.secondaryStorage, token, degradedBefore);
+      if (typeof row.userId === 'string') internal.context?.forget(row.userId, contextId);
+      cleared += 1;
+    }
+  }
+  return cleared;
 }
 
 /**

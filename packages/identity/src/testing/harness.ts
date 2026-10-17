@@ -58,6 +58,8 @@ export interface StackOptions {
   hostCookies?: boolean | undefined;
   /** The rate limit of `/sign-in/social` and `/callback/*` (`IdentityOptions.oauthRateLimit`). */
   oauthRateLimit?: IdentityOptions['oauthRateLimit'];
+  /** The active context of a session (`IdentityOptions.context`). */
+  context?: IdentityOptions['context'];
 }
 
 export interface Stack {
@@ -190,6 +192,7 @@ export async function startStack(
         ...(options.allowOrganizationCreation ? { allowOrganizationCreation: true } : {}),
         ...(options.hostCookies !== undefined ? { hostCookies: options.hostCookies } : {}),
         ...(options.oauthRateLimit ? { oauthRateLimit: options.oauthRateLimit } : {}),
+        ...(options.context ? { context: options.context } : {}),
         ...(options.onStorageDegraded ? { onStorageDegraded: options.onStorageDegraded } : {}),
         events: { emit: (e) => void events.push(e) },
         logger: {

@@ -47,7 +47,7 @@ describe.skipIf(!enabled)('identity conformance (package)', () => {
     // Pools first: stopping the container under a live pool turns teardown into unhandled errors.
     await Promise.allSettled(pools.map((pool) => pool.end()));
     await Promise.allSettled([pg?.stop(), valkey?.stop()]);
-  });
+  }, 60_000);
 
   // Most kit tests start a database and an app of their own; under a full parallel `pnpm test`, with
   // several containers up, the runner's 5 s default is too tight. Give each one a minute.

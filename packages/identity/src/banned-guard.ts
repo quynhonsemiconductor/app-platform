@@ -13,7 +13,7 @@ interface SessionAdapter {
   findUserById(id: string): Promise<{ banned?: unknown; banExpires?: unknown } | null>;
 }
 
-const isBanned = (user: { banned?: unknown; banExpires?: unknown }, now = Date.now()): boolean =>
+const isBannedRow = (user: { banned?: unknown; banExpires?: unknown }, now = Date.now()): boolean =>
   user.banned === true &&
   (user.banExpires == null || new Date(user.banExpires as string | Date).getTime() > now);
 
@@ -35,6 +35,8 @@ const isBanned = (user: { banned?: unknown; banExpires?: unknown }, now = Date.n
 export function bannedSessionGuard(): BetterAuthPlugin & {
   install(context: object): void;
   forget(userId: string): void;
+  /** Is this user banned right now? The same memo and the same 30 s window as a session read (see {@link isUserBanned}). */
+  isBanned(context: object, userId: string): Promise<boolean>;
 } {
   const wrapped = new WeakSet<object>();
   const believedNotBanned = new Map<string, number>();
@@ -52,13 +54,13 @@ export function bannedSessionGuard(): BetterAuthPlugin & {
         ...found,
         session: { ...found.session, expiresAt: new Date(0) },
       });
-      if (isBanned(found.user)) return dead();
+      if (isBannedRow(found.user)) return dead();
       const id = found.user.id;
       if (typeof id !== 'string') return found;
       const until = believedNotBanned.get(id);
       if (until !== undefined && until > Date.now()) return found;
       const fresh = await adapter.findUserById(id);
-      if (fresh && isBanned(fresh)) {
+      if (fresh && isBannedRow(fresh)) {
         believedNotBanned.delete(id);
         return dead();
       }
@@ -70,10 +72,29 @@ export function bannedSessionGuard(): BetterAuthPlugin & {
     };
   }
 
+  async function isBanned(context: object, userId: string): Promise<boolean> {
+    const adapter = (context as { internalAdapter?: SessionAdapter }).internalAdapter;
+    if (!adapter) throw new Error('identity: isUserBanned: no internal adapter');
+    const until = believedNotBanned.get(userId);
+    if (until !== undefined && until > Date.now()) return false;
+    const fresh = await adapter.findUserById(userId);
+    // An unknown user is not "banned", but is not a user either: the caller decides what that means.
+    if (fresh && isBannedRow(fresh)) {
+      believedNotBanned.delete(userId);
+      return true;
+    }
+    if (believedNotBanned.size >= MEMO_MAX) {
+      believedNotBanned.delete(believedNotBanned.keys().next().value as string);
+    }
+    believedNotBanned.set(userId, Date.now() + NOT_BANNED_TTL_MS);
+    return false;
+  }
+
   return {
     id: 'qnsc-banned-session-guard',
     install,
     forget,
+    isBanned,
     hooks: {
       before: [
         {

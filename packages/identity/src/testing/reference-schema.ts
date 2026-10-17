@@ -41,6 +41,7 @@ export const session = identity.table(
       .references(() => user.id, { onDelete: 'cascade' }),
     activeOrganizationId: uuid('active_organization_id'),
     impersonatedBy: uuid('impersonated_by'),
+    contextId: uuid('context_id'),
   },
   (table) => [index('session_userId_idx').on(table.userId)],
 );

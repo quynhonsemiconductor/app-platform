@@ -76,7 +76,7 @@ preserved, so foreign keys to `identity.users.id` keep working.
 
 | v7                                         | v8                                | Migration                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identity.users`                           | `user`                            | Copy with the same ids and **`email_verified = true`** (see "A migrated user must be verified" below). Soft-deleted users are excluded; `inactive` and `suspended` become `banned`                                                                                                                                                            |
+| `identity.users`                           | `user`                            | Copy with the same ids and **`email_verified` as the rule below says: the v7 value, or true where the tenant vouches for the address** (see "A migrated user must be verified" below). Soft-deleted users are excluded; `inactive` and `suspended` become `banned`                                                                            |
 | `identity.sso_identities`                  | `account`                         | Only rows with `provider = 'entra'` (the staff tenant): `provider_id = 'microsoft'`, `account_id` = the Entra `oid` (`provider_sub`). Other providers have no v8 equivalent in 8.0.0                                                                                                                                                          |
 | `identity.sso_connections`, `..._domains`  | `sso_provider` (+ `organization`) | The staff tenant is the `staff` preset, not a provider, and a `shared` guest-gate row becomes `staff.allowGuests`. Any other connection (a partner IdP) needs the `organizations` preset: create the organization and provider through your admin tool; see "SSO providers". Make your migration RAISE if a row it does not understand exists |
 | `identity.auth_sessions`, `refresh_tokens` | `session`                         | Not migrated: everyone signs in once after cutover                                                                                                                                                                                                                                                                                            |
@@ -89,13 +89,16 @@ INSERT INTO identity."user" (id, name, email, email_verified, image, banned, ban
 SELECT id,
        display_name,
        lower(email),
-       true,                                             -- see "A migrated user must be verified"
+       (email_verified                                   -- v7 proved the address, OR
+        OR EXISTS (SELECT 1 FROM identity.sso_identities s    -- the tenant vouches for it (an Entra identity), OR
+                   WHERE s.user_id = u.id AND s.provider = 'entra')
+        OR split_part(lower(email), '@', 2) = ANY (ARRAY['qnsc.vn'])),   -- it is on a staff.domains entry
        avatar_url,
        status IN ('inactive', 'suspended'),              -- v7 lifecycle -> v8 ban
        CASE WHEN status IN ('inactive', 'suspended') THEN 'migrated from v7: ' || status END,
        created_at,
        now()
-FROM identity.users
+FROM identity.users u
 WHERE deleted_at IS NULL;                                -- soft-deleted users are not carried over
 
 INSERT INTO identity.account (id, account_id, provider_id, user_id, created_at, updated_at)
@@ -109,26 +112,50 @@ COMMIT;
 Check before cutover: no two v7 users share a lower-cased email (v8 requires it to be unique); the only rows
 that should not copy are the ones you meant to exclude.
 
-### A migrated user must be verified, and a guest needs their account row
+### A migrated user must be verified where the tenant vouches for them, and a guest needs their account row
 
 Two rules of the sign-in make the migration order-sensitive. Both were found while planning rova's migration:
 
-1. **Do not copy the v7 `email_verified`; set `true`.** When a Microsoft member signs in, the package deletes an existing user for that address
-   that is **unverified, holds no non-credential account and has no session row** (the squatting rule, plan D10), then signs the person in as
-   a NEW user with a NEW id. A migrated user starts with no v8 session, so an unverified one with no account would be deleted on first
-   sign-in and every foreign key to its old id would dangle. A user with a Microsoft account row is never replaceable, but for a user
-   without one, `email_verified = true` is what protects the id. For a tenant member that is true by definition (the tenant vouches for
-   the address); the v7 flag meant "this user has signed in before", which is not the question v8 asks.
+1. **`email_verified` = the v7 value, OR the user has an Entra identity, OR the address is on a `staff.domains` entry.** When a Microsoft
+   member signs in, the package deletes an existing user for that address that is **unverified, holds no non-credential account and has no
+   session row** (the squatting rule, plan D10), then signs the person in as a NEW user with a NEW id. A migrated user starts with no v8
+   session, so an unverified one with no account would be deleted on first sign-in and every foreign key to its old id would dangle. A
+   tenant member is verified by the tenant (an Entra identity, or an address on the staff domains), whatever the v7 flag said: it meant
+   "this user has signed in before", which is not the question v8 asks.
+   **Do NOT blanket-set `true`.** In a product that also has password sign-in, an attacker can pre-register `victim@x` (unverified) before
+   the migration; copied as verified, the victim's first Microsoft or social sign-in links into the attacker's account, and the attacker
+   keeps the password. For an Entra-only product (rova, opshub) every user has an Entra identity or a staff address, so the rule above is
+   `true` for all of them. A user the rule leaves unverified (a password user who never proved the address) is **replaced** by the
+   squatting rule on their first verified sign-in, which is the rule working as designed; verify the address with its owner first if
+   the id must survive.
 2. **Migrate every Entra identity into `account`.** A B2B guest (`staff.allowGuests: true`) whose address already belongs to a v8
    `user` is **refused with `ACCOUNT_LINK_REQUIRED`** unless that user already holds the same `(microsoft, oid)` account: a guest never
-   auto-links. So a guest who has signed in before keeps signing in only if their `sso_identities` row became an `account` row. A user who has
-   **no** Entra identity and an address off `staff.domains` (an invitee who never signed in) should **not** be copied: with no row, the first
-   sign-in creates the user; with a row and no account, it is refused. Check for them before you migrate (rova expects none).
+   auto-links. So a guest who has signed in before keeps signing in only if their `sso_identities` row became an `account` row. In an
+   **Entra-only product**, a user who has **no** Entra identity and an address off `staff.domains` (an invitee who never signed in) must
+   **not** be copied (with no row, the first sign-in creates the user; with a row and no account, it is refused), so make the migration
+   RAISE for them rather than skip them quietly:
+
+   ```sql
+   DO $$
+   DECLARE n bigint;
+   BEGIN
+     SELECT count(*) INTO n FROM identity.users u
+     WHERE u.deleted_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM identity.sso_identities s WHERE s.user_id = u.id AND s.provider = 'entra')
+       AND split_part(lower(u.email), '@', 2) <> ALL (ARRAY['qnsc.vn']);      -- staff.domains
+     IF n > 0 THEN
+       RAISE EXCEPTION '% user(s) have no Entra identity and an address outside staff.domains: decide per user', n;
+     END IF;
+   END $$;
+   ```
+
+   (A product with password users migrates those with their credential account instead; this check is for products where every sign-in is
+   Entra.)
 
 Write the migration as a preflight that RAISES (duplicate lower-cased emails, identities of a provider you cannot map, a user with two
-Entra identities, users in the second class above), then the inserts, then an assertion that compares the SETS of ids (`EXCEPT` both ways),
-not just counts. Make the inserts idempotent (`ON CONFLICT DO NOTHING`, `NOT EXISTS`) so they can be re-run at cutover to pick up users
-created in v7 in the meantime.
+Entra identities, the users above), then the inserts, then an assertion that compares the SETS of ids (`EXCEPT` both ways), not just
+counts. Make the inserts idempotent (`ON CONFLICT DO NOTHING`, `NOT EXISTS`) so they can be re-run at cutover to pick up users created in
+v7 in the meantime.
 
 ### SSO providers and their secrets
 

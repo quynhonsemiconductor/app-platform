@@ -12,10 +12,11 @@ const B = '0194a000-0000-7000-8000-00000000000b';
 const U = '0194a000-0000-7000-8000-0000000000u1'.replace('u', '0');
 
 const quiet = { warn: () => undefined, error: () => undefined };
-const deps = (events: unknown[] = []) => ({
+const deps = (events: unknown[] = [], degradedCount: () => number = () => 0) => ({
   sink: { emit: (e: unknown) => void events.push(e) },
   onSinkError: () => undefined,
   logger: quiet,
+  degradedCount,
 });
 
 describe('validateContextOptions', () => {
@@ -217,5 +218,72 @@ describe('the findSession guard', () => {
     runtime.install({ internalAdapter: gone });
     expect(await gone.findSession('t')).toBeNull();
     expect(membership).not.toHaveBeenCalled();
+  });
+});
+
+describe('an expired session is not re-checked', () => {
+  it('no membership call and no write for a session past its expiry', async () => {
+    const membership = vi.fn(async () => false);
+    const updates: unknown[] = [];
+    const adapter = {
+      findSession: vi.fn(async (_token: string) => ({
+        session: { token: 't', contextId: A, expiresAt: new Date(Date.now() - 1000) },
+        user: { id: U },
+      })),
+      updateSession: vi.fn(async (...args: unknown[]) => void updates.push(args)),
+    };
+    createContextRuntime({ membership, revalidateSeconds: 0 }, deps()).install({
+      internalAdapter: adapter,
+    });
+    await adapter.findSession('t');
+    expect(membership).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+  });
+});
+
+describe('reconcile: a write the store missed', () => {
+  const run = (degraded: { n: number }, deleteOutcome: 'ok' | 'fails') => {
+    const logged: Array<[string, unknown]> = [];
+    const runtime = createContextRuntime(
+      { membership: () => true },
+      {
+        ...deps([], () => degraded.n),
+        logger: { warn: (m, f) => void logged.push([m, f]), error: () => undefined },
+      },
+    );
+    const storage = {
+      delete: vi.fn(async (_key: string) => {
+        if (deleteOutcome === 'fails') degraded.n += 1;
+      }),
+    };
+    return { runtime, storage, logged };
+  };
+
+  it('does nothing when the store did not degrade during the write', async () => {
+    const degraded = { n: 3 };
+    const { runtime, storage } = run(degraded, 'ok');
+    await runtime.reconcile(storage, 'tok', 3);
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it('drops the cached copy when it did, and says nothing if that worked', async () => {
+    const degraded = { n: 4 };
+    const { runtime, storage, logged } = run(degraded, 'ok');
+    await runtime.reconcile(storage, 'tok', 3);
+    expect(storage.delete).toHaveBeenCalledWith('tok');
+    expect(logged).toEqual([]);
+  });
+
+  it('logs identity.context_cache_stale when the drop fails too', async () => {
+    const degraded = { n: 4 };
+    const { runtime, storage, logged } = run(degraded, 'fails');
+    await runtime.reconcile(storage, 'tok', 3);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]![1]).toMatchObject({ code: 'identity.context_cache_stale' });
+  });
+
+  it('a store with no secondary storage has nothing to drop', async () => {
+    const { runtime } = run({ n: 9 }, 'ok');
+    await expect(runtime.reconcile(undefined, 'tok', 0)).resolves.toBeUndefined();
   });
 });

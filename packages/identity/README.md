@@ -11,7 +11,11 @@ permissions, UI, email text and cookie names stay in the product (`docs/ADMISSIO
 Decisions and evidence: [ADR 0002](../../docs/adr/0002-identity-v8-better-auth.md) (the WP-9 spike and the
 platform lead's decisions) and the identity v8 plan.
 
-## Behaviour changes on a minor upgrade (read before upgrading to 8.2)
+## Behaviour changes on a minor upgrade (read before upgrading to 8.2 and 8.4)
+
+> **8.4: `SecurityEventName` gained `context.switched`, `context.refused` and `context.revoked`.** A product that `switch`es exhaustively over
+> the union (a `never` default) stops compiling until it handles them; one that logs by name needs nothing. Nothing else changes unless you
+> pass `context` or call `markPreAuthenticated`.
 
 > **A staff member whose UPN is not on a `staff.domains` entry can no longer sign in.** `staff.requireUpnOnStaffDomain` is **on by
 > default** from 8.2: a member's `upn` (else `preferred_username`) must match an **exact** `staff.domains` entry (`*.` entries
@@ -386,15 +390,21 @@ createIdentity({
   package emits `context.revoked` (`reason: membership_lost`). A `membership` that throws on a read keeps the context (fail-open:
   the product authorizes per request regardless) and logs the error's class. With the public preset's cookie cache a session is
   read from the store only when the cookie cache expires (5 minutes), so the window there is that plus `revalidateSeconds`; the
-  staff preset has no cookie cache.
+  staff preset has no cookie cache. Also with the cookie cache, a session cookie that was issued before a switch can keep carrying
+  the OLD `contextId` for those 5 minutes (a switch refreshes the cookie of the request that made it, not other tabs' cookies).
 - **Taking it away now.** When the product removes a member or retires a context, call `clearContext(auth, { userId, contextId })`
   (that user's sessions) or `clearContextEverywhere(auth, contextId)`. They set `contextId = null` on the row **and** the cached
-  copy, leave the sessions valid, and return how many sessions held it. Safe to re-run. If the cache is down for part of a run the
-  stale copy is fixed by the read-time check above. Unlike the read-time fallback they do not call `initial`: the product picks
+  copy, leave the sessions valid, and return how many sessions held it. Safe to re-run. With the public preset's cookie cache a
+  browser can still present the old `contextId` for up to 5 minutes (the cookie answers before the store is read); the staff preset
+  has no such cache. If the cache degrades DURING a write, the database row is updated and the cached copy is dropped (as
+  `revokeUserSessions` does); if the drop fails too, `identity.context_cache_stale` is logged, because Better Auth reads the cache
+  first and the old context can come back when it recovers. Authentication is unaffected: the next switch, a `clearContext`, or the read-time check (when the user
+  is no longer a member) puts it right. Unlike the read-time fallback they do not call `initial`: the product picks
   the next context (a `setContext`) or the user's next sign-in does.
 - **The principal.** `SessionGuard` records the session's `contextId` as the request's `workspaceId` (log lines, the access log)
   unless your `principal` hook returns one.
-- **Cache down.** `setContext` and the re-check work from Postgres (sessions are stored there too).
+- **Cache down.** `setContext` and the re-check work from Postgres (sessions are stored there too). The cached copy of a session that was written while the cache was down is dropped when possible, and logged (`identity.context_cache_stale`) when not; see "Taking it away now".
+- **Storage.** `clearContext` and `clearContextEverywhere` look sessions up by `context_id`: add `create index session_context_id_idx on identity.session (context_id)` in your own migration (the generated table has no such index, because Better Auth does not know you query it).
 
 ### A credential that is not a browser session: `markPreAuthenticated`
 
@@ -416,8 +426,10 @@ canActivate(ctx) {
 
 The request then has no `session` (`@CurrentSession()` is `undefined`) and your own guards decide what the caller may do. Identity
 does not verify the credential and does not know what it is. The flag is a symbol on the in-process request, so nothing a client
-sends can carry it; **only call it after the credential is verified**. Write the principal first: a marked request with no
-principal in the request context is logged once, because `RateLimitGuard` would then key it by address.
+sends can carry it; **only call it after the credential is verified**. Write the principal first. `SessionGuard` does two things for a marked request, because the session path's checks never ran:
+
+- **It refuses (401, logged at error) a marked request whose principal was not written**, when a request context exists. With no request context at all it cannot read the principal back, so it warns once and lets the request through (a misconfigured app, not a reason to refuse every token call).
+- **It refuses a banned user.** A session read refuses a banned user's session; a credential that never touches a session would outlive the ban. `SessionGuard` asks `isUserBanned` for the principal's user. A guard of yours that authenticates **outside** `SessionGuard` (a socket gateway, a job) must call `isUserBanned(auth, userId)` itself; it shares the ban guard's memo (a user not found banned is believed not banned for 30 s per process; a ban made by `setUserBanned` takes effect at once in that process). rova calls it from its API-token guard at cutover.
 
 ### Entra claims at sign-in: `hooks.onStaffSignIn`
 

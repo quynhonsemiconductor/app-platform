@@ -81,6 +81,18 @@ export interface ContextRuntime {
   fallback(userId: string): Promise<string | null>;
   /** The `databaseHooks.session.create.before` hook. */
   createBefore(session: Row): Promise<{ data: Row } | undefined>;
+  /**
+   * After a session write that went through `internalAdapter.updateSession`: if the store (Valkey) degraded DURING it, the
+   * database row is updated and the cached copy is not, and Better Auth reads the cache first, so the old context would come
+   * back (A -> B silently reverting to A) when Valkey recovers. Drop the cached copy, as `revokeUserSessions` does, and say so
+   * if that cannot be done either. `degradedBefore` is `degradedCount()` taken before the write.
+   */
+  reconcile(
+    storage: { delete(key: string): Promise<void> } | undefined,
+    token: string,
+    degradedBefore: number,
+  ): Promise<void>;
+  degradedCount(): number;
   plugin: BetterAuthPlugin;
   /** Wrap `findSession` of this context once (idempotent). */
   install(context: object): void;
@@ -90,7 +102,13 @@ const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v
 
 export function createContextRuntime(
   options: ContextOptions,
-  deps: { sink: SecurityEventSink; onSinkError: (e: unknown) => void; logger: IdentityLogger },
+  deps: {
+    sink: SecurityEventSink;
+    onSinkError: (e: unknown) => void;
+    logger: IdentityLogger;
+    /** How many times the session store (Valkey) has failed so far. */
+    degradedCount: () => number;
+  },
 ): ContextRuntime {
   validateContextOptions(options);
   const ttlMs = (options.revalidateSeconds ?? DEFAULT_REVALIDATE_SECONDS) * 1000;
@@ -154,6 +172,12 @@ export function createContextRuntime(
       const contextId = found.session.contextId;
       const userId = found.user.id;
       if (!isUuid(contextId) || typeof userId !== 'string') return found;
+      // An expired session (or one the ban guard just killed by expiring it) is about to be deleted by Better Auth:
+      // do not spend a `membership` call or a write on it.
+      const expiresAt = found.session.expiresAt;
+      if (expiresAt !== undefined && new Date(expiresAt as string | Date).getTime() <= Date.now()) {
+        return found;
+      }
       const until = believed.get(keyOf(userId, contextId));
       if (until !== undefined && until > Date.now()) return found;
       let member: boolean;
@@ -186,6 +210,30 @@ export function createContextRuntime(
     };
   }
 
+  async function reconcile(
+    storage: { delete(key: string): Promise<void> } | undefined,
+    token: string,
+    degradedBefore: number,
+  ): Promise<void> {
+    if (deps.degradedCount() === degradedBefore || !storage) return;
+    const beforeDelete = deps.degradedCount();
+    try {
+      await storage.delete(token);
+    } catch {
+      /* counted below */
+    }
+    if (deps.degradedCount() !== beforeDelete) {
+      // The store is still down: the cached copy of this session may come back with the previous context when it recovers.
+      // Authentication is unaffected; the next switch, a clearContext, or the session's end fixes it.
+      deps.logger.warn(
+        'identity.context: the cached copy of a session could not be updated or dropped',
+        {
+          code: 'identity.context_cache_stale',
+        },
+      );
+    }
+  }
+
   const plugin: BetterAuthPlugin = {
     id: 'qnsc-context',
     endpoints: {
@@ -193,7 +241,13 @@ export function createContextRuntime(
         CONTEXT_PATH,
         {
           method: 'POST',
-          body: z.object({ contextId: z.uuid().nullable() }),
+          // The SAME validator as initial(): a `z.uuid()` here would accept a narrower set than isUuid and make the two paths disagree.
+          body: z.object({
+            contextId: z
+              .string()
+              .refine(isUuid, { message: 'contextId must be a UUID' })
+              .nullable(),
+          }),
           use: [sensitiveSessionMiddleware],
           requireHeaders: true,
         },
@@ -226,12 +280,21 @@ export function createContextRuntime(
                 message: 'You are not a member of this context.',
               });
             }
-            believe(user.id, next);
           }
+          const degradedBefore = deps.degradedCount();
           const updated = (await ctx.context.internalAdapter.updateSession(session.token, {
             contextId: next,
           })) as Row | null;
-          if (next === null) forget(user.id, previous ?? undefined);
+          await reconcile(
+            (ctx.context.options as { secondaryStorage?: { delete(key: string): Promise<void> } })
+              .secondaryStorage,
+            session.token,
+            degradedBefore,
+          );
+          // Believed only AFTER the write: a membership that was true when asked but a write that failed (or lost a race with a
+          // clearContext) must not leave a believed membership behind for a context the session does not hold.
+          if (next !== null) believe(user.id, next);
+          else forget(user.id, previous ?? undefined);
           // The cookie cache (public preset) carries the session; refresh it, as `organization.setActive` does.
           await setSessionCookie(ctx, {
             session: (updated ?? { ...session, contextId: next }) as never,
@@ -254,6 +317,8 @@ export function createContextRuntime(
     forget,
     fallback,
     createBefore,
+    reconcile,
+    degradedCount: deps.degradedCount,
     plugin,
     install,
   };

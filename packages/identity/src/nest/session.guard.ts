@@ -10,10 +10,14 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { fromNodeHeaders } from 'better-auth/node';
-import { getRequestPrincipal, setRequestPrincipal } from '@quynhonsemiconductor/observability';
+import {
+  getRequestPrincipal,
+  requestContextStorage,
+  setRequestPrincipal,
+} from '@quynhonsemiconductor/observability';
 import { UnauthorizedException } from '@quynhonsemiconductor/platform-http';
 import type { FastifyRequest } from 'fastify';
-import type { Identity } from '../create-identity';
+import { isUserBanned, type Identity } from '../create-identity';
 
 export const AUTH = Symbol.for('@quynhonsemiconductor/identity:auth');
 const PUBLIC = 'identity:public';
@@ -35,7 +39,10 @@ const PRE_AUTHENTICATED = Symbol.for('@quynhonsemiconductor/identity:pre-authent
  * a client sends can set the flag (it is a symbol property of the in-process request object), and a route
  * the product guard did not mark is still authenticated by a session or answered with 401.
  *
- * This is the whole extension point: identity does not know what the credential is, and does not verify it.
+ * This is the whole extension point: identity does not know what the credential is, and does not verify it. What it DOES do,
+ * because the session path's checks never ran for this request: it refuses (401) a marked request whose principal was not
+ * written (when a request context exists), and one whose user is banned (`isUserBanned`). A guard that authenticates outside
+ * `SessionGuard` altogether must call `isUserBanned` itself.
  */
 export function markPreAuthenticated(req: object): void {
   (req as Record<symbol, unknown>)[PRE_AUTHENTICATED] = true;
@@ -99,8 +106,7 @@ export class SessionGuard implements CanActivate {
     }
     const req = ctx.switchToHttp().getRequest<RequestWithSession>();
     if ((req as unknown as Record<symbol, unknown>)[PRE_AUTHENTICATED] === true) {
-      // A product guard authenticated this request already; it owes the request context a principal.
-      if (!getRequestPrincipal()) this.warnOnce('pre-authenticated-without-principal');
+      await this.admitPreAuthenticated();
       return true;
     }
     const session = await this.auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
@@ -108,6 +114,35 @@ export class SessionGuard implements CanActivate {
     req.session = session;
     await this.writePrincipal(session, req);
     return true;
+  }
+
+  /**
+   * A product guard authenticated this request with something that is not a session and marked it. Two things stand between
+   * that and `true`, because the session path's own checks never ran:
+   *
+   *  - It MUST have written the principal. If a request context exists and holds none, the request is refused (401, logged at
+   *    error): a marked request nobody can name would skip authentication, the rate limit's per-user key and the access log,
+   *    and the way it got here is a bug in the product's guard. With NO request context at all (nothing seeded one) the
+   *    principal cannot be read back, so it is warned about once and let through: that is a misconfiguration of the app, and
+   *    refusing every API-token call because of it would be an outage.
+   *  - Its user must not be banned. A session read refuses a banned user's session; a credential that never touches a session
+   *    would otherwise outlive the ban.
+   */
+  private async admitPreAuthenticated(): Promise<void> {
+    const principal = getRequestPrincipal();
+    if (!principal) {
+      if (requestContextStorage.getStore()) {
+        this.logger.error(
+          'A request was marked with markPreAuthenticated() but the product guard wrote no principal (setRequestPrincipal): refused. Call setRequestPrincipal({ userId, sessionId }) before markPreAuthenticated().',
+        );
+        throw new UnauthorizedException('AUTH_UNAUTHENTICATED', 'Sign in required');
+      }
+      this.warnOnce('pre-authenticated-without-principal');
+      return;
+    }
+    if (await isUserBanned(this.auth, principal.userId)) {
+      throw new UnauthorizedException('AUTH_UNAUTHENTICATED', 'Sign in required');
+    }
   }
 
   /**
@@ -127,9 +162,13 @@ export class SessionGuard implements CanActivate {
     // The session's active context is the workspace unless the hook says otherwise. `base` LAST: a hook can add
     // a workspace and fields, never overwrite the user or the session.
     const fromContext = typeof contextId === 'string' ? { workspaceId: contextId } : {};
+    // Only the keys the hook actually set: `{ workspaceId: undefined }` must not erase the session's context.
+    const defined = Object.fromEntries(
+      Object.entries(extras ?? {}).filter(([, value]) => value !== undefined),
+    );
     let written: boolean;
     try {
-      written = setRequestPrincipal({ ...fromContext, ...extras, ...base });
+      written = setRequestPrincipal({ ...fromContext, ...defined, ...base });
     } catch (error) {
       this.hookFailed(error);
       written = setRequestPrincipal(base);

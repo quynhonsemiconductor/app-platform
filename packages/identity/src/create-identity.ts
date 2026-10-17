@@ -202,6 +202,8 @@ const internals = new WeakMap<
     cache: CacheService;
     /** Forget that a user was believed not banned (see `banned-guard.ts`). */
     forgetBan: (userId: string) => void;
+    /** Is this user banned right now (the ban guard's memo, 30 s per process). */
+    isBanned: (userId: string) => Promise<boolean>;
     /** How many times the session store (Valkey) has failed so far; see `revokeAllSessions`. */
     degradedCount: () => number;
     /** Present when the `context` option is. */
@@ -319,6 +321,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
         sink,
         onSinkError,
         logger: o.logger ?? consoleLogger,
+        degradedCount: () => degraded,
       })
     : undefined;
   // Staff first: a refused staff sign-in must not reach the context hook. Then the context a new session
@@ -549,6 +552,7 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
     sink,
     cache: o.cache,
     forgetBan: bannedGuard.forget,
+    isBanned: async (userId) => bannedGuard.isBanned(await getContext(), userId),
     degradedCount: () => degraded,
     context: contextRuntime,
   });
@@ -735,6 +739,22 @@ export async function revokeUserSessions(auth: Identity, userId: string): Promis
 }
 
 /**
+ * Is this user banned right now? The question a guard has to ask when it authenticates a request by something other than a
+ * session: a session read refuses a banned user's session (Better Auth checks `banned`, and identity re-checks it on every read),
+ * but a credential that never touches a session (rova's `Bearer rly_…` API tokens, see `markPreAuthenticated`) skips all of that,
+ * so a banned user's token would keep working. `SessionGuard` asks it itself for a request a product guard marked; a
+ * product guard that authenticates OUTSIDE `SessionGuard` (a socket gateway, a job) must ask it too.
+ *
+ * Same memo as the session read: a user not found banned is believed not banned for 30 s per process; a ban made by
+ * {@link setUserBanned} takes effect at once in the process that made it. An unknown user is not banned (`false`): whether
+ * they may act at all is the caller's question.
+ */
+export async function isUserBanned(auth: Identity, userId: string): Promise<boolean> {
+  assertUserId(userId, 'isUserBanned');
+  return internalOf(auth, 'isUserBanned').isBanned(userId);
+}
+
+/**
  * Ban or unban a user, service side (no admin session needed). A banned user cannot sign in (Better
  * Auth's admin plugin refuses the session, for every provider) and every session they hold is ended
  * as {@link revokeUserSessions} does. `reason` is stored in `user.ban_reason` as given (at most 500
@@ -779,6 +799,7 @@ export async function setUserBanned(
 }
 
 type ContextSessionContext = {
+  options: { secondaryStorage?: { delete(key: string): Promise<void> } };
   adapter: {
     findMany(args: {
       model: string;
@@ -845,9 +866,9 @@ export async function setContext(
  * read without it being called notices on its own within `context.revalidateSeconds` (and falls back to
  * `context.initial`).
  *
- * Updates the cache copy and the row of each session. If the cache fails during the run the copy that
- * could not be updated is fixed by the read-time re-check, and the count is of the rows updated. Safe to
- * re-run. Returns how many sessions held the context.
+ * Updates the row and the cache copy of each session. If the cache degrades during a write the cached copy is dropped (and
+ * `identity.context_cache_stale` is logged if that fails too); the count is of the rows updated. With the public preset's cookie
+ * cache a browser can still present the old context for up to 5 minutes. Safe to re-run. Returns how many sessions held the context.
  */
 export async function clearContext(
   auth: Identity,
@@ -887,7 +908,9 @@ async function clearContextSessions(
     for (const row of batch) {
       const token = row.token as string;
       seen.add(token);
+      const degradedBefore = internal.context!.degradedCount();
       await ctx.internalAdapter.updateSession(token, { contextId: null });
+      await internal.context!.reconcile(ctx.options.secondaryStorage, token, degradedBefore);
       if (typeof row.userId === 'string') internal.context?.forget(row.userId, contextId);
       cleared += 1;
     }

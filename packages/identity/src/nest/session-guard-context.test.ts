@@ -6,9 +6,18 @@ import {
   setRequestPrincipal,
   type RequestContext,
 } from '@quynhonsemiconductor/observability';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Identity } from '../create-identity';
 import { markPreAuthenticated, SessionGuard, type PrincipalHook } from './session.guard';
+
+// The ban check needs a real instance (it reads the ban guard's memo); here it is a stub the tests steer.
+const banned = vi.hoisted(() => ({
+  isUserBanned: vi.fn(async (_auth: unknown, _userId: string) => false),
+}));
+vi.mock('../create-identity', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isUserBanned: banned.isUserBanned,
+}));
 
 const CTX = '0194a000-0000-7000-8000-000000000001';
 
@@ -77,7 +86,23 @@ describe('the principal carries the session’s active context as the workspace'
   });
 });
 
+describe('the principal hook cannot erase the session’s context', () => {
+  it('a hook that returns workspaceId: undefined (or any undefined key) leaves the context as the workspace', async () => {
+    const hook: PrincipalHook = () => ({ workspaceId: undefined, fields: undefined });
+    const { guard, ctx } = guardFor({ session: sessionWith(CTX), hook });
+    await inRequest(async (store) => {
+      await guard.canActivate(ctx);
+      expect(store.workspaceId).toBe(CTX);
+    });
+  });
+});
+
 describe('markPreAuthenticated: a product guard that authenticated a non-browser credential', () => {
+  beforeEach(() => {
+    banned.isUserBanned.mockReset();
+    banned.isUserBanned.mockResolvedValue(false);
+  });
+
   it('SessionGuard stands aside: no session lookup, no session on the request, and the principal is the product’s', async () => {
     const { guard, ctx, req, getSession, warn } = guardFor({ session: null });
     await inRequest(async (store) => {
@@ -88,7 +113,43 @@ describe('markPreAuthenticated: a product guard that authenticated a non-browser
       expect(req['session']).toBeUndefined();
       expect(store.userId).toBe('token-user'); // untouched
       expect(warn).not.toHaveBeenCalled();
+      expect(banned.isUserBanned).toHaveBeenCalledWith(expect.anything(), 'token-user');
     });
+  });
+
+  it('a BANNED user’s token is refused (401): the session path’s ban check never ran for it', async () => {
+    banned.isUserBanned.mockResolvedValue(true);
+    const { guard, ctx, req } = guardFor({ session: null });
+    await inRequest(async () => {
+      setRequestPrincipal({ userId: 'token-user', sessionId: 'apitoken:7' });
+      markPreAuthenticated(req);
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 'AUTH_UNAUTHENTICATED' });
+    });
+  });
+
+  it('FAILS CLOSED when a request context exists but the product guard wrote no principal: 401, logged at error', async () => {
+    const { guard, ctx, req } = guardFor({ session: null });
+    const error = vi.spyOn(
+      (guard as unknown as { logger: { error: (message: string) => void } }).logger,
+      'error',
+    );
+    await inRequest(async () => {
+      markPreAuthenticated(req);
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 'AUTH_UNAUTHENTICATED' });
+    });
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(String(error.mock.calls[0]![0])).toContain('setRequestPrincipal');
+    expect(banned.isUserBanned).not.toHaveBeenCalled();
+  });
+
+  it('with NO request context at all the principal cannot be read back: warned once, let through', async () => {
+    const { guard, ctx, req, warn } = guardFor();
+    markPreAuthenticated(req);
+    expect(requestContextStorage.getStore()).toBeUndefined();
+    expect(await guard.canActivate(ctx)).toBe(true);
+    expect(await guard.canActivate(ctx)).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toContain('markPreAuthenticated');
   });
 
   it('an unmarked request is still authenticated by a session, or answered 401', async () => {
@@ -114,20 +175,10 @@ describe('markPreAuthenticated: a product guard that authenticated a non-browser
     }
   });
 
-  it('marking without a principal in the request context warns once, and does not fail the request', async () => {
-    const { guard, ctx, req, warn } = guardFor();
-    markPreAuthenticated(req);
-    await inRequest(async () => {
-      expect(await guard.canActivate(ctx)).toBe(true);
-      expect(await guard.canActivate(ctx)).toBe(true);
-    });
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]![0])).toContain('markPreAuthenticated');
-  });
-
   it('@Public() still short-circuits first', async () => {
     const { guard, ctx, getSession } = guardFor({ isPublic: true });
     expect(await guard.canActivate(ctx)).toBe(true);
     expect(getSession).not.toHaveBeenCalled();
+    expect(banned.isUserBanned).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,7 @@ export {
   clearContext,
   clearContextEverywhere,
   createIdentity,
+  isUserBanned,
   purgeUnverifiedAccounts,
   revokeAllSessions,
   revokeUserSessions,

@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { clearContext, clearContextEverywhere, contextIdOf, setContext } from '../index';
+import {
+  clearContext,
+  clearContextEverywhere,
+  contextIdOf,
+  isUserBanned,
+  setContext,
+  setUserBanned,
+} from '../index';
 import { verifiedUser } from './flows';
 import {
   API,
@@ -460,6 +467,56 @@ export function contextConformance(t: TestApi, infra: ConformanceInfra): void {
         expect((await set(client, CTX_B)).status).toBe(200);
         // WITH the cookie cache (the default read): the refreshed cookie answers, not a stale one.
         expect(await contextOf(client)).toBe(CTX_B);
+      } finally {
+        await stack.stop();
+      }
+    });
+  });
+
+  describe('isUserBanned (what a pre-authenticating guard must ask)', () => {
+    it('is false for a user in good standing and for one nobody knows, true as soon as setUserBanned runs, false again after the unban', async () => {
+      const members = new Members();
+      const stack = await open(members);
+      try {
+        const { userId } = await signIn(stack);
+        expect(await isUserBanned(stack.auth, userId)).toBe(false);
+        expect(await isUserBanned(stack.auth, randomUUID())).toBe(false);
+
+        await setUserBanned(stack.auth, userId, true, 'test');
+        expect(await isUserBanned(stack.auth, userId)).toBe(true);
+
+        await setUserBanned(stack.auth, userId, false);
+        expect(await isUserBanned(stack.auth, userId)).toBe(false);
+      } finally {
+        await stack.stop();
+      }
+    });
+
+    it('refuses what is not a user id', async () => {
+      const stack = await open(new Members());
+      try {
+        await expect(isUserBanned(stack.auth, 'not-a-uuid')).rejects.toThrow(/UUID/);
+      } finally {
+        await stack.stop();
+      }
+    });
+  });
+
+  describe('a context id is validated the same way on every path', () => {
+    it('/context/set and initial() accept and refuse the same strings', async () => {
+      const members = new Members();
+      const stack = await open(members, {}, () => 'ffffffff-ffff-ffff-ffff-ffffffffffff');
+      try {
+        // A well-formed id with a version/variant nibble z.uuid() would reject is a UUID to both.
+        const odd = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+        const { client, userId } = await signIn(stack);
+        members.add(userId, odd);
+        expect((await set(client, odd)).status).toBe(200);
+        expect((await set(client, 'not-a-uuid')).status).toBe(400);
+        const again = stack.client();
+        await again.post(`${API}/test-login`, { email: (await signIn(stack)).email });
+        // initial() offered `odd` to a user who is not a member: refused, exactly as the endpoint would
+        expect(await contextOf(again)).toBeNull();
       } finally {
         await stack.stop();
       }

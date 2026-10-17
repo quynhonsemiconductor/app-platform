@@ -312,6 +312,60 @@ describe('GraphSender: 429 and 5xx', () => {
   });
 });
 
+describe('GraphSender: a caller’s deadline ends the WHOLE send, retries and waits included', () => {
+  // The products give a send a deadline (30 s). Without a signal that reached the in-place retries, a 429 with Retry-After would be waited out
+  // (up to 30 s a time, three attempts) AFTER the caller had given up and its own retry had begun, and the late 202 would be a duplicate email.
+  it('ends a real Retry-After wait promptly with the real sleep, and does not send again', async () => {
+    server.reply({ status: 429, headers: { 'retry-after': '20' } });
+    server.reply({ status: 202 });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 60);
+    const started = Date.now();
+
+    const error = (await createGraphSender({
+      sender: SENDER,
+      credential: credential(),
+      baseUrl: server.baseUrl,
+      maxRetryAfterSeconds: 30,
+    })
+      .send(sampleMessage(), { signal: controller.signal })
+      .catch((e: unknown) => e)) as MailSendError;
+
+    expect(error).toBeInstanceOf(MailSendError);
+    expect(error.code).toBe('timeout');
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(server.requests).toHaveLength(1);
+    expect(server.accepted).toHaveLength(0);
+  });
+
+  it('ends a request that is on the wire, at once', async () => {
+    server.hang = true;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 60);
+    const started = Date.now();
+    const error = (await createGraphSender({
+      sender: SENDER,
+      credential: credential(),
+      baseUrl: server.baseUrl,
+      requestTimeoutMs: 15_000,
+    })
+      .send(sampleMessage(), { signal: controller.signal })
+      .catch((e: unknown) => e)) as MailSendError;
+    expect(error.code).toBe('timeout');
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it('sends nothing at all when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const error = (await sender()
+      .send(sampleMessage(), { signal: controller.signal })
+      .catch((e: unknown) => e)) as MailSendError;
+    expect(error.code).toBe('timeout');
+    expect(server.requests).toHaveLength(0);
+  });
+});
+
 describe('GraphSender: the credential and the caller’s signal (L4)', () => {
   it('hands the caller’s abort signal to getToken, so a cancelled send does not wait on the authority', async () => {
     const getToken = vi.fn(async (_scope: string, _options?: { abortSignal?: AbortSignal }) => ({

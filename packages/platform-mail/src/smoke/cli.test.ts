@@ -43,7 +43,10 @@ describe('platform-mail-smoke (the built bin)', () => {
         bin: Record<string, string>;
         files: string[];
       };
-      expect(pkg.bin).toEqual({ 'platform-mail-smoke': 'dist/smoke/cli.js' });
+      expect(pkg.bin).toEqual({
+        'platform-mail-smoke': 'dist/smoke/cli.js',
+        'platform-mail-check': 'dist/check/cli.js',
+      });
       expect(pkg.files).toContain('dist');
       expect(readFileSync(bin, 'utf8').startsWith('#!/usr/bin/env node\n')).toBe(true);
       expect(statSync(bin).isFile()).toBe(true);

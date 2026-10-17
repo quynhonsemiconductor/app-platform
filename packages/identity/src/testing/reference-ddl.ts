@@ -119,6 +119,7 @@ ALTER TABLE "identity"."session" ADD CONSTRAINT "session_user_id_user_id_fk" FOR
 ALTER TABLE "identity"."sso_provider" ADD CONSTRAINT "sso_provider_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "identity"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "identity"."two_factor" ADD CONSTRAINT "two_factor_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "identity"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "account_userId_idx" ON "identity"."account" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "account_provider_account_idx" ON "identity"."account" USING btree ("provider_id","account_id");--> statement-breakpoint
 CREATE INDEX "invitation_organizationId_idx" ON "identity"."invitation" USING btree ("organization_id");--> statement-breakpoint
 CREATE INDEX "invitation_email_idx" ON "identity"."invitation" USING btree ("email");--> statement-breakpoint
 CREATE INDEX "member_organizationId_idx" ON "identity"."member" USING btree ("organization_id");--> statement-breakpoint

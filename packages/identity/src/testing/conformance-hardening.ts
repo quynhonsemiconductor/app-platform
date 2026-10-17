@@ -65,17 +65,17 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
         const attacker = 'https://attacker.example';
         const org = (
           await stack.pool.query<{ id: string }>(
-            `insert into identity.organization (id, name, slug, created_at) values (uuidv7(), 'evil', 'evil', now()) returning id`,
+            `insert into identity.organization (id, name, slug, created_at) values (gen_random_uuid(), 'evil', 'evil', now()) returning id`,
           )
         ).rows[0]!.id;
         const owner = (
           await stack.pool.query<{ id: string }>(
-            `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'o', 'o@evil.test', true, now(), now()) returning id`,
+            `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'o', 'o@evil.test', true, now(), now()) returning id`,
           )
         ).rows[0]!.id;
         await stack.pool.query(
           `insert into identity.sso_provider (id, issuer, oidc_config, user_id, provider_id, organization_id, domain, domain_verified)
-           values (uuidv7(), $1, $2, $3::uuid, 'evil', $4::uuid, 'evil.test', false)`,
+           values (gen_random_uuid(), $1, $2, $3::uuid, 'evil', $4::uuid, 'evil.test', false)`,
           [
             `${attacker}/oidc`,
             JSON.stringify({
@@ -171,12 +171,12 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       const email = `clerk-${randomUUID().slice(0, 6)}@${STAFF_DOMAIN}`;
       const password = strongPassword();
       const u = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'C', $1, true, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'C', $1, true, now(), now()) returning id`,
         [email],
       );
       await stack.pool.query(
         `insert into identity.account (id, account_id, provider_id, user_id, password, created_at, updated_at)
-         values (uuidv7(), $1::text, 'credential', $2::uuid, $3, now(), now())`,
+         values (gen_random_uuid(), $1::text, 'credential', $2::uuid, $3, now(), now())`,
         [
           u.rows[0]!.id,
           u.rows[0]!.id,
@@ -587,7 +587,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
         // The account row is inserted directly: no hook runs, so only the READ-time check can catch it.
         await stack.pool.query(
           `insert into identity.account (id, account_id, provider_id, user_id, created_at, updated_at)
-             select uuidv7(), $2::text, 'microsoft', u.id, now(), now() from identity."user" u where u.email = $1`,
+             select gen_random_uuid(), $2::text, 'microsoft', u.id, now(), now() from identity."user" u where u.email = $1`,
           [email, randomUUID()],
         );
         await publicLifetime(c, 13);
@@ -772,7 +772,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       try {
         const email = uniqueEmail('squat');
         const squatter = await stack.pool.query<{ id: string }>(
-          `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'S', $1, false, now(), now()) returning id`,
+          `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'S', $1, false, now(), now()) returning id`,
           [email],
         );
         const { callback } = await microsoftSignIn(stack, idp, {
@@ -866,7 +866,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
     it('replaces an unverified, never-used password account for an address Google reports verified', async () => {
       const email = uniqueEmail('squat');
       const squatter = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'S', $1, false, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'S', $1, false, now(), now()) returning id`,
         [email],
       );
       await googleUser(email);
@@ -887,7 +887,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
     it('does not replace an account Google reports as UNVERIFIED, nor one that has a session', async () => {
       const unverified = uniqueEmail('unv');
       const a = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'A', $1, false, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'A', $1, false, now(), now()) returning id`,
         [unverified],
       );
       await googleUser(unverified, false);
@@ -898,11 +898,11 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
 
       const used = uniqueEmail('used');
       const b = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'B', $1, false, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'B', $1, false, now(), now()) returning id`,
         [used],
       );
       await stack.pool.query(
-        `insert into identity.session (id, token, user_id, expires_at, created_at, updated_at) values (uuidv7(), $1, $2::uuid, now() + interval '1 day', now(), now())`,
+        `insert into identity.session (id, token, user_id, expires_at, created_at, updated_at) values (gen_random_uuid(), $1, $2::uuid, now() + interval '1 day', now(), now())`,
         [randomUUID(), b.rows[0]!.id],
       );
       await googleUser(used);
@@ -975,7 +975,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
         const { organizationId, owner, ownerId } = await createOrganization(strict, t);
         await strict.pool.query(
           `insert into identity.sso_provider (id, issuer, oidc_config, user_id, provider_id, organization_id, domain, domain_verified)
-           values (uuidv7(), 'https://idp.partner.example/oidc', $1, $2::uuid, 'inward', $3::uuid, 'partner.example', true)`,
+           values (gen_random_uuid(), 'https://idp.partner.example/oidc', $1, $2::uuid, 'inward', $3::uuid, 'partner.example', true)`,
           [
             JSON.stringify({
               clientId: 'c',
@@ -2080,12 +2080,12 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
         // read through the internal adapter, as a socket gateway would.
         const user = await stack.pool.query<{ id: string }>(
           `insert into identity."user" (id, name, email, email_verified, created_at, updated_at)
-           values (uuidv7(), 'E', $1, true, now(), now()) returning id`,
+           values (gen_random_uuid(), 'E', $1, true, now(), now()) returning id`,
           [email],
         );
         await stack.pool.query(
           `insert into identity.session (id, expires_at, token, created_at, updated_at, user_id)
-           values (uuidv7(), now() + interval '5 days', $1, now() - interval '13 hours', now() - interval '13 hours', $2)`,
+           values (gen_random_uuid(), now() + interval '5 days', $1, now() - interval '13 hours', now() - interval '13 hours', $2)`,
           [token, user.rows[0]!.id],
         );
         const context = (await stack.auth.$context) as unknown as {

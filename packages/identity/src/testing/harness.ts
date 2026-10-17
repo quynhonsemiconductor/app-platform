@@ -22,7 +22,7 @@ import * as referenceSchema from './reference-schema';
 
 /**
  * What the kit needs from the environment it runs in. The package does not start containers: a
- * product supplies a PostgreSQL 18 database and a Valkey (its CI already has both), `app-platform`
+ * product supplies a PostgreSQL 17+ database and a Valkey (its CI already has both), `app-platform`
  * supplies them from `@quynhonsemiconductor/testing`.
  */
 export interface ConformanceInfra {

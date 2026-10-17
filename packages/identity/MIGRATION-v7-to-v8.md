@@ -102,7 +102,7 @@ FROM identity.users u
 WHERE deleted_at IS NULL;                                -- soft-deleted users are not carried over
 
 INSERT INTO identity.account (id, account_id, provider_id, user_id, created_at, updated_at)
-SELECT gen_random_uuid(), s.provider_sub, 'microsoft', s.user_id, s.created_at, now()  -- uuidv7() exists only on PostgreSQL 18
+SELECT gen_random_uuid(), s.provider_sub, 'microsoft', s.user_id, s.created_at, now()  -- gen_random_uuid() works on 17; uuidv7() exists only on 18
 FROM identity.sso_identities s
 JOIN identity."user" u ON u.id = s.user_id              -- skips identities of excluded users
 WHERE s.provider = 'entra';

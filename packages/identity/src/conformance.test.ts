@@ -12,7 +12,7 @@ import { runIdentityConformance } from './testing';
 import type { ConformanceInfra } from './testing';
 
 /**
- * The package's own run of the conformance kit, against PostgreSQL 18 and Valkey from the shared
+ * The package's own run of the conformance kit, against PostgreSQL 18 (the shared harness image; the kit itself needs 17+) and Valkey from the shared
  * harness. A product runs the same `runIdentityConformance` against its own database and cache.
  */
 const enabled = await dockerTestsEnabled();

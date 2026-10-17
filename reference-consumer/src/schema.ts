@@ -1,4 +1,4 @@
-// COPY of @quynhonsemiconductor/identity 8.0.0's reference schema. A product OWNS its auth tables (it
+// COPY of @quynhonsemiconductor/identity 8.4.0's reference schema. A product OWNS its auth tables (it
 // generates them with `auth generate`, README "Tables"), so this consumer owns a copy too instead of
 // importing the package's test fixture into its application code. test/schema-drift.test.ts compares the
 // copy (and the DDL) with the PUBLISHED `/testing` exports, so a bump of identity that changes the tables
@@ -45,6 +45,7 @@ export const session = identity.table(
       .references(() => user.id, { onDelete: 'cascade' }),
     activeOrganizationId: uuid('active_organization_id'),
     impersonatedBy: uuid('impersonated_by'),
+    contextId: uuid('context_id'),
   },
   (table) => [index('session_userId_idx').on(table.userId)],
 );

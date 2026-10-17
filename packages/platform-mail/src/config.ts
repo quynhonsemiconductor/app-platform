@@ -13,6 +13,7 @@ export interface GraphConfig {
   clientId: string;
   credential:
     | { kind: 'workload-identity'; tokenFilePath: string }
+    | { kind: 'certificate'; pem: string }
     | { kind: 'client-secret'; clientSecret: string };
 }
 
@@ -40,6 +41,19 @@ function value(env: MailEnv, name: string): string | undefined {
   return trimmed;
 }
 
+// eslint-disable-next-line no-control-regex -- the point is to reject control characters (but not CR, LF or TAB)
+const CONTROL_EXCEPT_WHITESPACE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
+/** Like {@link value}, for a multi-line PEM: line breaks and tabs are allowed, every other control character is not. */
+function multiline(env: MailEnv, name: string): string | undefined {
+  const trimmed = env[name]?.trim();
+  if (trimmed === undefined || trimmed === '') return undefined;
+  if (CONTROL_EXCEPT_WHITESPACE.test(trimmed)) {
+    throw new MailConfigError(`${name} contains a control character.`);
+  }
+  return trimmed;
+}
+
 function required(env: MailEnv, name: string, why: string): string {
   const found = value(env, name);
   if (found === undefined) throw new MailConfigError(`${name} is required ${why}.`);
@@ -49,6 +63,25 @@ function required(env: MailEnv, name: string, why: string): string {
 /** `true` when this process is production. Spelled one way, here, so every check agrees. */
 export function isProduction(env: MailEnv): boolean {
   return env['NODE_ENV'] === 'production';
+}
+
+/**
+ * The PEM in `AZURE_CLIENT_CERTIFICATE`: raw, or base64 of it (a secret store that holds one line). It must carry the private key AND the
+ * certificate, because the token request is signed with the key and identifies the certificate by its thumbprint. The error names the
+ * variable and what is missing; it never echoes any of the value.
+ */
+function certificatePem(raw: string): string {
+  const pem = raw.includes('-----BEGIN') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+  const hasKey = /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/.test(pem);
+  const hasCertificate = /-----BEGIN CERTIFICATE-----/.test(pem);
+  if (!hasKey || !hasCertificate) {
+    throw new MailConfigError(
+      `AZURE_CLIENT_CERTIFICATE must be a PEM holding the private key and the certificate (raw or base64); it has ${
+        hasKey ? 'no certificate' : hasCertificate ? 'no private key' : 'neither'
+      }.`,
+    );
+  }
+  return pem.trim();
 }
 
 /**
@@ -62,6 +95,7 @@ export function isProduction(env: MailEnv): boolean {
  * | `AZURE_TENANT_ID`        | graph    | Entra tenant                                                   |
  * | `AZURE_CLIENT_ID`        | graph    | the product's own Entra app                                    |
  * | `AZURE_FEDERATED_TOKEN_FILE` | graph | projected ServiceAccount token (workload identity). Preferred |
+ * | `AZURE_CLIENT_CERTIFICATE` | graph  | PEM with the private key AND the certificate, raw or base64 (ECS, from a secret) |
  * | `AZURE_CLIENT_SECRET`    | graph    | local testing only; refused when `NODE_ENV=production`         |
  * | `MAIL_SMTP_HOST`/`_PORT`/`_FROM` | smtp | Mailpit defaults; refused when `NODE_ENV=production`     |
  */
@@ -122,12 +156,23 @@ export function readMailConfig(env: MailEnv = process.env): MailConfig {
     };
   }
 
+  const certificate = multiline(env, 'AZURE_CLIENT_CERTIFICATE');
+  if (certificate !== undefined) {
+    return {
+      transport: 'graph',
+      sender,
+      tenantId,
+      clientId,
+      credential: { kind: 'certificate', pem: certificatePem(certificate) },
+    };
+  }
+
   const clientSecret = value(env, 'AZURE_CLIENT_SECRET');
   if (clientSecret !== undefined) {
     if (isProduction(env)) {
       throw new MailConfigError(
         'A client secret is refused when NODE_ENV=production: mail authenticates with workload identity federation ' +
-          '(set AZURE_FEDERATED_TOKEN_FILE), not a stored secret.',
+          '(set AZURE_FEDERATED_TOKEN_FILE) or a certificate (AZURE_CLIENT_CERTIFICATE), not a stored secret.',
       );
     }
     return {
@@ -140,7 +185,7 @@ export function readMailConfig(env: MailEnv = process.env): MailConfig {
   }
 
   throw new MailConfigError(
-    'No Graph credential: set AZURE_FEDERATED_TOKEN_FILE (workload identity, production) or ' +
-      'AZURE_CLIENT_SECRET (local testing only).',
+    'No Graph credential: set AZURE_FEDERATED_TOKEN_FILE (workload identity) or AZURE_CLIENT_CERTIFICATE ' +
+      '(a certificate, ECS) in production, or AZURE_CLIENT_SECRET (local testing only).',
   );
 }

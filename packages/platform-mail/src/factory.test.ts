@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GraphServer } from './__helpers__/graph-server';
 import { MailConfigError } from './errors';
+import { generateCertificatePem } from './__helpers__/certificate';
 import { createEmailSender } from './factory';
 import { GRAPH_SCOPE } from './graph';
 import { sampleMessage } from './testing';
@@ -51,6 +52,17 @@ describe('createEmailSender: graph', () => {
         },
       }).mailbox,
     ).toBe('noreply-academy@qnsc.vn');
+  });
+
+  it('constructs the real ClientCertificateCredential from a generated key and certificate, raw and base64', () => {
+    const pem = generateCertificatePem();
+    for (const AZURE_CLIENT_CERTIFICATE of [pem, Buffer.from(pem).toString('base64')]) {
+      expect(
+        createEmailSender({
+          env: { ...GRAPH_ENV, NODE_ENV: 'production', AZURE_CLIENT_CERTIFICATE },
+        }).mailbox,
+      ).toBe('noreply-academy@qnsc.vn');
+    }
   });
 
   it('says what is missing instead of failing later at the first send', () => {

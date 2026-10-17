@@ -8,16 +8,20 @@
  */
 export {
   AUTH_BASE_PATH,
+  clearContext,
+  clearContextEverywhere,
   createIdentity,
   purgeUnverifiedAccounts,
   revokeAllSessions,
   revokeUserSessions,
   SessionStoreUnavailableError,
+  setContext,
   setUserBanned,
   unlinkMicrosoftAccount,
   type Identity,
   type IdentityOptions,
 } from './create-identity';
+export { contextIdOf, type ContextOptions } from './context';
 export { DEFAULTS, type Preset } from './defaults';
 export {
   AUTH_MAIL_PRIORITY,

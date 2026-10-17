@@ -74,14 +74,14 @@ installs**, run `pnpm install`, and check `pnpm why esbuild vitest --prod` is em
 Generate the Better Auth tables for your instance (README, "Tables"), then migrate in one transaction. Ids are
 preserved, so foreign keys to `identity.users.id` keep working.
 
-| v7                                         | v8                                | Migration                                                                                                                                                                                        |
-| ------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `identity.users`                           | `user`                            | Copy with the same ids and **the v7 `email_verified`** (do not force `true`: `invited` users never proved anything). Soft-deleted users are excluded; `inactive` and `suspended` become `banned` |
-| `identity.sso_identities`                  | `account`                         | Only rows with `provider = 'entra'` (the staff tenant): `provider_id = 'microsoft'`, `account_id` = the Entra `oid` (`provider_sub`). Other providers have no v8 equivalent in 8.0.0             |
-| `identity.sso_connections`, `..._domains`  | `sso_provider` (+ `organization`) | Not the staff tenant: per-workspace Entra connections wait for 8.1 (rova). For an OIDC partner, create the organization and provider through your admin tool; see "SSO providers"                |
-| `identity.auth_sessions`, `refresh_tokens` | `session`                         | Not migrated: everyone signs in once after cutover                                                                                                                                               |
-| `identity.api_tokens` (rova)               | unchanged                         | Keep the product's module (decision D5)                                                                                                                                                          |
-| `identity.employees` (opshub)              | unchanged                         | Product data, linked by user id                                                                                                                                                                  |
+| v7                                         | v8                                | Migration                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity.users`                           | `user`                            | Copy with the same ids and **`email_verified = true`** (see "A migrated user must be verified" below). Soft-deleted users are excluded; `inactive` and `suspended` become `banned`                                                                                                                                                            |
+| `identity.sso_identities`                  | `account`                         | Only rows with `provider = 'entra'` (the staff tenant): `provider_id = 'microsoft'`, `account_id` = the Entra `oid` (`provider_sub`). Other providers have no v8 equivalent in 8.0.0                                                                                                                                                          |
+| `identity.sso_connections`, `..._domains`  | `sso_provider` (+ `organization`) | The staff tenant is the `staff` preset, not a provider, and a `shared` guest-gate row becomes `staff.allowGuests`. Any other connection (a partner IdP) needs the `organizations` preset: create the organization and provider through your admin tool; see "SSO providers". Make your migration RAISE if a row it does not understand exists |
+| `identity.auth_sessions`, `refresh_tokens` | `session`                         | Not migrated: everyone signs in once after cutover                                                                                                                                                                                                                                                                                            |
+| `identity.api_tokens` (rova)               | unchanged                         | Keep the product's module (decision D5)                                                                                                                                                                                                                                                                                                       |
+| `identity.employees` (opshub)              | unchanged                         | Product data, linked by user id                                                                                                                                                                                                                                                                                                               |
 
 ```sql
 BEGIN;
@@ -89,7 +89,7 @@ INSERT INTO identity."user" (id, name, email, email_verified, image, banned, ban
 SELECT id,
        display_name,
        lower(email),
-       email_verified,                                   -- as v7 had it
+       true,                                             -- see "A migrated user must be verified"
        avatar_url,
        status IN ('inactive', 'suspended'),              -- v7 lifecycle -> v8 ban
        CASE WHEN status IN ('inactive', 'suspended') THEN 'migrated from v7: ' || status END,
@@ -99,7 +99,7 @@ FROM identity.users
 WHERE deleted_at IS NULL;                                -- soft-deleted users are not carried over
 
 INSERT INTO identity.account (id, account_id, provider_id, user_id, created_at, updated_at)
-SELECT uuidv7(), s.provider_sub, 'microsoft', s.user_id, s.created_at, now()
+SELECT gen_random_uuid(), s.provider_sub, 'microsoft', s.user_id, s.created_at, now()  -- uuidv7() exists only on PostgreSQL 18
 FROM identity.sso_identities s
 JOIN identity."user" u ON u.id = s.user_id              -- skips identities of excluded users
 WHERE s.provider = 'entra';
@@ -108,6 +108,27 @@ COMMIT;
 
 Check before cutover: no two v7 users share a lower-cased email (v8 requires it to be unique); the only rows
 that should not copy are the ones you meant to exclude.
+
+### A migrated user must be verified, and a guest needs their account row
+
+Two rules of the sign-in make the migration order-sensitive. Both were found while planning rova's migration:
+
+1. **Do not copy the v7 `email_verified`; set `true`.** When a Microsoft member signs in, the package deletes an existing user for that address
+   that is **unverified, holds no non-credential account and has no session row** (the squatting rule, plan D10), then signs the person in as
+   a NEW user with a NEW id. A migrated user starts with no v8 session, so an unverified one with no account would be deleted on first
+   sign-in and every foreign key to its old id would dangle. A user with a Microsoft account row is never replaceable, but for a user
+   without one, `email_verified = true` is what protects the id. For a tenant member that is true by definition (the tenant vouches for
+   the address); the v7 flag meant "this user has signed in before", which is not the question v8 asks.
+2. **Migrate every Entra identity into `account`.** A B2B guest (`staff.allowGuests: true`) whose address already belongs to a v8
+   `user` is **refused with `ACCOUNT_LINK_REQUIRED`** unless that user already holds the same `(microsoft, oid)` account: a guest never
+   auto-links. So a guest who has signed in before keeps signing in only if their `sso_identities` row became an `account` row. A user who has
+   **no** Entra identity and an address off `staff.domains` (an invitee who never signed in) should **not** be copied: with no row, the first
+   sign-in creates the user; with a row and no account, it is refused. Check for them before you migrate (rova expects none).
+
+Write the migration as a preflight that RAISES (duplicate lower-cased emails, identities of a provider you cannot map, a user with two
+Entra identities, users in the second class above), then the inserts, then an assertion that compares the SETS of ids (`EXCEPT` both ways),
+not just counts. Make the inserts idempotent (`ON CONFLICT DO NOTHING`, `NOT EXISTS`) so they can be re-run at cutover to pick up users
+created in v7 in the meantime.
 
 ### SSO providers and their secrets
 
@@ -132,8 +153,14 @@ need a reset.
 ## Behaviour changes to design for
 
 - **Claims and workspace context.** v7 put `contextId` and claims in the access token. v8 has no token for browsers:
-  read permissions from your own tables per request (cache briefly in Valkey). `contextId` on the session is not in
-  8.0.0; **rova waits for 8.1**, which adds it together with per-workspace SSO.
+  read permissions from your own tables per request (cache briefly in Valkey). The active context lives on the session as
+  `contextId` from **8.4**: the `context` option, `POST /api/auth/context/set`, `setContext`, `clearContext*` (README,
+  "The active context of a session"). rova's `switch-workspace` becomes a call to `setContext`; its `workspace_members` lookup is
+  the `membership` port, and removing a member calls `clearContext`. Per-workspace SSO is a separate matter (organizations
+  preset) and is not part of 8.4.
+- **Other credentials on the same routes** (rova's `Bearer rly_…` API tokens): `SessionGuard` is global and would answer 401 to
+  them. Authenticate them in a guard of your own, registered before `IdentityModule`, write the principal, and call
+  `markPreAuthenticated(req)` (8.4; README, "A credential that is not a browser session").
 - **No refresh-token theft detection.** Cookie sessions have no refresh token. Mitigations: `HttpOnly` cookie, session
   list, short staff sessions (12 h), no cookie cache for staff, immediate revocation.
 - **Revocation window.** With the public cookie cache (5 min) a revoked session can still be believed for up to 5 minutes.

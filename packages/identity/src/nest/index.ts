@@ -7,6 +7,7 @@ export {
   AUTH,
   CurrentSession,
   CurrentUser,
+  markPreAuthenticated,
   Public,
   PRINCIPAL_HOOK,
   SessionGuard,

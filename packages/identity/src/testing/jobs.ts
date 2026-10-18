@@ -11,7 +11,7 @@ import type { JobEnqueue, JobSendOptions } from '../ports';
  */
 export const TEST_JOBS_DDL = `
 CREATE TABLE IF NOT EXISTS identity_test_jobs (
-  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   queue text NOT NULL,
   data jsonb NOT NULL,
   idempotency_key text,

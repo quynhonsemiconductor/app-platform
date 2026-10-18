@@ -72,12 +72,12 @@ export function defaultsConformance(t: TestApi, infra: ConformanceInfra): void {
         algorithm: 2,
       });
       const user = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'L', $1, true, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'L', $1, true, now(), now()) returning id`,
         [email],
       );
       await stack.pool.query(
         `insert into identity.account (id, account_id, provider_id, user_id, password, created_at, updated_at)
-         values (uuidv7(), $1::text, 'credential', $2::uuid, $3, now(), now())`,
+         values (gen_random_uuid(), $1::text, 'credential', $2::uuid, $3, now(), now())`,
         [user.rows[0]!.id, user.rows[0]!.id, legacy],
       );
       expect((await signIn(stack.client(), email, password)).status).toBe(200);
@@ -87,12 +87,12 @@ export function defaultsConformance(t: TestApi, infra: ConformanceInfra): void {
     it('a hash in another format is a 401, never a 500', async () => {
       const email = uniqueEmail('odd');
       const user = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'O', $1, true, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'O', $1, true, now(), now()) returning id`,
         [email],
       );
       await stack.pool.query(
         `insert into identity.account (id, account_id, provider_id, user_id, password, created_at, updated_at)
-         values (uuidv7(), $1::text, 'credential', $2::uuid, 'salt:notargon2', now(), now())`,
+         values (gen_random_uuid(), $1::text, 'credential', $2::uuid, 'salt:notargon2', now(), now())`,
         [user.rows[0]!.id, user.rows[0]!.id],
       );
       expect((await signIn(stack.client(), email, strongPassword())).status).toBe(401);

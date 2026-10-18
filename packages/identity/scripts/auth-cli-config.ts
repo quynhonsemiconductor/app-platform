@@ -23,6 +23,8 @@ export const auth = createIdentity({
     },
   },
   staff: { tenantId: 'x', clientId: 'x', clientSecret: 'x', domains: ['staff.example.test'] },
+  // Adds `session.contextId`, so the reference schema carries the column a product with a context needs.
+  context: { membership: () => true },
   env: {
     BETTER_AUTH_SECRET: randomBytes(32).toString('hex'),
     IDENTITY_ENCRYPTION_KEY: randomBytes(32).toString('base64'),

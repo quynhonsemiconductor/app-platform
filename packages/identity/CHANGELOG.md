@@ -1,5 +1,19 @@
 # Changelog
 
+## [8.4.1](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.4.0...identity-v8.4.1) (2026-10-18)
+
+
+### 🐛 Bug Fixes
+
+* **identity:** the kit and the docs need PostgreSQL 17+, and the reference DDL indexes account lookups ([#261](https://github.com/quynhonsemiconductor/app-platform/issues/261)) ([02ed564](https://github.com/quynhonsemiconductor/app-platform/commit/02ed5641ad340fadc3d5ef0c7fd186295bff0daa))
+
+## [8.4.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.3.0...identity-v8.4.0) (2026-10-17)
+
+
+### ✨ Features
+
+* **identity:** the active context of a session, and markPreAuthenticated ([#257](https://github.com/quynhonsemiconductor/app-platform/issues/257)) ([35d8476](https://github.com/quynhonsemiconductor/app-platform/commit/35d8476799bb4c98fa071c7b588b3d1d4f247b49))
+
 ## [8.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.2.0...identity-v8.3.0) (2026-10-13)
 
 

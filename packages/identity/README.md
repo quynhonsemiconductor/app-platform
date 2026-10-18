@@ -11,7 +11,11 @@ permissions, UI, email text and cookie names stay in the product (`docs/ADMISSIO
 Decisions and evidence: [ADR 0002](../../docs/adr/0002-identity-v8-better-auth.md) (the WP-9 spike and the
 platform lead's decisions) and the identity v8 plan.
 
-## Behaviour changes on a minor upgrade (read before upgrading to 8.2)
+## Behaviour changes on a minor upgrade (read before upgrading to 8.2 and 8.4)
+
+> **8.4: `SecurityEventName` gained `context.switched`, `context.refused` and `context.revoked`.** A product that `switch`es exhaustively over
+> the union (a `never` default) stops compiling until it handles them; one that logs by name needs nothing. Nothing else changes unless you
+> pass `context` or call `markPreAuthenticated`.
 
 > **A staff member whose UPN is not on a `staff.domains` entry can no longer sign in.** `staff.requireUpnOnStaffDomain` is **on by
 > default** from 8.2: a member's `upn` (else `preferred_username`) must match an **exact** `staff.domains` entry (`*.` entries
@@ -173,6 +177,7 @@ export const auth = createIdentity({
   staff: { tenantId, clientId, clientSecret, domains: ['qnsc.vn'], allowGuests: false }, // each domain exact; '*.qnsc.vn' opts into sub-domains
   google: { clientId, clientSecret },
   hooks: { onUserCreated, onStaffSignIn, onSsoProvisioned, ssoRole },
+  context: { membership, initial }, // optional: the product's tenancy unit on the session (see "Context")
   hostCookies: true, // optional: `__Host-` cookie names (see "Session cookies")
   oauthRateLimit: { start: { windowSeconds: 60, max: 120 } }, // optional: the redirect endpoints (see "Client IP and rate limits")
   events, // security events -> observabilitySecurityEvents(logger) / audit
@@ -250,7 +255,7 @@ Every route needs a session unless it is `@Public()`. Authorization stays in the
 | `organizations` | Organizations, OIDC SSO per organization with verified domains and provisioning, encrypted secrets                   |
 
 The `admin` plugin is always on, **without impersonation** (the endpoints do not exist in 8.0.0; 8.1 brings them back with
-a required reason, a 1 h limit and an audit record). Passkeys, the `jwt` plugin, SAML and `contextId` are not in 8.0.0.
+a required reason, a 1 h limit and an audit record). Passkeys, the `jwt` plugin and SAML are not in 8.x. `contextId` arrived in 8.4 ([Context](#the-active-context-of-a-session-context)).
 
 Better Auth's lifetime is per instance, so in an instance with both `staff` and `public` sessions are written with the
 public lifetime and **the 12 h staff cap is enforced where sessions are written** (`session.create.before` and
@@ -341,6 +346,90 @@ IdentityModule.forRootAsync({
 (keep that in your own guard). If it throws or returns something invalid, the request continues with the user and session ids
 alone and one warning (the error class, never its message) is logged. Without `enableCorrelationId` there is no context to
 write to: authentication works and nothing is recorded.
+
+### The active context of a session: `context`
+
+A product with its own tenancy model (rova: workspaces; plan decision D6) keeps it, and stores **which unit the session is acting
+in** on the session as `contextId`. The package keeps that value honest; it never decides what a context is or what a member may do
+in one (authorization stays in the product's guard, per request, from its own tables).
+
+```ts
+createIdentity({
+  // ...
+  context: {
+    // May this user act in this context? A workspace_members lookup in rova.
+    membership: (userId, contextId) => workspaces.isActiveMember(userId, contextId),
+    // The context a new session starts in, and the one it falls back to (rova: the last-active workspace).
+    initial: (userId) => workspaces.lastActiveFor(userId),
+    // revalidateSeconds: 60,  // default; 0 asks `membership` on every session read
+  },
+});
+```
+
+- **Storage.** `session.contextId`, a nullable **uuid** column `context_id` (regenerate your tables, see "Tables"; add a foreign
+  key to your tenancy table in your own migration if you want one). Read it with `contextIdOf(session)`. Nothing a client sends
+  can write it: the field is `input: false` and `update-session`, `update-user` and the sign-in bodies ignore it.
+- **Setting it.** `POST /api/auth/context/set { "contextId": "<uuid>" | null }`. The caller needs a session; the package asks
+  `membership(userId, contextId)` and refuses with **403 `CONTEXT_FORBIDDEN`** (nothing changes, event `context.refused`) when it
+  says no. A `membership` that throws is a 500 (`CONTEXT_CHECK_FAILED` in the log; the wire carries the fixed 5xx body) and also
+  changes nothing. `null` clears. Success emits `context.switched` (ids only: `from`, `to`).
+  A product that wants its own route, decorators and CSRF calls it service side:
+
+  ```ts
+  const { contextId, headers } = await setContext(auth, { headers: req.headers, contextId });
+  // staff preset: nothing to forward. With the public preset's cookie cache, forward every `set-cookie` in `headers`.
+  ```
+
+  `AuthApiErrorFilter` maps its `APIError` to the platform envelope (`CONTEXT_FORBIDDEN` is a 403).
+
+- **Starting a session.** `initial(userId)` supplies the context of every new session, after the staff checks. The package asks
+  `membership` about it too: a value that is not a UUID, that `membership` refuses, or that makes `initial` throw is "no context",
+  and the sign-in goes on (a context is not authentication).
+- **Losing it.** A session that holds a context is re-checked when it is read, at most once per `revalidateSeconds` per process
+  per user and context. If the user is no longer a member, the session moves to `initial()` (or none), stays signed in, and the
+  package emits `context.revoked` (`reason: membership_lost`). A `membership` that throws on a read keeps the context (fail-open:
+  the product authorizes per request regardless) and logs the error's class. With the public preset's cookie cache a session is
+  read from the store only when the cookie cache expires (5 minutes), so the window there is that plus `revalidateSeconds`; the
+  staff preset has no cookie cache. Also with the cookie cache, a session cookie that was issued before a switch can keep carrying
+  the OLD `contextId` for those 5 minutes (a switch refreshes the cookie of the request that made it, not other tabs' cookies).
+- **Taking it away now.** When the product removes a member or retires a context, call `clearContext(auth, { userId, contextId })`
+  (that user's sessions) or `clearContextEverywhere(auth, contextId)`. They set `contextId = null` on the row **and** the cached
+  copy, leave the sessions valid, and return how many sessions held it. Safe to re-run. With the public preset's cookie cache a
+  browser can still present the old `contextId` for up to 5 minutes (the cookie answers before the store is read); the staff preset
+  has no such cache. If the cache degrades DURING a write, the database row is updated and the cached copy is dropped (as
+  `revokeUserSessions` does); if the drop fails too, `identity.context_cache_stale` is logged, because Better Auth reads the cache
+  first and the old context can come back when it recovers. Authentication is unaffected: the next switch, a `clearContext`, or the read-time check (when the user
+  is no longer a member) puts it right. Unlike the read-time fallback they do not call `initial`: the product picks
+  the next context (a `setContext`) or the user's next sign-in does.
+- **The principal.** `SessionGuard` records the session's `contextId` as the request's `workspaceId` (log lines, the access log)
+  unless your `principal` hook returns one.
+- **Cache down.** `setContext` and the re-check work from Postgres (sessions are stored there too). The cached copy of a session that was written while the cache was down is dropped when possible, and logged (`identity.context_cache_stale`) when not; see "Taking it away now".
+- **Storage.** `clearContext` and `clearContextEverywhere` look sessions up by `context_id`: add `create index session_context_id_idx on identity.session (context_id)` in your own migration (the generated table has no such index, because Better Auth does not know you query it).
+
+### A credential that is not a browser session: `markPreAuthenticated`
+
+`SessionGuard` is global and answers 401 to a request without a session. A product that also accepts another credential on the same
+routes (rova: `Authorization: Bearer rly_…` API tokens) authenticates it in a guard of its own and tells `SessionGuard` to stand
+aside for that request:
+
+```ts
+// registered BEFORE IdentityModule (a global guard in an earlier-imported module runs first)
+canActivate(ctx) {
+  const req = ctx.switchToHttp().getRequest();
+  const token = this.tokens.verify(bearerOf(req));          // your credential, your rules
+  if (!token) return true;                                   // not ours: SessionGuard decides (a session, or 401)
+  setRequestPrincipal({ userId: token.userId, sessionId: `apitoken:${token.id}`, workspaceId: token.workspaceId });
+  markPreAuthenticated(req, { userId: token.userId });      // from '@quynhonsemiconductor/identity/nest'
+  return true;
+}
+```
+
+The request then has no `session` (`@CurrentSession()` is `undefined`) and your own guards decide what the caller may do. Identity
+does not verify the credential and does not know what it is. The flag is a symbol on the in-process request, so nothing a client
+sends can carry it; **only call it after the credential is verified**. Write the principal first. `SessionGuard` does two things for a marked request, because the session path's checks never ran:
+
+- **It refuses (401, logged at error) a marked request whose principal was not written**, when a request context exists. With no request context at all it cannot read the principal back, so it uses the `userId` you passed to `markPreAuthenticated(req, { userId })` (warning once that the rate limit and access log will not know the user); a request with neither, or whose id is not a UUID, is refused. The ban check below therefore always runs.
+- **It refuses a banned user.** A session read refuses a banned user's session; a credential that never touches a session would outlive the ban. `SessionGuard` asks `isUserBanned` for the principal's user. A guard of yours that authenticates **outside** `SessionGuard` (a socket gateway, a job) must call `isUserBanned(auth, userId)` itself; it shares the ban guard's memo (a user not found banned is believed not banned for 30 s per process; a ban made by `setUserBanned` takes effect at once in that process). rova calls it from its API-token guard at cutover.
 
 ### Entra claims at sign-in: `hooks.onStaffSignIn`
 
@@ -706,7 +795,7 @@ import { runIdentityConformance } from '@quynhonsemiconductor/identity/testing';
 runIdentityConformance(
   { describe, it, beforeAll, afterAll, expect },
   {
-    database: async () => ({ pool /* a fresh, empty PostgreSQL 18 database */ }),
+    database: async () => ({ pool /* a fresh, empty PostgreSQL 17+ database */ }),
     valkey: async () => ({ url, keyPrefix: `${randomUUID()}:` }),
   },
 );
@@ -717,6 +806,7 @@ it in process through `auth.handler` and a local OIDC mock, and fails if any def
 
 ## Known limits
 
+- **`contextId` is re-checked per process.** Each process believes a membership for `revalidateSeconds` (default 60) after it last asked; N pods ask N times a minute for an active user. A removal is noticed by every process within that window, or immediately by `clearContext`.
 - **Explicit account linking from a signed-in session is not implemented** (D15): a non-member's account is refused
   with `ACCOUNT_LINK_REQUIRED`; Better Auth's SSO callback exposes no session to the resolver.
 - **No refresh-token family theft detection** (cookie sessions have no refresh token); mitigations are HttpOnly cookies,

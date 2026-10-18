@@ -20,6 +20,10 @@ overrides:
   #
   # `^` and not `>=`: the looser form resolves into 5.x, a major nothing here declares.
   "js-yaml@4": "^4.3.2"
+  # GHSA-r3ph-w7gj-g6xm (CVSS 5.3, maxTotalMergeKeys does not bound CPU for empty merge
+  # sources), fixed in 5.4.1. @nestjs/swagger 11.4.7 declares js-yaml exactly 5.3.0, so the
+  # 4.x floor above does not reach it. Capped to the 5.x line, the major swagger already uses.
+  "js-yaml@>=5.0.0 <5.4.1": "^5.4.1"
   # GHSA-5jgf-p345-68v8, GHSA-7p8r-x3mc-p8w7, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf
   # and GHSA-jqff-g426-hqxp — CVSS 7.5 each, five advisories against one URI parser:
   # host confusion and SSRF via failed IDN canonicalisation, a backslash authority

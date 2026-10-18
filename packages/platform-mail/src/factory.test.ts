@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GraphServer } from './__helpers__/graph-server';
 import { MailConfigError } from './errors';
+import { generateCertificatePem } from './__helpers__/certificate';
 import { createEmailSender } from './factory';
 import { GRAPH_SCOPE } from './graph';
 import { sampleMessage } from './testing';
@@ -36,6 +37,33 @@ describe('createEmailSender: graph', () => {
     expect(server.requests[0]?.url).toBe('/v1.0/users/noreply-academy%40qnsc.vn/sendMail');
   });
 
+  it('does not wait out a Retry-After longer than 10 s by default, so it fits a 30 s deadline (throttled, with the wait attached)', async () => {
+    server.reply({ status: 429, headers: { 'retry-after': '20' } });
+    const sender = createEmailSender({
+      env: { ...GRAPH_ENV, AZURE_FEDERATED_TOKEN_FILE: '/never/read' },
+      credential: { getToken: async () => ({ token: 'tok' }) },
+      fetch: (input, init) =>
+        fetch(String(input).replace('https://graph.microsoft.com/v1.0', server.baseUrl), init),
+    });
+    const error = await sender.send(sampleMessage()).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'throttled', retryAfterSeconds: 20 });
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('maxRetryAfterSeconds raises the in-place wait for a caller that has the time', async () => {
+    server.reply({ status: 429, headers: { 'retry-after': '1' } });
+    server.reply({ status: 202 });
+    const sender = createEmailSender({
+      env: { ...GRAPH_ENV, AZURE_FEDERATED_TOKEN_FILE: '/never/read' },
+      maxRetryAfterSeconds: 1,
+      credential: { getToken: async () => ({ token: 'tok' }) },
+      fetch: (input, init) =>
+        fetch(String(input).replace('https://graph.microsoft.com/v1.0', server.baseUrl), init),
+    });
+    await expect(sender.send(sampleMessage())).resolves.toBeDefined();
+    expect(server.requests).toHaveLength(2);
+  });
+
   it('constructs the real @azure/identity credentials from the environment (no network until the first send)', () => {
     expect(
       createEmailSender({
@@ -51,6 +79,17 @@ describe('createEmailSender: graph', () => {
         },
       }).mailbox,
     ).toBe('noreply-academy@qnsc.vn');
+  });
+
+  it('constructs the real ClientCertificateCredential from a generated key and certificate, raw and base64', () => {
+    const pem = generateCertificatePem();
+    for (const AZURE_CLIENT_CERTIFICATE of [pem, Buffer.from(pem).toString('base64')]) {
+      expect(
+        createEmailSender({
+          env: { ...GRAPH_ENV, NODE_ENV: 'production', AZURE_CLIENT_CERTIFICATE },
+        }).mailbox,
+      ).toBe('noreply-academy@qnsc.vn');
+    }
   });
 
   it('says what is missing instead of failing later at the first send', () => {

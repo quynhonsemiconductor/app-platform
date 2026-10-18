@@ -1,12 +1,13 @@
 {
   "name": "@quynhonsemiconductor/platform-mail",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "Email transport for QNSC product backends: the EmailSender contract, Microsoft Graph (one mailbox per product) and a non-production SMTP transport, and a rate-limited, idempotent mail.send job handler. NestJS at /nest, test doubles and a conformance suite at /testing.",
   "license": "UNLICENSED",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "platform-mail-smoke": "dist/smoke/cli.js"
+    "platform-mail-smoke": "dist/smoke/cli.js",
+    "platform-mail-check": "dist/check/cli.js"
   },
   "exports": {
     ".": {
@@ -20,14 +21,20 @@
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
+    },
+    "./sender": {
+      "types": "./dist/sender.d.ts",
+      "default": "./dist/sender.js"
     }
   },
   "files": [
     "dist",
-    "nest.js",
     "nest.d.ts",
-    "testing.js",
-    "testing.d.ts"
+    "nest.js",
+    "sender.d.ts",
+    "sender.js",
+    "testing.d.ts",
+    "testing.js"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
@@ -62,6 +69,9 @@
       "optional": true
     },
     "nodemailer": {
+      "optional": true
+    },
+    "@quynhonsemiconductor/platform-jobs": {
       "optional": true
     }
   },

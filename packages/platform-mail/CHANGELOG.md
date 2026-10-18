@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.5](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.4...platform-mail-v0.1.5) (2026-10-18)
+
+
+### 🐛 Bug Fixes
+
+* **platform-mail:** bounded Retry-After and the [#258](https://github.com/quynhonsemiconductor/app-platform/issues/258) verification nits ([#264](https://github.com/quynhonsemiconductor/app-platform/issues/264)) ([33959da](https://github.com/quynhonsemiconductor/app-platform/commit/33959da66dc597738153c6a69542119a315d5380))
+
+## [0.1.4](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.3...platform-mail-v0.1.4) (2026-10-17)
+
+
+### ✨ Features
+
+* **platform-mail:** certificate credential for ECS, /sender entry, platform-mail-check ([#258](https://github.com/quynhonsemiconductor/app-platform/issues/258)) ([2c48e50](https://github.com/quynhonsemiconductor/app-platform/commit/2c48e504ae70c43b25c34ff54caf710b1bfa4294))
+
 ## [0.1.3](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.2...platform-mail-v0.1.3) (2026-10-11)
 
 

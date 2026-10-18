@@ -41,6 +41,7 @@ export const session = identity.table(
       .references(() => user.id, { onDelete: 'cascade' }),
     activeOrganizationId: uuid('active_organization_id'),
     impersonatedBy: uuid('impersonated_by'),
+    contextId: uuid('context_id'),
   },
   (table) => [index('session_userId_idx').on(table.userId)],
 );
@@ -66,7 +67,10 @@ export const account = identity.table(
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
   },
-  (table) => [index('account_userId_idx').on(table.userId)],
+  (table) => [
+    index('account_userId_idx').on(table.userId),
+    index('account_provider_account_idx').on(table.providerId, table.accountId),
+  ],
 );
 
 export const verification = identity.table(

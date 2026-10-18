@@ -64,12 +64,12 @@ export async function createOrganization(
   ).rows[0]!.id;
   const organizationId = (
     await stack.pool.query<{ id: string }>(
-      `insert into identity.organization (id, name, slug, created_at) values (uuidv7(), $1, $1, now()) returning id`,
+      `insert into identity.organization (id, name, slug, created_at) values (gen_random_uuid(), $1, $1, now()) returning id`,
       [slug],
     )
   ).rows[0]!.id;
   await stack.pool.query(
-    `insert into identity.member (id, organization_id, user_id, role, created_at) values (uuidv7(), $1::uuid, $2::uuid, 'owner', now())`,
+    `insert into identity.member (id, organization_id, user_id, role, created_at) values (gen_random_uuid(), $1::uuid, $2::uuid, 'owner', now())`,
     [organizationId, ownerId],
   );
   return { organizationId, owner, ownerId, slug };

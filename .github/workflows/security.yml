@@ -51,6 +51,9 @@ jobs:
     uses: quynhonsemiconductor/ci/.github/workflows/security.yml@v1
     with:
       product: qnsc-app-platform
+      # Gitleaks + osv-scanner + Semgrep as ONE job; the required check is
+      # `security / Security scans (Gitleaks, osv-scanner, Semgrep)`.
+      combine: true
       scan_container: false # no Dockerfile — skip Trivy, keep Semgrep + Gitleaks + osv
       node_version: '24'
       # ENFORCED, not report-only. The shared workflow defaults this to false and
@@ -73,3 +76,4 @@ jobs:
     uses: quynhonsemiconductor/ci/.github/workflows/actions-security.yml@v1
     with:
       blocking: true
+      combine: true # actionlint + zizmor as ONE job; the required check is `actions-security / Workflow security (actionlint, zizmor)`

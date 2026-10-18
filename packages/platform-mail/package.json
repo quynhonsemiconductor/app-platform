@@ -76,7 +76,7 @@
     }
   },
   "devDependencies": {
-    "@azure/identity": "4.13.3",
+    "@azure/identity": "4.14.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@quynhonsemiconductor/identity": "workspace:*",
@@ -88,10 +88,10 @@
     "@types/mailparser": "3.9.0",
     "@types/nodemailer": "8.0.2",
     "@types/pg": "8.23.1",
-    "drizzle-orm": "0.45.3",
+    "drizzle-orm": "0.45.4",
     "ioredis": "5.11.1",
-    "mailparser": "3.9.37",
-    "nodemailer": "10.0.16",
+    "mailparser": "3.9.40",
+    "nodemailer": "10.1.2",
     "pg": "8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"

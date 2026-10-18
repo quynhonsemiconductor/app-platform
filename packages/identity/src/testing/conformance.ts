@@ -10,7 +10,7 @@ import type { TestApi } from './support';
 
 /**
  * The identity conformance kit. Run it in a product's CI against its own `ConformanceInfra`
- * (PostgreSQL 18 + Valkey) to prove that every secure default of identity plan §5.4 and every
+ * (PostgreSQL 17+ and Valkey) to prove that every secure default of identity plan §5.4 and every
  * decision of ADR 0002 is still in force after a Better Auth bump or a change to `defaults.ts`.
  *
  * ```ts

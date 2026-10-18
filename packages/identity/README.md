@@ -795,7 +795,7 @@ import { runIdentityConformance } from '@quynhonsemiconductor/identity/testing';
 runIdentityConformance(
   { describe, it, beforeAll, afterAll, expect },
   {
-    database: async () => ({ pool /* a fresh, empty PostgreSQL 18 database */ }),
+    database: async () => ({ pool /* a fresh, empty PostgreSQL 17+ database */ }),
     valkey: async () => ({ url, keyPrefix: `${randomUUID()}:` }),
   },
 );

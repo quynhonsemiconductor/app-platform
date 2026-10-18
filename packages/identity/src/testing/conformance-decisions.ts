@@ -131,12 +131,12 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
       const email = `squat@${STAFF_DOMAIN}`;
       const password = strongPassword();
       const squatter = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'S', $1, false, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'S', $1, false, now(), now()) returning id`,
         [email],
       );
       await stack.pool.query(
         `insert into identity.account (id, account_id, provider_id, user_id, password, created_at, updated_at)
-         values (uuidv7(), $1::text, 'credential', $2::uuid, 'salt:attacker-known', now(), now())`,
+         values (gen_random_uuid(), $1::text, 'credential', $2::uuid, 'salt:attacker-known', now(), now())`,
         [squatter.rows[0]!.id, squatter.rows[0]!.id],
       );
       const { c, callback } = await entra(
@@ -161,11 +161,11 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
     it('rule 2 never touches an account that has a session or a non-password account', async () => {
       const email = `used@${STAFF_DOMAIN}`;
       const used = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'U', $1, false, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'U', $1, false, now(), now()) returning id`,
         [email],
       );
       await stack.pool.query(
-        `insert into identity.session (id, token, user_id, expires_at, created_at, updated_at) values (uuidv7(), $1, $2::uuid, now() + interval '1 day', now(), now())`,
+        `insert into identity.session (id, token, user_id, expires_at, created_at, updated_at) values (gen_random_uuid(), $1, $2::uuid, now() + interval '1 day', now(), now())`,
         [randomUUID(), used.rows[0]!.id],
       );
       const { c, callback } = await entra(
@@ -191,17 +191,17 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
         const email = `${tag}-${randomUUID().slice(0, 6)}@users.identity.test`;
         const u = await stack.pool.query<{ id: string }>(
           `insert into identity."user" (id, name, email, email_verified, created_at, updated_at)
-           values (uuidv7(), $1, $2, $3, now() - make_interval(hours => $4), now()) returning id`,
+           values (gen_random_uuid(), $1, $2, $3, now() - make_interval(hours => $4), now()) returning id`,
           [tag, email, verified, ageHours],
         );
         const id = u.rows[0]!.id;
         await stack.pool.query(
-          `insert into identity.account (id, account_id, provider_id, user_id, created_at, updated_at) values (uuidv7(), $1::text, $2, $3::uuid, now(), now())`,
+          `insert into identity.account (id, account_id, provider_id, user_id, created_at, updated_at) values (gen_random_uuid(), $1::text, $2, $3::uuid, now(), now())`,
           [id, extra === 'sso' ? 'microsoft' : 'credential', id],
         );
         if (extra === 'session') {
           await stack.pool.query(
-            `insert into identity.session (id, token, user_id, expires_at, created_at, updated_at) values (uuidv7(), $1, $2::uuid, now() + interval '1 day', now(), now())`,
+            `insert into identity.session (id, token, user_id, expires_at, created_at, updated_at) values (gen_random_uuid(), $1, $2::uuid, now() + interval '1 day', now(), now())`,
             [randomUUID(), id],
           );
         }
@@ -565,7 +565,7 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
         `select id from identity."user" order by created_at desc limit 1`,
       );
       await stack.pool.query(
-        `insert into identity.member (id, organization_id, user_id, role, created_at) values (uuidv7(), $1::uuid, $2::uuid, 'member', now())`,
+        `insert into identity.member (id, organization_id, user_id, role, created_at) values (gen_random_uuid(), $1::uuid, $2::uuid, 'member', now())`,
         [partner.organizationId, rows[0]!.id],
       );
       const asMember = await member.post(
@@ -607,7 +607,7 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
       await verifiedUser(stack, outsider, strongPassword(), expect).catch(() => undefined);
       // a local verified account for that address that is NOT a member
       await stack.pool.query(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'O', $1, true, now(), now())`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'O', $1, true, now(), now())`,
         [outsider],
       );
       idp.loginAs({ sub: 'l1', email: outsider });
@@ -618,11 +618,11 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
 
       const insider = 'insider@link-u.test';
       const u = await stack.pool.query<{ id: string }>(
-        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (uuidv7(), 'I', $1, true, now(), now()) returning id`,
+        `insert into identity."user" (id, name, email, email_verified, created_at, updated_at) values (gen_random_uuid(), 'I', $1, true, now(), now()) returning id`,
         [insider],
       );
       await stack.pool.query(
-        `insert into identity.member (id, organization_id, user_id, role, created_at) values (uuidv7(), $1::uuid, $2::uuid, 'member', now())`,
+        `insert into identity.member (id, organization_id, user_id, role, created_at) values (gen_random_uuid(), $1::uuid, $2::uuid, 'member', now())`,
         [partner.organizationId, u.rows[0]!.id],
       );
       idp.loginAs({ sub: 'l2', email: insider });
@@ -665,14 +665,14 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
       try {
         const owner = await verifiedUser(strict, uniqueEmail('owner'), strongPassword(), expect);
         const org = await strict.pool.query<{ id: string }>(
-          `insert into identity.organization (id, name, slug, created_at) values (uuidv7(), 'R', 'rebind', now()) returning id`,
+          `insert into identity.organization (id, name, slug, created_at) values (gen_random_uuid(), 'R', 'rebind', now()) returning id`,
         );
         const ownerId = (
           await strict.pool.query<{ id: string }>(`select id from identity."user" limit 1`)
         ).rows[0]!.id;
         await strict.pool.query(
           `insert into identity.sso_provider (id, issuer, oidc_config, user_id, provider_id, organization_id, domain, domain_verified)
-           values (uuidv7(), 'https://10.0.0.5/oidc', $1, $2::uuid, 'rebind', $3::uuid, 'rebind.test', true)`,
+           values (gen_random_uuid(), 'https://10.0.0.5/oidc', $1, $2::uuid, 'rebind', $3::uuid, 'rebind.test', true)`,
           [
             JSON.stringify({
               clientId: 'c',
@@ -777,7 +777,7 @@ export function decisionsConformance(t: TestApi, infra: ConformanceInfra): void 
       try {
         const stale = await stack.pool.query<{ id: string }>(
           `insert into identity."user" (id, name, email, email_verified, created_at, updated_at)
-           values (uuidv7(), 'S', $1, false, now() - interval '100 hours', now()) returning id`,
+           values (gen_random_uuid(), 'S', $1, false, now() - interval '100 hours', now()) returning id`,
           [uniqueEmail('stale')],
         );
         const scheduled: Array<{ name: string; cron: string; tz?: string }> = [];

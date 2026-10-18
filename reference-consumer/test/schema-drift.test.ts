@@ -20,14 +20,14 @@ import { REFERENCE_DDL } from '../src/schema-ddl';
 const installed = (
   JSON.parse(
     readFileSync(
-      join(import.meta.dirname, '../node_modules/@quynhonsemiconductor/identity/package.json'),
+      join(__dirname, '../node_modules/@quynhonsemiconductor/identity/package.json'),
       'utf8',
     ),
   ) as { version: string }
 ).version;
 const workspace = (
   JSON.parse(
-    readFileSync(join(import.meta.dirname, '../../packages/identity/package.json'), 'utf8'),
+    readFileSync(join(__dirname, '../../packages/identity/package.json'), 'utf8'),
   ) as { version: string }
 ).version;
 

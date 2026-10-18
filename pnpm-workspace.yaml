@@ -88,7 +88,7 @@ overrides:
   # on fastify itself cannot reach it. It is a devDependency of platform-runtime used to run a real
   # Nest + Fastify server in tests, never published; this repo's own fastify devDependencies
   # already resolve to 5.12.5, so this only brings the adapter's copy in line with them.
-  "@nestjs/platform-fastify>fastify": "5.12.5"
+  "@nestjs/platform-fastify>fastify": "5.12.7"
 
 # pnpm 11 fails an install that ignores a dependency's build script unless the decision is
 # written down. These five were already being skipped (pnpm 10 only warned); recording them as

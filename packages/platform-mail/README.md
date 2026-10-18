@@ -437,6 +437,7 @@ platform-mail-check --tenant <tenant-guid> --client-id <app-client-id> --cert ma
   --sender noreply-<product>-dev@qnsc.vn --to you@qnsc.vn \
   --denied-mailbox noreply-<product>@qnsc.vn --denied-mailbox noreply-<another-product>@qnsc.vn
 # PASS  TOKEN   issued for appid=<client-id>; roles in the token: none (expected when authority comes from Exchange RBAC only)
+# PASS  SCOPE   roles seen: none; all allowed, no Mail.*
 # PASS  SEND    sent as noreply-<product>-dev@qnsc.vn to you@qnsc.vn (HTTP 202)
 # PASS  DENIED  as noreply-<product>@qnsc.vn: forbidden HTTP 403 (request-id ...)
 # PASS  DENIED  as noreply-<another-product>@qnsc.vn: forbidden HTTP 403 (request-id ...)
@@ -445,6 +446,7 @@ platform-mail-check --tenant <tenant-guid> --client-id <app-client-id> --cert ma
 - **`--denied-mailbox` is required and repeatable.** `DENIED` is the negative test and the proof that the Exchange RBAC scope, not the app, limits who
   it can send as. **Always include the OTHER environment's mailbox** (develop's app against production's, and the reverse), and another product's.
   Only a refusal with **403** passes; an accepted send, or a 404, fails. Without one the check refuses to run (exit 2).
+- A token's app id is compared case-insensitively; an unreadable `--cert`/`--key` path is a one-line usage error (exit 2) naming the path.
 - **`SCOPE`:** a mail-only app carries **no application role** in its token (its only mail authority is the Exchange role), so _any_ role fails, and
   any `Mail.*` fails always. An app that legitimately holds other application permissions lists exactly those with `--allowed-role` (repeatable),
   e.g. opshub's Service app with its five Graph roles; anything else fails.
@@ -619,3 +621,9 @@ expect(sender.sent).toHaveLength(0); // enqueue-in-rollback ⇒ no email
   and 2 000 external recipients a day. Never send marketing or newsletters through M365.
 - Bounce and non-delivery handling: reports land in the product mailbox. Out of scope (later ADR).
 - Only the `graph` and `smtp` transports exist.
+
+## Waiting out a throttle: `maxRetryAfterSeconds`
+
+`createEmailSender({ maxRetryAfterSeconds })` is the longest `Retry-After` the Graph transport waits for inside one `send()` (default **10 s**). A caller
+that gives a send a 30 s deadline wants a throttle answered inside it: a longer wait ends as `throttled` with `retryAfterSeconds` attached, for the caller's
+own queue to reschedule. Raise it only for a caller that has the time.

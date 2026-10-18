@@ -123,6 +123,13 @@ describe('readMailConfig: graph', () => {
       expect(config).toMatchObject({ credential: { kind: 'certificate', pem: PEM.trim() } });
     });
 
+    it('accepts a PEM whose line breaks arrived as the four characters backslash-r-backslash-n (Windows line endings through a JSON string)', () => {
+      const flattened = PEM.trim().split('\n').join('\\r\\n');
+      expect(flattened).not.toContain('\n');
+      const config = readMailConfig({ ...GRAPH, AZURE_CLIENT_CERTIFICATE: flattened });
+      expect(config).toMatchObject({ credential: { kind: 'certificate', pem: PEM.trim() } });
+    });
+
     describe('is PARSED at configuration time, so a bad secret stops the process here and not as an opaque unauthenticated on the first send', () => {
       const refused = (value: string): Error => {
         try {

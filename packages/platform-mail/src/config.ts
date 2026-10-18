@@ -77,9 +77,11 @@ export function isProduction(env: MailEnv): boolean {
  */
 function certificatePem(raw: string): string {
   // A secret pasted through a form or a JSON string can arrive with literal backslash-n instead of line breaks.
-  const text = raw.replace(/\\n/g, '\n');
+  const text = raw.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
   const pem = text.includes('-----BEGIN') ? text : Buffer.from(text, 'base64').toString('utf8');
   const keyBlock = /-----BEGIN ((?:[A-Z ]+ )?PRIVATE KEY)-----[\s\S]*?-----END \1-----/.exec(pem);
+  // Not shared with @azure/identity: it exports no PEM parser (its ClientCertificateCredential parses internally), and a private import would break on a
+  // minor release. This one block regex is cheap to own; revisit if identity ever exports one.
   const certBlock = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/.exec(pem);
   if (!keyBlock || !certBlock) {
     throw new MailConfigError(
@@ -117,7 +119,7 @@ function certificatePem(raw: string): string {
   }
   if (!certificate.checkPrivateKey(key)) {
     throw new MailConfigError(
-      'AZURE_CLIENT_CERTIFICATE: the certificate does not belong to the private key (they came from different openssl runs).',
+      "AZURE_CLIENT_CERTIFICATE: the first certificate in the PEM does not belong to the private key. The key's own (leaf) certificate must come FIRST: 'cat mail.key mail.crt', with any chain after it.",
     );
   }
   return pem.trim();

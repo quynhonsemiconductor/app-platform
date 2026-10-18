@@ -1,4 +1,4 @@
-// COPY of @quynhonsemiconductor/identity 8.0.0's REFERENCE_DDL (see schema.ts: a product owns its tables; the drift test checks this copy).
+// COPY of @quynhonsemiconductor/identity 8.4.0's REFERENCE_DDL (see schema.ts: a product owns its tables; the drift test checks this copy).
 export const REFERENCE_DDL = `CREATE SCHEMA "identity";
 --> statement-breakpoint
 CREATE TABLE "identity"."account" (
@@ -57,6 +57,7 @@ CREATE TABLE "identity"."session" (
 	"user_id" uuid NOT NULL,
 	"active_organization_id" uuid,
 	"impersonated_by" uuid,
+	"context_id" uuid,
 	CONSTRAINT "session_token_unique" UNIQUE("token")
 );
 --> statement-breakpoint

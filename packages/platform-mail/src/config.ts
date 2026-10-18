@@ -80,6 +80,8 @@ function certificatePem(raw: string): string {
   const text = raw.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
   const pem = text.includes('-----BEGIN') ? text : Buffer.from(text, 'base64').toString('utf8');
   const keyBlock = /-----BEGIN ((?:[A-Z ]+ )?PRIVATE KEY)-----[\s\S]*?-----END \1-----/.exec(pem);
+  // Not shared with @azure/identity: it exports no PEM parser (its ClientCertificateCredential parses internally), and a private import would break on a
+  // minor release. This one block regex is cheap to own; revisit if identity ever exports one.
   const certBlock = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/.exec(pem);
   if (!keyBlock || !certBlock) {
     throw new MailConfigError(

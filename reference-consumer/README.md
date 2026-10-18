@@ -47,6 +47,17 @@ pulls, and what it checks is a release, not a pull request.
 
 To check a newer release, bump the pins in `package.json`, then reinstall **without** `--frozen-lockfile`.
 
+### Following an identity release
+
+`src/schema.ts` and `src/schema-ddl.ts` are copies of `packages/identity/src/testing/reference-schema.ts` and
+`reference-ddl.ts`, and they follow the **workspace**, not the registry:
+
+1. **In the pull request that changes identity's reference tables**, copy the two files over (keep the header comment).
+   `tools/reference-consumer-snapshot.test.ts` runs in the required `Tests` job and fails that pull request if the copy
+   is stale, so it is never found after the release.
+2. **After the release is published**, bump `@quynhonsemiconductor/identity` here to it and reinstall without
+   `--frozen-lockfile`; update the version named in the two header comments.
+
 ## What each test proves
 
 `test/async-path.test.ts`
@@ -76,7 +87,9 @@ hybrid error body and creates no user and no job.
 runs **out of budget** after the sink stored a message but before the client was told sends it twice (about
 108 s later), and a SIGKILLed worker never duplicates but a stuck message waits for recovery (87 s measured).
 
-`test/schema-drift.test.ts` fails when the published identity's tables move on and this copy has not.
+`test/schema-drift.test.ts` checks the copy against the **published** identity, but only when the installed version is the
+workspace's own: a pin older than the workspace (a table change merged, release not yet out) is a skip that says why, not a
+failure and not a pass. The pull-request side of the same check is `tools/reference-consumer-snapshot.test.ts`.
 
 ## Findings
 

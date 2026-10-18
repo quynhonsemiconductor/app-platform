@@ -19,6 +19,8 @@ describe('runGraphCheck (platform-mail-check)', () => {
     tenantId: '11111111-1111-1111-1111-111111111111',
     clientId: '22222222-2222-2222-2222-222222222222',
     pem: 'unused-with-an-injected-credential',
+    // Never a real Microsoft: the REAL-credential test must fail locally even if the key were somehow usable.
+    authorityHost: 'https://127.0.0.1:9',
     sender: 'noreply-rova@qnsc.vn',
     to: 'owner@qnsc.vn',
     deniedMailboxes: ['noreply-opshub@qnsc.vn'],
@@ -52,8 +54,9 @@ describe('runGraphCheck (platform-mail-check)', () => {
     expect(lines[0]).toMatch(
       /^PASS {2}TOKEN {3}issued for appid=22222222-2222-2222-2222-222222222222; roles in the token: none \(expected when authority comes from Exchange RBAC only\)$/,
     );
-    expect(lines[1]).toBe('PASS  SEND    sent as noreply-rova@qnsc.vn to owner@qnsc.vn (HTTP 202)');
-    expect(lines[2]).toMatch(
+    expect(lines[1]).toBe('PASS  SCOPE   roles seen: none; all allowed, no Mail.*');
+    expect(lines[2]).toBe('PASS  SEND    sent as noreply-rova@qnsc.vn to owner@qnsc.vn (HTTP 202)');
+    expect(lines[3]).toMatch(
       /^PASS {2}DENIED {2}as noreply-opshub@qnsc\.vn: forbidden HTTP 403 \(request-id abc\)$/,
     );
     // The two sends went out as the right mailboxes.
@@ -67,7 +70,7 @@ describe('runGraphCheck (platform-mail-check)', () => {
     server.reply({ status: 202 });
     server.reply({ status: 202 });
     expect(await run()).toBe(1);
-    expect(lines[2]).toBe(
+    expect(lines[3]).toBe(
       'FAIL  DENIED  sendMail AS noreply-opshub@qnsc.vn was ACCEPTED: the app can send as other mailboxes',
     );
   });
@@ -86,15 +89,15 @@ describe('runGraphCheck (platform-mail-check)', () => {
     server.reply({ status: 202 });
     server.reply({ status: 404 });
     expect(await run()).toBe(1);
-    expect(lines[2]).toMatch(/^FAIL {2}DENIED .*mailbox_not_found HTTP 404.*; expected 403$/);
+    expect(lines[3]).toMatch(/^FAIL {2}DENIED .*mailbox_not_found HTTP 404.*; expected 403$/);
   });
 
   it('reports a refused SEND (the allowed mailbox must work) and still runs the negative test', async () => {
     server.reply({ status: 403, headers: { 'request-id': 'r1' } });
     server.reply({ status: 403 });
     expect(await run()).toBe(1);
-    expect(lines[1]).toBe('FAIL  SEND    forbidden HTTP 403 (request-id r1)');
-    expect(lines[2]).toMatch(/^PASS {2}DENIED/);
+    expect(lines[2]).toBe('FAIL  SEND    forbidden HTTP 403 (request-id r1)');
+    expect(lines[3]).toMatch(/^PASS {2}DENIED/);
   });
 
   it('says the scope has NOT been proven when no other mailbox is given, and exits 3 (not 0: a green run would be a lie)', async () => {
@@ -210,5 +213,15 @@ describe('runGraphCheck (platform-mail-check)', () => {
     expect(out[0]).toMatch(/^FAIL {2}TOKEN /);
     expect(out.join('\n')).not.toContain(marker);
     expect(server.requests).toHaveLength(0);
+  });
+
+  it('compares the app id case-insensitively (a GUID is the same GUID in upper case)', async () => {
+    server.reply({ status: 202 });
+    server.reply({ status: 403, body: { error: { code: 'ErrorAccessDenied' } } });
+    const code = await run(
+      { clientId: '22222222-2222-2222-2222-222222222222'.toUpperCase() },
+      { appid: '22222222-2222-2222-2222-222222222222' },
+    );
+    expect(code).toBe(0);
   });
 });

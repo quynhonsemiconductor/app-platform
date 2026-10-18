@@ -6,6 +6,9 @@ import type { EmailSender } from './message';
 import type * as SmtpModule from './smtp';
 import type * as AzureIdentity from '@azure/identity';
 
+/** See {@link CreateEmailSenderOptions.maxRetryAfterSeconds}. */
+export const DEFAULT_MAX_RETRY_AFTER_SECONDS = 10;
+
 export interface CreateEmailSenderOptions {
   /** Test seam; defaults to `process.env`. Configuration comes from the environment only. */
   env?: MailEnv;
@@ -13,6 +16,12 @@ export interface CreateEmailSenderOptions {
   credential?: TokenProvider;
   /** Test seam: replaces the global `fetch` used by the Graph transport. */
   fetch?: typeof fetch;
+  /**
+   * The longest `Retry-After` the Graph transport waits for in place, in seconds (default 10). A caller that gives a send a 30 s deadline wants a throttle
+   * answered within it: a longer wait ends as `throttled` (with the server's wait attached) for the caller's own queue to reschedule, instead of
+   * holding the send until the deadline cuts it off.
+   */
+  maxRetryAfterSeconds?: number;
   /** Test seam: replaces the lazy `require('./smtp')`, which a TypeScript test runner cannot resolve. */
   loadSmtp?: () => typeof SmtpModule;
 }
@@ -41,6 +50,7 @@ export function createEmailSender(options: CreateEmailSenderOptions = {}): Email
   return createGraphSender({
     sender: config.sender,
     credential,
+    maxRetryAfterSeconds: options.maxRetryAfterSeconds ?? DEFAULT_MAX_RETRY_AFTER_SECONDS,
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });
 }

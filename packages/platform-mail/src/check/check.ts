@@ -96,7 +96,7 @@ export async function runGraphCheck(args: GraphCheckArgs, deps: GraphCheckDeps):
     const claims = claimsOf(token.token);
     const roles = claims.roles ?? [];
     const issuedFor = claims.appid ?? claims.azp;
-    if (issuedFor !== args.clientId) {
+    if (issuedFor?.toLowerCase() !== args.clientId.toLowerCase()) {
       report(
         'TOKEN',
         false,
@@ -125,6 +125,12 @@ export async function runGraphCheck(args: GraphCheckArgs, deps: GraphCheckDeps):
         mailRoles.length > 0
           ? `the token carries ${mailRoles.join(', ')}: an unscoped Mail.* role in Entra makes the Exchange scope meaningless; remove the consent`
           : `the token carries ${unexpected.join(', ')}, not in --allowed-role${allowed.size === 0 ? ' (none given: a mail-only app carries no application role)' : ''}: remove the grant in Entra or list it`,
+      );
+    } else {
+      report(
+        'SCOPE',
+        true,
+        `roles seen: ${roles.length > 0 ? roles.join(', ') : 'none'}; all allowed, no Mail.*`,
       );
     }
   } catch (error) {

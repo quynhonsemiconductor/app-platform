@@ -69,7 +69,17 @@ async function main(): Promise<number> {
       "--denied-mailbox is required: without a refused send the scope is not proven. Give the OTHER environment's mailbox (and another product's)",
     );
   }
-  const pem = `${readFileSync(values.key!, 'utf8')}\n${readFileSync(values.cert!, 'utf8')}`;
+  const read = (flag: 'key' | 'cert'): string => {
+    try {
+      return readFileSync(values[flag]!, 'utf8');
+    } catch (error) {
+      // The path is the user's own argument, so it may be named; the file's content never is.
+      return usage(
+        `--${flag}: cannot read ${values[flag]!} (${(error as NodeJS.ErrnoException).code ?? 'error'})`,
+      );
+    }
+  };
+  const pem = `${read('key')}\n${read('cert')}`;
   return runGraphCheck(
     {
       tenantId: values.tenant!,

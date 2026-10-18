@@ -120,6 +120,63 @@ describe.skipIf(!dockerEnabled)('CacheService (real Valkey)', () => {
     expect(results.filter((r) => r.allowed)).toHaveLength(3);
   });
 
+  it('returns the id of each admitted slot, and none for a refused request', async () => {
+    const admitted = await service.consumeRateLimit('ids', 1, 60);
+    const refused = await service.consumeRateLimit('ids', 1, 60);
+
+    expect(admitted.allowed).toBe(true);
+    expect(typeof admitted.id).toBe('string');
+    expect(refused.allowed).toBe(false);
+    expect(refused.id).toBeUndefined();
+  });
+
+  it('refunds exactly the slot it names, and only that one', async () => {
+    const a = await service.consumeRateLimit('refund', 2, 60);
+    const b = await service.consumeRateLimit('refund', 2, 60);
+    expect((await service.consumeRateLimit('refund', 2, 60)).allowed).toBe(false);
+
+    await service.refundRateLimit('refund', a.id!);
+
+    // One slot is back; it is B's slot that is still held.
+    expect((await service.consumeRateLimit('refund', 2, 60)).allowed).toBe(true);
+    expect((await service.consumeRateLimit('refund', 2, 60)).allowed).toBe(false);
+    expect(b.id).toBeDefined();
+  });
+
+  it('refunding an id twice, or an id that never existed, changes nothing', async () => {
+    const a = await service.consumeRateLimit('refund-twice', 1, 60);
+    await service.refundRateLimit('refund-twice', a.id!);
+    await service.refundRateLimit('refund-twice', a.id!);
+    await service.refundRateLimit('refund-twice', 'never-issued');
+
+    expect((await service.consumeRateLimit('refund-twice', 1, 60)).allowed).toBe(true);
+    expect((await service.consumeRateLimit('refund-twice', 1, 60)).allowed).toBe(false);
+  });
+
+  it('refunds only in the key it was taken from', async () => {
+    const a = await service.consumeRateLimit('key-one', 1, 60);
+    await service.consumeRateLimit('key-two', 1, 60);
+
+    await service.refundRateLimit('key-two', a.id!);
+
+    expect((await service.consumeRateLimit('key-one', 1, 60)).allowed).toBe(false);
+  });
+
+  it('refunds a concurrent burst exactly, with no slot lost or minted', async () => {
+    const burst = await Promise.all(
+      Array.from({ length: 50 }, () => service.consumeRateLimit('burst-refund', 5, 60)),
+    );
+    const held = burst.filter((r) => r.allowed);
+    expect(held).toHaveLength(5);
+
+    await Promise.all(held.map((r) => service.refundRateLimit('burst-refund', r.id!)));
+
+    const next = await Promise.all(
+      Array.from({ length: 50 }, () => service.consumeRateLimit('burst-refund', 5, 60)),
+    );
+    expect(next.filter((r) => r.allowed)).toHaveLength(5);
+  });
+
   it('frees a slot once the window has passed', async () => {
     expect((await service.consumeRateLimit('slide', 1, 1)).allowed).toBe(true);
     expect((await service.consumeRateLimit('slide', 1, 1)).allowed).toBe(false);
@@ -332,6 +389,10 @@ describe('CacheService (optional mode, disabled)', () => {
     expect(await service.acquireLock('x', 1000)).toBe(false);
     expect(await service.tryLock('x', 1000)).toBeNull();
     await service.releaseLock('x'); // harmless
+
+    // Nothing was taken, so there is nothing to refund: a refund is a silent no-op, not an error.
+    expect(rl.id).toBeUndefined();
+    await expect(service.refundRateLimit('x', 'anything')).resolves.toBeUndefined();
   });
 
   it('throws in required mode when no url is supplied', () => {

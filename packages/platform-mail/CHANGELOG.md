@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.3...platform-mail-v0.1.4) (2026-10-17)
+
+
+### ✨ Features
+
+* **platform-mail:** certificate credential for ECS, /sender entry, platform-mail-check ([#258](https://github.com/quynhonsemiconductor/app-platform/issues/258)) ([2c48e50](https://github.com/quynhonsemiconductor/app-platform/commit/2c48e504ae70c43b25c34ff54caf710b1bfa4294))
+
 ## [0.1.3](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.2...platform-mail-v0.1.3) (2026-10-11)
 
 

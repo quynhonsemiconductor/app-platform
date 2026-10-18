@@ -63,6 +63,11 @@ function graphCredential(config: GraphConfig): TokenProvider {
       tokenFilePath: config.credential.tokenFilePath,
     });
   }
+  if (config.credential.kind === 'certificate') {
+    return new identity.ClientCertificateCredential(config.tenantId, config.clientId, {
+      certificate: config.credential.pem,
+    });
+  }
   return new identity.ClientSecretCredential(
     config.tenantId,
     config.clientId,

@@ -43,14 +43,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@better-auth/core": "1.7.7",
-    "@better-auth/drizzle-adapter": "1.7.7",
-    "@better-auth/sso": "1.7.7",
+    "@better-auth/core": "1.7.11",
+    "@better-auth/drizzle-adapter": "1.7.11",
+    "@better-auth/sso": "1.7.11",
     "@node-rs/argon2": "2.2.2",
-    "better-auth": "1.7.7",
-    "jose": "6.2.4",
+    "better-auth": "1.7.11",
+    "jose": "6.2.12",
     "uuidv7": "1.2.1",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "peerDependencies": {
     "@nestjs/common": ">=11",

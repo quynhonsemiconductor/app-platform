@@ -173,7 +173,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
     key: string,
     limit: number,
     windowSeconds: number,
-  ): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
+  ): Promise<{ allowed: boolean; remaining: number; resetAt: number; id?: string }> {
     const windowMs = windowSeconds * 1000;
     const nowMs = Date.now();
 
@@ -181,7 +181,8 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
       return { allowed: true, remaining: limit, resetAt: Math.floor(nowMs / 1000) + windowSeconds };
     }
 
-    // Unique member so multiple requests in the same millisecond each get a slot.
+    // Unique member so multiple requests in the same millisecond each get a slot. It is also the slot's id: pass it
+    // to refundRateLimit to give the slot back.
     const member = `${nowMs}:${Math.random().toString(36).slice(2, 10)}`;
     const [allowed, remaining, resetAtMs] = (await this.client.eval(
       CacheService.SLIDING_WINDOW_LUA,
@@ -193,11 +194,26 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
       member,
     )) as [number, number, number];
 
+    const admitted = Number(allowed) === 1;
     return {
-      allowed: Number(allowed) === 1,
+      allowed: admitted,
       remaining: Math.max(0, Number(remaining)),
       resetAt: Math.ceil(Number(resetAtMs) / 1000),
+      ...(admitted ? { id: member } : {}),
     };
+  }
+
+  /**
+   * Gives back one slot taken by `consumeRateLimit`, by the `id` it returned. Removes exactly that entry from the
+   * window, so a request that did not go on to count (a refused reply, a request that succeeded and should not have
+   * used the address's budget) frees its slot for the next one, and no other.
+   *
+   * Refunding an entry that is already gone is a no-op. With no cache there is nothing to refund. A cache error is
+   * thrown, as `consumeRateLimit` throws: the caller decides whether a failed refund matters to its request.
+   */
+  async refundRateLimit(key: string, id: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.zrem(`rl:${key}`, id);
   }
 
   /**

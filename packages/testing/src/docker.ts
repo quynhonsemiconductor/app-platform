@@ -1,7 +1,12 @@
 import { getContainerRuntimeClient } from 'testcontainers';
 
 /**
- * Default images. Pinned to a major so a test run is reproducible; bump deliberately.
+ * Default images, pinned to exact patch releases so a test run is reproducible and a bump is a
+ * reviewed change. The same versions run in the local compose stacks and in CI service containers.
+ *
+ * Valkey is 8.1, the same engine as ElastiCache's Valkey 8 target. Do not "upgrade" it to 8.2:
+ * ElastiCache's "8.2" is open-source Valkey 8.1 plus the valkey-search module, and there is no
+ * valkey/valkey:8.2 image to pin.
  *
  * PostgreSQL is the Debian image, not `-alpine`: production runs CloudNativePG on Debian, and
  * musl's collation differs from glibc's, so an Alpine test database can order and compare text

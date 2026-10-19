@@ -10,6 +10,11 @@ const REFERENCE_CONSUMER = new URL(
   import.meta.url,
 );
 
+/** Every image literal passed to `new GenericContainer(...)` in the file, in order. */
+function containerImages(source: string): string[] {
+  return [...source.matchAll(/new GenericContainer\(\s*'([^']+)'\s*\)/g)].map((m) => m[1]);
+}
+
 describe('Testcontainers image pins', () => {
   it('pins PostgreSQL 18 to an exact patch release', () => {
     expect(POSTGRES_IMAGE).toMatch(/^postgres:18\.\d+$/);
@@ -19,9 +24,13 @@ describe('Testcontainers image pins', () => {
     expect(VALKEY_IMAGE).toMatch(/^valkey\/valkey:8\.1\.\d+-alpine$/);
   });
 
-  it('reference consumer starts the same images as the testing package', () => {
-    const source = readFileSync(REFERENCE_CONSUMER, 'utf8');
-    expect(source).toContain(`GenericContainer('${POSTGRES_IMAGE}')`);
-    expect(source).toContain(`GenericContainer('${VALKEY_IMAGE}')`);
+  it('every postgres and valkey container the reference consumer starts equals the package constant', () => {
+    const images = containerImages(readFileSync(REFERENCE_CONSUMER, 'utf8'));
+    const postgres = images.filter((image) => image.startsWith('postgres:'));
+    const valkey = images.filter((image) => image.startsWith('valkey/valkey:'));
+    expect(postgres.length).toBeGreaterThan(0);
+    expect(valkey.length).toBeGreaterThan(0);
+    expect(postgres).toEqual(postgres.map(() => POSTGRES_IMAGE));
+    expect(valkey).toEqual(valkey.map(() => VALKEY_IMAGE));
   });
 });

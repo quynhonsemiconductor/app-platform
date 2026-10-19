@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.1](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v3.3.0...platform-cache-v3.3.1) (2026-10-19)
+
+
+### 🐛 Bug Fixes
+
+* **platform-cache:** detach ready and error listeners at shutdown ([#275](https://github.com/quynhonsemiconductor/app-platform/issues/275)) ([cfad29d](https://github.com/quynhonsemiconductor/app-platform/commit/cfad29d049b27c894304edc4dfc66f77819b0b94))
+
 ## [3.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v3.2.0...platform-cache-v3.3.0) (2026-10-19)
 
 

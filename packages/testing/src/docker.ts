@@ -7,8 +7,8 @@ import { getContainerRuntimeClient } from 'testcontainers';
  * musl's collation differs from glibc's, so an Alpine test database can order and compare text
  * differently from the one the code ships against.
  */
-export const POSTGRES_IMAGE = 'postgres:18';
-export const VALKEY_IMAGE = 'valkey/valkey:8-alpine';
+export const POSTGRES_IMAGE = 'postgres:18.6';
+export const VALKEY_IMAGE = 'valkey/valkey:8.1.10-alpine';
 
 /**
  * Whether a container runtime is reachable.

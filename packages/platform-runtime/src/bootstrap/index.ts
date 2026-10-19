@@ -184,11 +184,23 @@ async function composeRoot(
 }
 
 /**
+ * Makes the bootstrap JSON logger the process-wide Nest logger BEFORE the container is created, rather than leaving that to the `logger`
+ * option, which Nest applies inside `create` / `createApplicationContext` after the call has started. The `logger` option is still passed
+ * (it is the same logger). The order is pinned by a test in bootstrap.spec.ts ("the JSON logger is process-wide before any container is
+ * created"); this change does not, by itself, fix any output that was observed in CI.
+ */
+async function installBootstrapLogger(bootstrapLogger: LoggerService): Promise<void> {
+  const { Logger } = await import('@nestjs/common');
+  Logger.overrideLogger(bootstrapLogger);
+}
+
+/**
  * Build the HTTP app: everything except listening, signal handlers and the exit-on-failure wrapper. Exported so a CONFORMANCE TEST boots
  * the real bootstrap path (logger install order included) without a port or a process exit.
  */
 export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFastifyApplication> {
   const { Root, bootstrapLogger } = await composeRoot(options);
+  await installBootstrapLogger(bootstrapLogger);
   const [{ NestFactory }, { FastifyAdapter }] = await Promise.all([
     import('@nestjs/core'),
     import('@nestjs/platform-fastify'),
@@ -220,6 +232,7 @@ export async function prepareWorkerApp(
   options: WorkerAppOptions,
 ): Promise<INestApplicationContext> {
   const { Root, bootstrapLogger } = await composeRoot(options);
+  await installBootstrapLogger(bootstrapLogger);
   const { NestFactory } = await import('@nestjs/core');
   // createApplicationContext: no HTTP driver; a worker is queue/cron only.
   const app = await NestFactory.createApplicationContext(Root, {

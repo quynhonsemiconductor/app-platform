@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { Controller, Get, Logger, Module } from '@nestjs/common';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assertLogContract,
   createLogCapture,
@@ -366,5 +366,47 @@ describe('the shared bootstrap writes the log contract', () => {
       );
       expect(exit).toHaveBeenCalledWith(1);
     });
+  });
+});
+
+describe('the JSON logger is process-wide before any container is created', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('the worker: Logger.overrideLogger(JSON) runs before NestFactory.createApplicationContext', async () => {
+    const { NestFactory } = await import('@nestjs/core');
+    const { Logger: NestLogger } = await import('@nestjs/common');
+    const create = vi.spyOn(NestFactory, 'createApplicationContext');
+    const override = vi.spyOn(NestLogger, 'overrideLogger');
+
+    const app = await prepareWorkerApp({
+      module: async () => WorkerProductModule,
+      env: ENV,
+      logStream: createLogCapture().stream,
+    });
+    await app.close();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(override).toHaveBeenCalled();
+    // the first override of the boot is the bootstrap's, and it comes before the container is created
+    expect(override.mock.invocationCallOrder[0]).toBeLessThan(create.mock.invocationCallOrder[0]!);
+  });
+
+  it('the API: Logger.overrideLogger(JSON) runs before NestFactory.create', async () => {
+    const { NestFactory } = await import('@nestjs/core');
+    const { Logger: NestLogger } = await import('@nestjs/common');
+    const create = vi.spyOn(NestFactory, 'create');
+    const override = vi.spyOn(NestLogger, 'overrideLogger');
+
+    const app = await prepareHttpApp({
+      module: async () => HttpProductModule,
+      env: ENV,
+      logStream: createLogCapture().stream,
+    });
+    await app.close();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(override.mock.invocationCallOrder[0]).toBeLessThan(create.mock.invocationCallOrder[0]!);
   });
 });

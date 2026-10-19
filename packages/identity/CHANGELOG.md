@@ -1,5 +1,13 @@
 # Changelog
 
+## [8.4.2](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.4.1...identity-v8.4.2) (2026-10-19)
+
+
+### 🐛 Bug Fixes
+
+* **identity:** compare the slow-create window on the database clock ([#276](https://github.com/quynhonsemiconductor/app-platform/issues/276)) ([5221c2c](https://github.com/quynhonsemiconductor/app-platform/commit/5221c2cc568789522557176685d9dc3bd7e72f91))
+* **identity:** keep Date usable under the host-clock skew helper ([#278](https://github.com/quynhonsemiconductor/app-platform/issues/278)) ([2f131db](https://github.com/quynhonsemiconductor/app-platform/commit/2f131dbb41590305cc2874f5772249962fdfc1fc))
+
 ## [8.4.1](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.4.0...identity-v8.4.1) (2026-10-18)
 
 

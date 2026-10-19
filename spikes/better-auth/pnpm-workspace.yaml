@@ -1,8 +1,3 @@
-# The spike is its OWN pnpm root, deliberately outside the repo workspace (packages/*): its
-# dependency tree (Better Auth and friends) must not enter the root pnpm-lock.yaml, the
-# release config or the root lint/typecheck/test runs. `file:` dependencies on the real
-# packages are copied into this tree so their peers resolve here — one copy of drizzle-orm and
-# pg, the way a product consuming the published packages sees them.
 packages: []
 
 # Same CVE floors as the repo root (see ../../pnpm-workspace.yaml), for the same reason: the root
@@ -11,7 +6,7 @@ packages: []
 overrides:
   "js-yaml@4": "^4.3.2"
   # `@nestjs/platform-fastify` pins fastify EXACTLY, so a range floor on fastify cannot reach it.
-  "@nestjs/platform-fastify>fastify": "5.12.5"
+  "@nestjs/platform-fastify>fastify": "5.12.7"
   # GHSA-67mh-4wv8-2f99, reached only through drizzle-kit's @esbuild-kit loader (dev tool).
   "esbuild@<0.25.0": ">=0.25.0 <0.26.0"
 

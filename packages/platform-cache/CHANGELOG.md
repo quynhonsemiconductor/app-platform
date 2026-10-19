@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v3.2.0...platform-cache-v3.3.0) (2026-10-19)
+
+
+### ✨ Features
+
+* **platform-cache:** refund a rate-limit slot by the id its reservation returned ([#269](https://github.com/quynhonsemiconductor/app-platform/issues/269)) ([30cf17d](https://github.com/quynhonsemiconductor/app-platform/commit/30cf17d6d350c5557b707d7a61cb336349775e44))
+
 ## [3.2.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-cache-v3.1.1...platform-cache-v3.2.0) (2026-10-13)
 
 

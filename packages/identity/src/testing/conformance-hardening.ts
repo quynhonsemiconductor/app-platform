@@ -52,27 +52,22 @@ const FORCED_FAILURES_SQL = `
           deferrable initially deferred for each row execute function boom_commit();`;
 
 /**
- * Findings of the review of PR #168. Each `it` fails against the code as first submitted; the name
- * says which finding it pins.
- */
-/**
  * Runs `fn` with the HOST clock shifted by `ms`: `new Date()` and `Date.now()` in this process read later than
  * the database's clock. The database clock is not touched, so this is the skew a multi-host deployment can have.
- * The global `Date` is restored when `fn` settles.
+ * `Date` otherwise behaves as before: called without `new` it returns a string, and `instanceof Date` holds for
+ * dates made before the swap. The global `Date` is restored when `fn` settles, also when it throws.
  */
 async function withHostClockSkew(ms: number, fn: () => Promise<void>): Promise<void> {
   if (ms === 0) return fn();
   const RealDate = Date;
-  class SkewedDate extends RealDate {
-    constructor(...args: [] | [string | number | Date] | [number, number, ...number[]]) {
-      if (args.length === 0) super(RealDate.now() + ms);
-      else super(...(args as [number, number]));
-    }
-    static now(): number {
-      return RealDate.now() + ms;
-    }
-  }
-  globalThis.Date = SkewedDate as DateConstructor;
+  const skewed = new Proxy(RealDate, {
+    construct: (target, args: unknown[]) =>
+      args.length === 0 ? new target(RealDate.now() + ms) : new target(...(args as [number])),
+    apply: () => new RealDate(RealDate.now() + ms).toString(),
+    get: (target, prop, receiver) =>
+      prop === 'now' ? () => RealDate.now() + ms : Reflect.get(target, prop, receiver),
+  });
+  globalThis.Date = skewed as DateConstructor;
   try {
     await fn();
   } finally {
@@ -80,6 +75,10 @@ async function withHostClockSkew(ms: number, fn: () => Promise<void>): Promise<v
   }
 }
 
+/**
+ * Findings of the review of PR #168. Each `it` fails against the code as first submitted; the name
+ * says which finding it pins.
+ */
 export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void {
   const { describe, it, expect } = t;
 
@@ -2582,6 +2581,18 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       () => withHostClockSkew(60_000, slowCreateHoldsNobody),
       60_000,
     );
+    it('the host-clock skew keeps Date usable (called as a function, instanceof) and restores it', async () => {
+      const real = Date;
+      const before = real.now();
+      await withHostClockSkew(60_000, async () => {
+        expect(typeof Date()).toBe('string');
+        const made = new Date(0);
+        expect(made instanceof Date).toBe(true);
+        expect(new Date() instanceof real).toBe(true);
+        expect(Date.now() - before).toBeGreaterThanOrEqual(59_000);
+      });
+      expect(Date).toBe(real);
+    });
   });
 
   describe('revokeUserSessions and setUserBanned: service-side controls over one user', () => {

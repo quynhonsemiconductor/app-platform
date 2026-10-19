@@ -55,6 +55,31 @@ const FORCED_FAILURES_SQL = `
  * Findings of the review of PR #168. Each `it` fails against the code as first submitted; the name
  * says which finding it pins.
  */
+/**
+ * Runs `fn` with the HOST clock shifted by `ms`: `new Date()` and `Date.now()` in this process read later than
+ * the database's clock. The database clock is not touched, so this is the skew a multi-host deployment can have.
+ * The global `Date` is restored when `fn` settles.
+ */
+async function withHostClockSkew(ms: number, fn: () => Promise<void>): Promise<void> {
+  if (ms === 0) return fn();
+  const RealDate = Date;
+  class SkewedDate extends RealDate {
+    constructor(...args: [] | [string | number | Date] | [number, number, ...number[]]) {
+      if (args.length === 0) super(RealDate.now() + ms);
+      else super(...(args as [number, number]));
+    }
+    static now(): number {
+      return RealDate.now() + ms;
+    }
+  }
+  globalThis.Date = SkewedDate as DateConstructor;
+  try {
+    await fn();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void {
   const { describe, it, expect } = t;
 
@@ -2444,7 +2469,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
       }
     }, 60_000);
 
-    it('a slow create does not hold anybody else: concurrent sign-in, update-user and another create run in their own transactions and survive its rollback', async () => {
+    const slowCreateHoldsNobody = async (): Promise<void> => {
       const slow = await newOwner();
       const other = await newOwner();
       const profile = await newOwner();
@@ -2480,10 +2505,15 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
             return r;
           });
         await new Promise((r) => setTimeout(r, 500)); // the slow create is now inside its transaction
-        const fired = new Date(); // the slow create's own writes are logged before this instant
-        // its transaction id, read from outside while it sleeps (what it logs is rolled back with it)
+        // The window is the DATABASE's clock: the triggers stamp `at` with clock_timestamp(), so comparing it with
+        // a host time mixes two clocks (a host that runs ahead of the database makes every write look too early).
+        const fired = (
+          await stack.pool.query<{ now: string }>(`select clock_timestamp()::text as now`)
+        ).rows[0]!.now; // the slow create's own writes are logged before this instant
+        // its transaction id, read from outside while it sleeps (what it logs is rolled back with it); only this database
         const sleeping = await stack.pool.query<{ xid: string }>(
-          `select backend_xid::text as xid from pg_stat_activity where wait_event = 'PgSleep' limit 1`,
+          `select backend_xid::text as xid from pg_stat_activity
+            where wait_event = 'PgSleep' and datname = current_database() limit 1`,
         );
         expect(sleeping.rowCount).toBe(1);
         const slowXid = BigInt(sleeping.rows[0]!.xid);
@@ -2507,7 +2537,7 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
 
         const log = (
           await stack.pool.query<{ kind: string; txid: string }>(
-            `select kind, txid::text from txlog where at >= $1 or kind = 'slow-member'`,
+            `select kind, txid::text from txlog where at >= $1::timestamptz or kind = 'slow-member'`,
             [fired],
           )
         ).rows;
@@ -2541,7 +2571,17 @@ export function hardeningConformance(t: TestApi, infra: ConformanceInfra): void 
           drop trigger if exists log_user_t on identity."user";
           drop trigger if exists slow_member_t on identity.member;`);
       }
-    }, 60_000);
+    };
+    it(
+      'a slow create does not hold anybody else: concurrent sign-in, update-user and another create run in their own transactions and survive its rollback',
+      () => withHostClockSkew(0, slowCreateHoldsNobody),
+      60_000,
+    );
+    it(
+      'a slow create does not hold anybody else while the host clock is 60 s ahead of the database',
+      () => withHostClockSkew(60_000, slowCreateHoldsNobody),
+      60_000,
+    );
   });
 
   describe('revokeUserSessions and setUserBanned: service-side controls over one user', () => {

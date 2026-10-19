@@ -21,7 +21,7 @@ const hold = (c: StartedTestContainer): Pick<Started, 'host' | 'stop'> => ({
  */
 export async function startPostgres(): Promise<Started & { password: string; database: string }> {
   const password = randomBytes(18).toString('hex');
-  const c = await new GenericContainer('postgres:18')
+  const c = await new GenericContainer('postgres:18.6')
     .withEnvironment({ POSTGRES_USER: 'migrator', POSTGRES_PASSWORD: password, POSTGRES_DB: 'm6' })
     .withExposedPorts(5432)
     .withWaitStrategy(
@@ -36,7 +36,7 @@ export async function startPostgres(): Promise<Started & { password: string; dat
 }
 
 export async function startValkey(): Promise<Started & { url: string }> {
-  const c = await new GenericContainer('valkey/valkey:8-alpine')
+  const c = await new GenericContainer('valkey/valkey:8.1.10-alpine')
     .withExposedPorts(6379)
     .withWaitStrategy(
       Wait.forAll([Wait.forListeningPorts(), Wait.forLogMessage(/Ready to accept connections/)]),

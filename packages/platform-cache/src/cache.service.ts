@@ -32,6 +32,13 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
   private readonly logger = new Logger(CacheService.name);
   private client: Redis | null = null;
   private readonly mode: CacheMode;
+  // Named so shutdown can detach them: an ioredis event after shutdown belongs to no running app and must not log.
+  private readonly onError = (err: unknown): void => {
+    this.logger.error({ err }, 'Cache connection error');
+  };
+  private readonly onReady = (): void => {
+    this.logger.log('Cache ready');
+  };
 
   constructor(@Inject(CACHE_OPTIONS) private readonly options: CacheModuleOptions) {
     this.mode = options.mode ?? 'required';
@@ -65,8 +72,8 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
       enableAutoPipelining: true,
     });
 
-    this.client.on('error', (err) => this.logger.error({ err }, 'Cache connection error'));
-    this.client.on('ready', () => this.logger.log('Cache ready'));
+    this.client.on('error', this.onError);
+    this.client.on('ready', this.onReady);
   }
 
   /**
@@ -90,7 +97,17 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
    * in-flight requests were still reading and locking through it.
    */
   async onApplicationShutdown(): Promise<void> {
-    await this.client?.quit();
+    const client = this.client;
+    if (!client) return;
+    // Before the quit: a ready event can fire while quit is pending (quit queues behind offline commands during connect).
+    client.off('ready', this.onReady);
+    try {
+      await client.quit();
+    } finally {
+      client.off('error', this.onError);
+      // With no error listener, ioredis prints its own unhandled-error line for an error after the quit; that line is not the log contract.
+      client.on('error', () => undefined);
+    }
   }
 
   /** Raw ioredis client, or `null` when the cache is disabled (optional mode). */

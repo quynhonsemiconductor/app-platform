@@ -99,10 +99,11 @@ export class CacheService implements OnModuleInit, OnModuleDestroy, OnApplicatio
   async onApplicationShutdown(): Promise<void> {
     const client = this.client;
     if (!client) return;
+    // Before the quit: a ready event can fire while quit is pending (quit queues behind offline commands during connect).
+    client.off('ready', this.onReady);
     try {
       await client.quit();
     } finally {
-      client.off('ready', this.onReady);
       client.off('error', this.onError);
       // With no error listener, ioredis prints its own unhandled-error line for an error after the quit; that line is not the log contract.
       client.on('error', () => undefined);

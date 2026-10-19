@@ -79,6 +79,19 @@ describe('CacheService lifecycle (no Docker)', () => {
     expect(log).not.toHaveBeenCalledWith('Cache ready');
   });
 
+  // quit is queued behind offline commands while the connection is still being established: a ready event can fire while it is pending.
+  it('logs nothing for a ready event that fires while quit is pending', async () => {
+    client.quit.mockImplementationOnce(async () => {
+      client.emit('ready');
+      client.status = 'end';
+      return 'OK';
+    });
+
+    await service.onApplicationShutdown();
+
+    expect(log).not.toHaveBeenCalledWith('Cache ready');
+  });
+
   it('logs nothing for a connection error that arrives after shutdown', async () => {
     await service.onApplicationShutdown();
     error.mockClear();

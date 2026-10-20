@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
  * Docs lint: names the platform has retired must not come back in a README, a comment or the contract.
  *
  * Each of these was found stale in the audit that produced this test: a comment still saying a fixed window or
- * a token bucket for the sliding-window limiter, `AuthTokenCache` for something identity 8 deleted, and
- * "8.0.0 pending" after 8.0.0 shipped. The point of a test is that the
+ * a token bucket for the sliding-window limiter, `AuthTokenCache` for something identity 8 deleted, `rally` for
+ * the product that is called `rova`, and "8.0.0 pending" after 8.0.0 shipped. The point of a test is that the
  * next stale name fails a build instead of waiting for another audit.
  *
  * To retire another name, add a rule. To keep a legitimate mention (a changelog, a migration guide, an ADR that
@@ -26,6 +26,13 @@ interface Rule {
 }
 
 export const RULES: Rule[] = [
+  {
+    name: 'rally',
+    use: 'rova (the product was renamed); say "rova (then called rally)" once where history matters',
+    pattern: /\brally\b/i,
+    allowFiles: /(^|\/)CHANGELOG\.md$|^docs\/adr\/|^docs\/PLAN\.md$/,
+    allowLine: /then called rally|called rally then|\(then rally\)/i,
+  },
   {
     name: 'AuthTokenCache',
     use: 'identity 8 has no token cache: sessions and their revocation are Better Auth’s (`revokeUserSessions`)',
@@ -106,11 +113,13 @@ describe('docs lint: retired names', () => {
   describe('the rules can fail (and do not over-fire)', () => {
     const hit = (file: string, text: string) => lint(file, text).map((f) => f.rule);
 
-    it('AuthTokenCache: a whole word; history is allowed in changelogs and ADRs', () => {
-      expect(hit('README.md', 'the `AuthTokenCache` denylist')).toEqual(['AuthTokenCache']);
-      expect(hit('README.md', 'AuthTokenCacheFactory')).toEqual([]);
-      expect(hit('packages/x/CHANGELOG.md', 'removed AuthTokenCache')).toEqual([]);
-      expect(hit('docs/adr/0002-x.md', 'AuthTokenCache was decided against')).toEqual([]);
+    it('rally: a word, not "structurally"; history is allowed on a line that says so, and in changelogs and ADRs', () => {
+      expect(hit('README.md', 'consumed by rally and opshub')).toEqual(['rally']);
+      expect(hit('README.md', 'Rally’s webhook')).toEqual(['rally']);
+      expect(hit('README.md', 'typed structurally, not nominally')).toEqual([]);
+      expect(hit('README.md', 'extracted from rova (then called rally)')).toEqual([]);
+      expect(hit('packages/x/CHANGELOG.md', 'fixed for rally')).toEqual([]);
+      expect(hit('docs/adr/0002-x.md', 'rally decided')).toEqual([]);
     });
 
     it('AuthTokenCache: flagged in a comment, allowed in the migration guide', () => {

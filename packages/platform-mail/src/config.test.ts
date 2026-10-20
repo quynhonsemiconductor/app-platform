@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { generateCertificatePem } from './__helpers__/certificate';
 import { readMailConfig } from './config';
 import { MailConfigError } from './errors';
@@ -177,6 +180,91 @@ describe('readMailConfig: graph', () => {
       expect(() =>
         readMailConfig({ ...GRAPH, NODE_ENV: 'production', AZURE_CLIENT_SECRET: 'x' }),
       ).toThrow(/AZURE_CLIENT_CERTIFICATE/);
+    });
+  });
+
+  describe('certificate path (a PEM file mounted into the worker)', () => {
+    // A key and certificate generated for this run (never committed: a literal PEM, even a fake one, is what secret scanners flag).
+    const PEM = `${generateCertificatePem().trim()}\n`;
+    const block = (kind: 'PRIVATE KEY' | 'CERTIFICATE'): string =>
+      new RegExp(`-----BEGIN [A-Z ]*${kind}-----[\\s\\S]*?-----END [A-Z ]*${kind}-----\\n?`).exec(
+        PEM,
+      )![0];
+
+    let dir: string;
+    beforeAll(() => {
+      dir = mkdtempSync(join(tmpdir(), 'platform-mail-cert-'));
+    });
+    afterAll(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const write = (name: string, contents: string): string => {
+      const path = join(dir, name);
+      writeFileSync(path, contents);
+      return path;
+    };
+
+    it('reads a raw PEM from the file, in production too', () => {
+      const path = write('mail.pem', PEM);
+      const config = readMailConfig({
+        ...GRAPH,
+        NODE_ENV: 'production',
+        AZURE_CLIENT_CERTIFICATE_PATH: path,
+      });
+      expect(config).toMatchObject({ credential: { kind: 'certificate', pem: PEM.trim() } });
+    });
+
+    it('ranks below the federated token and above the inline certificate PEM and a client secret', () => {
+      const path = write('mail.pem', PEM);
+      expect(
+        readMailConfig({
+          ...GRAPH,
+          AZURE_FEDERATED_TOKEN_FILE: '/t',
+          AZURE_CLIENT_CERTIFICATE_PATH: path,
+        }),
+      ).toMatchObject({ credential: { kind: 'workload-identity' } });
+      expect(
+        readMailConfig({
+          ...GRAPH,
+          AZURE_CLIENT_CERTIFICATE_PATH: path,
+          AZURE_CLIENT_CERTIFICATE: 'not-a-pem',
+        }),
+      ).toMatchObject({ credential: { kind: 'certificate' } });
+      expect(
+        readMailConfig({ ...GRAPH, AZURE_CLIENT_CERTIFICATE_PATH: path, AZURE_CLIENT_SECRET: 'x' }),
+      ).toMatchObject({ credential: { kind: 'certificate' } });
+    });
+
+    it('refuses a missing file, naming the variable and the path', () => {
+      const error = failure({ ...GRAPH, AZURE_CLIENT_CERTIFICATE_PATH: join(dir, 'absent.pem') });
+      expect(error).toMatch(/AZURE_CLIENT_CERTIFICATE_PATH/);
+      expect(error).toMatch(/no file at/);
+    });
+
+    it('refuses an unreadable file, naming the variable and never echoing the contents', () => {
+      const path = write('unreadable.pem', PEM);
+      chmodSync(path, 0o000);
+      try {
+        const error = failure({ ...GRAPH, AZURE_CLIENT_CERTIFICATE_PATH: path });
+        expect(error).toMatch(/AZURE_CLIENT_CERTIFICATE_PATH/);
+        expect(error).toMatch(/could not be read/);
+        expect(error).not.toContain('PRIVATE KEY');
+      } finally {
+        chmodSync(path, 0o644);
+      }
+    });
+
+    it('refuses an empty file', () => {
+      const path = write('empty.pem', '  \n');
+      expect(failure({ ...GRAPH, AZURE_CLIENT_CERTIFICATE_PATH: path })).toMatch(/is empty/);
+    });
+
+    it('refuses a file holding a broken PEM, parsed at configuration time', () => {
+      const path = write('broken.pem', `${block('CERTIFICATE')}`);
+      const error = failure({ ...GRAPH, AZURE_CLIENT_CERTIFICATE_PATH: path });
+      expect(error).toMatch(/AZURE_CLIENT_CERTIFICATE_PATH/);
+      expect(error).toMatch(/no private key/);
     });
   });
 

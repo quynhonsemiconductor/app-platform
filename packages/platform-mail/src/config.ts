@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { X509Certificate, createPrivateKey, type KeyObject } from 'node:crypto';
 import { MailConfigError } from './errors';
 
@@ -75,7 +76,7 @@ export function isProduction(env: MailEnv): boolean {
  * first send as an opaque `unauthenticated`: the key must be readable, unencrypted and RSA (the client assertion is RS256), the certificate must
  * parse, and the certificate must belong to the key. An error names the variable and the class of the failure; it never echoes any of the value.
  */
-function certificatePem(raw: string): string {
+function certificatePem(name: string, raw: string): string {
   // A secret pasted through a form or a JSON string can arrive with literal backslash-n instead of line breaks.
   const text = raw.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
   const pem = text.includes('-----BEGIN') ? text : Buffer.from(text, 'base64').toString('utf8');
@@ -85,19 +86,19 @@ function certificatePem(raw: string): string {
   const certBlock = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/.exec(pem);
   if (!keyBlock || !certBlock) {
     throw new MailConfigError(
-      `AZURE_CLIENT_CERTIFICATE must be ONE PEM holding the private key and the certificate (key first, raw or base64); it has ${
+      `${name} must be ONE PEM holding the private key and the certificate (key first, raw or base64); it has ${
         keyBlock ? 'no certificate' : certBlock ? 'no private key' : 'neither'
       }.`,
     );
   }
   if (keyBlock[1] === 'ENCRYPTED PRIVATE KEY' || /Proc-Type:\s*4,ENCRYPTED/.test(keyBlock[0])) {
     throw new MailConfigError(
-      'AZURE_CLIENT_CERTIFICATE holds an ENCRYPTED private key; nothing supplies the passphrase. Generate the key without one (openssl req -nodes).',
+      `${name} holds an ENCRYPTED private key; nothing supplies the passphrase. Generate the key without one (openssl req -nodes).`,
     );
   }
   const fail = (what: string, error: unknown): never => {
     throw new MailConfigError(
-      `AZURE_CLIENT_CERTIFICATE: ${what} (${error instanceof Error ? error.name : 'Error'}).`,
+      `${name}: ${what} (${error instanceof Error ? error.name : 'Error'}).`,
     );
   };
   let key: KeyObject;
@@ -108,7 +109,7 @@ function certificatePem(raw: string): string {
   }
   if (key.asymmetricKeyType !== 'rsa') {
     throw new MailConfigError(
-      `AZURE_CLIENT_CERTIFICATE: the private key is ${key.asymmetricKeyType ?? 'unknown'}, not RSA; the client assertion is RS256. Generate an RSA key (openssl req -newkey rsa:2048).`,
+      `${name}: the private key is ${key.asymmetricKeyType ?? 'unknown'}, not RSA; the client assertion is RS256. Generate an RSA key (openssl req -newkey rsa:2048).`,
     );
   }
   let certificate: X509Certificate;
@@ -119,10 +120,34 @@ function certificatePem(raw: string): string {
   }
   if (!certificate.checkPrivateKey(key)) {
     throw new MailConfigError(
-      "AZURE_CLIENT_CERTIFICATE: the first certificate in the PEM does not belong to the private key. The key's own (leaf) certificate must come FIRST: 'cat mail.key mail.crt', with any chain after it.",
+      `${name}: the first certificate in the PEM does not belong to the private key. The key's own (leaf) certificate must come FIRST: 'cat mail.key mail.crt', with any chain after it.`,
     );
   }
   return pem.trim();
+}
+
+/**
+ * The PEM file at `AZURE_CLIENT_CERTIFICATE_PATH`: ONE combined PEM (key first) mounted into the worker
+ * (a Key Vault-backed file, k3s/on-prem). It is READ and PARSED here, at configuration time, so a missing,
+ * empty or malformed file stops the process naming the variable and the path (never the contents), instead
+ * of failing on the first send as an opaque `unauthenticated`.
+ */
+function certificatePemFromPath(name: string, path: string): string {
+  let contents: string;
+  try {
+    contents = readFileSync(path, 'utf8');
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? String(error.code) : 'Error';
+    throw new MailConfigError(
+      code === 'ENOENT'
+        ? `${name}: no file at ${path}. Mount the certificate secret and point the variable at it.`
+        : `${name}: the file at ${path} could not be read (${code}).`,
+    );
+  }
+  if (contents.trim() === '') {
+    throw new MailConfigError(`${name}: the file at ${path} is empty.`);
+  }
+  return certificatePem(name, contents);
 }
 
 /**
@@ -136,6 +161,7 @@ function certificatePem(raw: string): string {
  * | `AZURE_TENANT_ID`        | graph    | Entra tenant                                                   |
  * | `AZURE_CLIENT_ID`        | graph    | the product's own Entra app                                    |
  * | `AZURE_FEDERATED_TOKEN_FILE` | graph | projected ServiceAccount token (workload identity). Preferred |
+ * | `AZURE_CLIENT_CERTIFICATE_PATH` | graph | path to a PEM file with the private key AND the certificate, mounted into the worker (k3s, from a Key Vault). Read and parsed at start |
  * | `AZURE_CLIENT_CERTIFICATE` | graph  | PEM with the private key AND the certificate, raw or base64 (ECS, from a secret) |
  * | `AZURE_CLIENT_SECRET`    | graph    | local testing only; refused when `NODE_ENV=production`         |
  * | `MAIL_SMTP_HOST`/`_PORT`/`_FROM` | smtp | Mailpit defaults; refused when `NODE_ENV=production`     |
@@ -184,7 +210,7 @@ export function readMailConfig(env: MailEnv = process.env): MailConfig {
     "for MAIL_TRANSPORT=graph (the product's own Entra app)",
   );
 
-  // The federated token wins whenever it is there, even if a client secret is also set: a pod
+  // The federated token wins whenever it is there, even if a certificate or a client secret is also set: a pod
   // may keep its login flow's secret while its mail uses the federated credential.
   const tokenFilePath = value(env, 'AZURE_FEDERATED_TOKEN_FILE');
   if (tokenFilePath !== undefined) {
@@ -197,6 +223,22 @@ export function readMailConfig(env: MailEnv = process.env): MailConfig {
     };
   }
 
+  // A certificate PATH wins over an inline certificate PEM: the mounted file (Key Vault-backed, worker-only)
+  // is the mechanism products move to; the inline variable stays for secret stores that hold one line.
+  const certificatePath = value(env, 'AZURE_CLIENT_CERTIFICATE_PATH');
+  if (certificatePath !== undefined) {
+    return {
+      transport: 'graph',
+      sender,
+      tenantId,
+      clientId,
+      credential: {
+        kind: 'certificate',
+        pem: certificatePemFromPath('AZURE_CLIENT_CERTIFICATE_PATH', certificatePath),
+      },
+    };
+  }
+
   const certificate = multiline(env, 'AZURE_CLIENT_CERTIFICATE');
   if (certificate !== undefined) {
     return {
@@ -204,7 +246,10 @@ export function readMailConfig(env: MailEnv = process.env): MailConfig {
       sender,
       tenantId,
       clientId,
-      credential: { kind: 'certificate', pem: certificatePem(certificate) },
+      credential: {
+        kind: 'certificate',
+        pem: certificatePem('AZURE_CLIENT_CERTIFICATE', certificate),
+      },
     };
   }
 
@@ -213,7 +258,7 @@ export function readMailConfig(env: MailEnv = process.env): MailConfig {
     if (isProduction(env)) {
       throw new MailConfigError(
         'A client secret is refused when NODE_ENV=production: mail authenticates with workload identity federation ' +
-          '(set AZURE_FEDERATED_TOKEN_FILE) or a certificate (AZURE_CLIENT_CERTIFICATE), not a stored secret.',
+          '(set AZURE_FEDERATED_TOKEN_FILE) or a certificate (AZURE_CLIENT_CERTIFICATE_PATH or AZURE_CLIENT_CERTIFICATE), not a stored secret.',
       );
     }
     return {
@@ -226,7 +271,8 @@ export function readMailConfig(env: MailEnv = process.env): MailConfig {
   }
 
   throw new MailConfigError(
-    'No Graph credential: set AZURE_FEDERATED_TOKEN_FILE (workload identity) or AZURE_CLIENT_CERTIFICATE ' +
-      '(a certificate, ECS) in production, or AZURE_CLIENT_SECRET (local testing only).',
+    'No Graph credential: set AZURE_FEDERATED_TOKEN_FILE (workload identity) or AZURE_CLIENT_CERTIFICATE_PATH ' +
+      '(a mounted certificate file) or AZURE_CLIENT_CERTIFICATE (a certificate, ECS) in production, ' +
+      'or AZURE_CLIENT_SECRET (local testing only).',
   );
 }

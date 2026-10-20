@@ -984,8 +984,9 @@ describe('metric export interval', () => {
   });
 
   // A bad value must not reach the SDK: a zero or negative interval is a busy loop or a timer
-  // that never fires, and an unparseable one would be NaN.
-  it.each(['', 'soon', '0', '-5', '15abc', '1.5', '1'])(
+  // that never fires, and an unparseable one would be NaN. '1000.5' is the whole-number check
+  // above the minimum: a laxer regex would read it as 1000.5 and start the reader on it.
+  it.each(['', 'soon', '0', '-5', '15abc', '1.5', '1', '1000.5'])(
     'falls back to the default for %o and says so',
     (value) => {
       const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);

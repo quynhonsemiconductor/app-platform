@@ -12,6 +12,8 @@ packages:
 # warnings inside a job that concluded `success`. `osv_blocking` is set to true in the
 # same change that clears them.
 overrides:
+  # GHSA-698v-4r3x-3vcv: vite 7.3.6 (via vitest) pulls launch-editor <2.14.2; 7.3.7 is the fixed 7.x.
+  vite@>=7.0.0 <7.3.7: 7.3.7
   # GHSA-5p4m-2wfm-xmqj (CVE-2026-59870, quadratic CPU in !!omap resolution, fixed
   # 4.3.1) and GHSA-2883-xcg3-v3hh (fixed 4.3.2), CVSS 7.5 each. The second walks past
   # the first's mitigation: `maxTotalMergeKeys` counts only the keys a merge actually

@@ -49,8 +49,24 @@ export interface BootstrapOptions {
 export interface HttpAppOptions extends BootstrapOptions {
   /** Product-specific setup of the Fastify app (helmet, CSP, swagger, prefix, correlation id): everything that is not logging or shutdown. */
   configure?: (app: NestFastifyApplication) => void | Promise<void>;
-  http?: { trustProxy?: boolean; bodyLimit?: number; rawBody?: boolean };
+  http?: {
+    trustProxy?: boolean;
+    bodyLimit?: number;
+    rawBody?: boolean;
+    /**
+     * Keep-alive alignment: every hop's idle timeout must be SHORTER than the next hop's, so no request lands on a socket the origin is already
+     * closing (ALB 60 s today, cloudflared `originRequest.keepAliveTimeout = 60 s` later). Defaults: `keepAliveTimeout` 65 000 ms,
+     * `headersTimeout` 66 000 ms — the keep-alive above the proxy's 60 s idle, and the header deadline above the keep-alive (a product may
+     * override both together; `headersTimeoutMs` at or below `keepAliveTimeoutMs` fails the boot).
+     */
+    keepAliveTimeoutMs?: number;
+    headersTimeoutMs?: number;
+  };
 }
+
+/** The origin's keep-alive defaults, one place so the test and the bootstrap agree. */
+export const HTTP_KEEP_ALIVE_TIMEOUT_MS = 65_000;
+export const HTTP_HEADERS_TIMEOUT_MS = 66_000;
 
 export type WorkerAppOptions = BootstrapOptions;
 
@@ -193,6 +209,13 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
     import('@nestjs/core'),
     import('@nestjs/platform-fastify'),
   ]);
+  const keepAliveTimeout = options.http?.keepAliveTimeoutMs ?? HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  const headersTimeout = options.http?.headersTimeoutMs ?? HTTP_HEADERS_TIMEOUT_MS;
+  if (headersTimeout <= keepAliveTimeout) {
+    throw new Error(
+      `http.headersTimeoutMs (${headersTimeout}) must be greater than http.keepAliveTimeoutMs (${keepAliveTimeout}).`,
+    );
+  }
   const app = await NestFactory.create<NestFastifyApplication>(
     Root,
     new FastifyAdapter({
@@ -200,6 +223,11 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
       logger: false,
       trustProxy: options.http?.trustProxy ?? true,
       ...(options.http?.bodyLimit ? { bodyLimit: options.http.bodyLimit } : {}),
+      // Keep-alive alignment. Passed as a Fastify option, NOT via `serverFactory`: Fastify 5 already
+      // defaults keepAliveTimeout to 72 s, and building the server by hand would skip Fastify's own
+      // server setup — requestTimeout silently becomes Node's 300 s and a slow upload past 5 minutes
+      // gets a 408. 65 s sits above the 60 s proxy idle while staying a Fastify-driven server.
+      keepAliveTimeout,
     }),
     // `abortOnError: false`: Nest's default is to log the error as TEXT and `process.abort()` (SIGABRT, exit 134). Let it reject instead, so
     // `createHttpApp` reports it as the one JSON line and exits 1.
@@ -211,6 +239,10 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
     },
   );
   await installLogging(app);
+  // `headersTimeout` is not a Fastify option: Fastify leaves Node's 60 s in place, which sits BELOW
+  // both its own and our keep-alive. Fastify never touches the field afterwards, so setting it on the
+  // server here is the whole story.
+  app.getHttpServer().headersTimeout = headersTimeout;
   await options.configure?.(app);
   return app;
 }

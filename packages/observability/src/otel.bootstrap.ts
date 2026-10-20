@@ -208,6 +208,30 @@ function validateHttpDurationBoundaries(boundaries: number[]): void {
 }
 
 /**
+ * Metric export interval in milliseconds. Grafana Cloud's free tier bills active series at
+ * one data point per minute, so every faster export multiplies the billable samples: the
+ * former 30 s prod and 10 s develop cadence put the stack at roughly 2x and 6x the free
+ * cap. 60 s is the free-tier rate. Overridable with OTEL_METRIC_EXPORT_INTERVAL. A
+ * non-positive or unparseable override falls back to the default and says so, as the
+ * sampling override does: the SDK would otherwise export on a timer it cannot honour.
+ */
+export const DEFAULT_METRIC_EXPORT_INTERVAL_MS = 60_000;
+
+export function resolveMetricExportInterval(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_METRIC_EXPORT_INTERVAL_MS;
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    process.emitWarning(
+      `OTEL_METRIC_EXPORT_INTERVAL=${JSON.stringify(raw)} is not a positive number of milliseconds; using ${DEFAULT_METRIC_EXPORT_INTERVAL_MS}.`,
+      'OtelMetricIntervalWarning',
+    );
+    return DEFAULT_METRIC_EXPORT_INTERVAL_MS;
+  }
+  return parsed;
+}
+
+/**
  * Resolve the root sampling ratio. An unparseable override must not silently turn
  * tracing off: `TraceIdRatioBasedSampler` normalises NaN to 0, so
  * `OTEL_SAMPLING_PROBABILITY=ten-percent` would drop every trace with no error anywhere.
@@ -382,7 +406,7 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
 
     metricReader: new PeriodicExportingMetricReader({
       exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
-      exportIntervalMillis: isProd ? 30_000 : 10_000,
+      exportIntervalMillis: resolveMetricExportInterval(process.env['OTEL_METRIC_EXPORT_INTERVAL']),
     }),
 
     // Spread, not `views: views` — when the caller omits the option the key must be

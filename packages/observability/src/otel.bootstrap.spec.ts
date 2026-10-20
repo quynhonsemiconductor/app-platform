@@ -25,6 +25,8 @@ import { PROBE_PATHS } from './ignored-paths';
 import {
   __ignoredRequestPaths,
   resetOtelForTesting,
+  DEFAULT_METRIC_EXPORT_INTERVAL_MS,
+  resolveMetricExportInterval,
   shutdownOtel,
   startOtel,
 } from './otel.bootstrap';
@@ -921,5 +923,60 @@ describe('shutdownOtel', () => {
     await shutdownOtel();
     expect(shutdown).toHaveBeenCalledTimes(1);
     delete process.env['OTEL_ENABLED'];
+  });
+});
+
+describe('metric export interval', () => {
+  beforeEach(() => {
+    resetOtelForTesting();
+    process.env['OTEL_ENABLED'] = 'true';
+    delete process.env['OTEL_METRIC_EXPORT_INTERVAL'];
+  });
+
+  afterEach(() => {
+    resetOtelForTesting();
+    delete process.env['OTEL_ENABLED'];
+    delete process.env['OTEL_METRIC_EXPORT_INTERVAL'];
+  });
+
+  // The SDK keeps the interval on the reader; reading it back proves the value reaches the
+  // exporter, not only that the resolver works in isolation.
+  const exportIntervalOf = () =>
+    (nodeSdkConstructor.mock.calls.at(-1)![0] as { metricReader: { _exportInterval: number } })
+      .metricReader._exportInterval;
+
+  it('reaches the metric reader at 60 seconds by default', () => {
+    startOtel({ defaultServiceName: 'svc' });
+    expect(exportIntervalOf()).toBe(60_000);
+  });
+
+  it('reaches the metric reader when overridden', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '15000';
+    startOtel({ defaultServiceName: 'svc' });
+    expect(exportIntervalOf()).toBe(15_000);
+  });
+
+  // Free tier bills one data point per minute; 60 s is the default for every environment.
+  it('is 60 seconds by default, in production and develop alike', () => {
+    expect(DEFAULT_METRIC_EXPORT_INTERVAL_MS).toBe(60_000);
+    expect(resolveMetricExportInterval(undefined)).toBe(60_000);
+  });
+
+  it('is overridable with OTEL_METRIC_EXPORT_INTERVAL in milliseconds', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '15000';
+    expect(resolveMetricExportInterval(process.env['OTEL_METRIC_EXPORT_INTERVAL'])).toBe(15_000);
+  });
+
+  // A bad value must not reach the SDK: a zero or negative interval is a busy loop or a timer
+  // that never fires, and an unparseable one would be NaN.
+  it.each(['', 'soon', '0', '-5'])('falls back to the default for %o and says so', (value) => {
+    const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+
+    expect(resolveMetricExportInterval(value)).toBe(60_000);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('OTEL_METRIC_EXPORT_INTERVAL'),
+      'OtelMetricIntervalWarning',
+    );
+    warning.mockRestore();
   });
 });

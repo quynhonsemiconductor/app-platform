@@ -2,7 +2,7 @@
 # code-owner review rule.
 *                            @quynhonsemiconductor/platform-infra
 
-# Published packages — consumed by rally and opshub backends.
+# Published packages — consumed by rova and opshub backends.
 # Breaking changes here affect both products; keep ownership scoped
 # to platform-infra until a package needs a dedicated owning team.
 packages/identity/          @quynhonsemiconductor/platform-infra

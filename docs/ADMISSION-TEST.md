@@ -1,7 +1,7 @@
 # What belongs in a shared package
 
 Written 2026-07-28, after an audit that asked whether these packages are genuinely
-reusable or merely extracted from rova (then called rally). The answer was "mostly the former", and
+reusable or merely extracted from rova. The answer was "mostly the former", and
 the ~35 % that wasn't had one thing in common: it carried product vocabulary. This
 is the rule that fell out, plus the evidence behind it, so the next "should this be
 shared?" has an answer that isn't a matter of taste.
@@ -137,5 +137,5 @@ Stated as limits, not gaps to be embarrassed about:
   be verified by a third party as-is.
 
 `FailOpenControl` still declares `authz_epoch` and `authz_epoch_bump`. Nothing
-emits them since rova deleted its authorization epoch (quynhonsemiconductor/rova#238, the repository was called rally then);
+emits them since rova deleted its authorization epoch (quynhonsemiconductor/rova#238);
 removing union members is breaking, so they come out on the next major.

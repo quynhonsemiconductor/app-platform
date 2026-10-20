@@ -6,7 +6,15 @@ import {
   createLogCapture,
   runLoggingConformance,
 } from '@quynhonsemiconductor/observability/testing';
-import { boundPort, installProcessErrorHandlers, prepareHttpApp, prepareWorkerApp } from './index';
+import {
+  HTTP_HEADERS_TIMEOUT_MS,
+  HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  boundPort,
+  installProcessErrorHandlers,
+  prepareHttpApp,
+  prepareWorkerApp,
+  type HttpAppOptions,
+} from './index';
 
 const ENV = {
   NODE_ENV: 'production', // pinned to production in deployed environments on purpose
@@ -172,6 +180,44 @@ describe('the shared bootstrap writes the log contract', () => {
     } finally {
       await app.close();
     }
+  });
+
+  describe('HTTP server keep-alive alignment', () => {
+    const timeouts = async (
+      http?: HttpAppOptions['http'],
+    ): Promise<{ keepAlive: number; headers: number }> => {
+      const app = await prepareHttpApp({
+        module: async () => HttpProductModule,
+        env: ENV,
+        logStream: createLogCapture().stream,
+        ...(http ? { http } : {}),
+      });
+      await app.listen(0, '127.0.0.1');
+      try {
+        const server = app.getHttpServer();
+        expect(server.keepAliveTimeout).toBeDefined();
+        expect(server.headersTimeout).toBeDefined();
+        return { keepAlive: server.keepAliveTimeout, headers: server.headersTimeout };
+      } finally {
+        await app.close();
+      }
+    };
+
+    it('defaults: keepAliveTimeout 65 s and headersTimeout 66 s, above a 60 s proxy idle so no request lands on a closing socket', async () => {
+      expect(await timeouts()).toEqual({
+        keepAlive: HTTP_KEEP_ALIVE_TIMEOUT_MS,
+        headers: HTTP_HEADERS_TIMEOUT_MS,
+      });
+      expect(HTTP_KEEP_ALIVE_TIMEOUT_MS).toBe(65_000);
+      expect(HTTP_HEADERS_TIMEOUT_MS).toBe(66_000);
+    });
+
+    it('the product can override both (and the request still routes after a custom serverFactory-shaped boot)', async () => {
+      expect(await timeouts({ keepAliveTimeoutMs: 10_000, headersTimeoutMs: 11_000 })).toEqual({
+        keepAlive: 10_000,
+        headers: 11_000,
+      });
+    });
   });
 
   it('with no OTEL_SERVICE_NAME, every line says the product\'s default service name (as OpenTelemetry does), never "app" or "bootstrap"', async () => {

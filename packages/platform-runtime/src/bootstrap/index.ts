@@ -16,6 +16,7 @@
  */
 import '../config/load-env';
 import { startOtel } from '@quynhonsemiconductor/observability/otel';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
   INestApplication,
   INestApplicationContext,
@@ -49,8 +50,24 @@ export interface BootstrapOptions {
 export interface HttpAppOptions extends BootstrapOptions {
   /** Product-specific setup of the Fastify app (helmet, CSP, swagger, prefix, correlation id): everything that is not logging or shutdown. */
   configure?: (app: NestFastifyApplication) => void | Promise<void>;
-  http?: { trustProxy?: boolean; bodyLimit?: number; rawBody?: boolean };
+  http?: {
+    trustProxy?: boolean;
+    bodyLimit?: number;
+    rawBody?: boolean;
+    /**
+     * Keep-alive alignment: every hop's idle timeout must be SHORTER than the next hop's, so no request lands on a socket the origin is already
+     * closing (ALB 60 s today, cloudflared `originRequest.keepAliveTimeout = 60 s` later). Defaults: `keepAliveTimeout` 65 000 ms,
+     * `headersTimeout` 66 000 ms — both above the proxy's 60 s (Node's own default is 5 000 ms, which drops in-flight requests behind a 60 s-idle
+     * proxy). Set them together: `headersTimeout` must stay above `keepAliveTimeout`.
+     */
+    keepAliveTimeoutMs?: number;
+    headersTimeoutMs?: number;
+  };
 }
+
+/** The origin's keep-alive defaults, one place so the test and the bootstrap agree. */
+export const HTTP_KEEP_ALIVE_TIMEOUT_MS = 65_000;
+export const HTTP_HEADERS_TIMEOUT_MS = 66_000;
 
 export type WorkerAppOptions = BootstrapOptions;
 
@@ -189,10 +206,13 @@ async function composeRoot(
  */
 export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFastifyApplication> {
   const { Root, bootstrapLogger } = await composeRoot(options);
-  const [{ NestFactory }, { FastifyAdapter }] = await Promise.all([
+  const [{ NestFactory }, { FastifyAdapter }, http] = await Promise.all([
     import('@nestjs/core'),
     import('@nestjs/platform-fastify'),
+    import('node:http'),
   ]);
+  const keepAliveTimeout = options.http?.keepAliveTimeoutMs ?? HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  const headersTimeout = options.http?.headersTimeoutMs ?? HTTP_HEADERS_TIMEOUT_MS;
   const app = await NestFactory.create<NestFastifyApplication>(
     Root,
     new FastifyAdapter({
@@ -200,6 +220,8 @@ export async function prepareHttpApp(options: HttpAppOptions): Promise<NestFasti
       logger: false,
       trustProxy: options.http?.trustProxy ?? true,
       ...(options.http?.bodyLimit ? { bodyLimit: options.http.bodyLimit } : {}),
+      serverFactory: (handler: (req: IncomingMessage, res: ServerResponse) => void) =>
+        http.createServer({ keepAliveTimeout, headersTimeout }, (req, res) => handler(req, res)),
     }),
     // `abortOnError: false`: Nest's default is to log the error as TEXT and `process.abort()` (SIGABRT, exit 134). Let it reject instead, so
     // `createHttpApp` reports it as the one JSON line and exits 1.

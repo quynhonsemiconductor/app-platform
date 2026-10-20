@@ -185,7 +185,7 @@ describe('the shared bootstrap writes the log contract', () => {
   describe('HTTP server keep-alive alignment', () => {
     const timeouts = async (
       http?: HttpAppOptions['http'],
-    ): Promise<{ keepAlive: number; headers: number }> => {
+    ): Promise<{ keepAlive: number; headers: number; requestTimeout: number }> => {
       const app = await prepareHttpApp({
         module: async () => HttpProductModule,
         env: ENV,
@@ -197,7 +197,13 @@ describe('the shared bootstrap writes the log contract', () => {
         const server = app.getHttpServer();
         expect(server.keepAliveTimeout).toBeDefined();
         expect(server.headersTimeout).toBeDefined();
-        return { keepAlive: server.keepAliveTimeout, headers: server.headersTimeout };
+        // Fastify's own setup ran: its requestTimeout default (0, unlike Node's 300 s) is intact.
+        expect(server.requestTimeout).toBe(0);
+        return {
+          keepAlive: server.keepAliveTimeout,
+          headers: server.headersTimeout,
+          requestTimeout: server.requestTimeout,
+        };
       } finally {
         await app.close();
       }
@@ -207,16 +213,44 @@ describe('the shared bootstrap writes the log contract', () => {
       expect(await timeouts()).toEqual({
         keepAlive: HTTP_KEEP_ALIVE_TIMEOUT_MS,
         headers: HTTP_HEADERS_TIMEOUT_MS,
+        requestTimeout: 0,
       });
       expect(HTTP_KEEP_ALIVE_TIMEOUT_MS).toBe(65_000);
       expect(HTTP_HEADERS_TIMEOUT_MS).toBe(66_000);
     });
 
-    it('the product can override both (and the request still routes after a custom serverFactory-shaped boot)', async () => {
-      expect(await timeouts({ keepAliveTimeoutMs: 10_000, headersTimeoutMs: 11_000 })).toEqual({
-        keepAlive: 10_000,
-        headers: 11_000,
+    it('the product can override both, and a real request still routes on the overridden server', async () => {
+      const app = await prepareHttpApp({
+        module: async () => HttpProductModule,
+        env: ENV,
+        logStream: createLogCapture().stream,
+        http: { keepAliveTimeoutMs: 10_000, headersTimeoutMs: 11_000 },
       });
+      await app.listen(0, '127.0.0.1');
+      try {
+        const server = app.getHttpServer();
+        expect(server.keepAliveTimeout).toBe(10_000);
+        expect(server.headersTimeout).toBe(11_000);
+        const port = boundPort(app, 0);
+        const res = await fetch(`http://127.0.0.1:${port}/ping`);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ ok: true });
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('refuses a boot whose headersTimeout does not sit above the keep-alive', async () => {
+      await expect(
+        prepareHttpApp({
+          module: async () => HttpProductModule,
+          env: ENV,
+          logStream: createLogCapture().stream,
+          http: { keepAliveTimeoutMs: 10_000, headersTimeoutMs: 10_000 },
+        }),
+      ).rejects.toThrow(
+        /headersTimeoutMs \(10000\) must be greater than http.keepAliveTimeoutMs \(10000\)/,
+      );
     });
   });
 

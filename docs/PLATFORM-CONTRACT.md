@@ -1,8 +1,8 @@
 # QNSC platform runtime contract
 
-**Status:** v1.2 (2026-10-10: the four open questions are decided, and the correlation id ships in `platform-http`; see [Decisions](#decisions-on-the-questions-found-while-deriving-this-document)) · derived from the packages **as merged on `main`** (2026-10-09):
-`platform-db` 0.1.1 · `platform-runtime` 0.1.3 · `platform-http` 4.x · `platform-cache` 3.x ·
-`observability` 0.2.x · `identity` 8.x (Better Auth) — plus [ADR 0001](adr/0001-job-queue.md),
+**Status:** v1.3 (2026-10-20: refreshed to `main` after the file was emptied by mistake on 2026-10-10 — the one-document changes are #237, #238, #240, #242, #245, #246, #250, #251, #253, #257 and #269) · derived from the packages **as merged on `main`** (2026-10-20):
+`platform-db` 0.1.2 · `platform-runtime` 0.3.1 · `platform-http` 5.0.0 · `platform-cache` 3.3.1 ·
+`platform-mail` 0.1.5 · `observability` 0.6.0 · `identity` 8.4.2 (Better Auth) — plus [ADR 0001](adr/0001-job-queue.md),
 [ADR 0002](adr/0002-identity-v8-better-auth.md) and [PLAN.md](PLAN.md) §4 for what is decided but not yet built.
 
 This is the contract every QNSC service honours, whatever its language. TypeScript services get most
@@ -49,6 +49,15 @@ service written today does not have to guess.
 - One worker deployment per product, running all of that product's queues.
 - Containers are `linux/amd64` and read configuration **from the environment**, plus files the
   environment points at (such as `DATABASE_SSL_CA`).
+- A TypeScript process boots through **one shared bootstrap**, `platform-runtime`'s
+  `createHttpApp` / `createWorkerApp` (test seam: `prepareHttpApp` / `prepareWorkerApp`): `.env` →
+  OpenTelemetry → the product's `before` hook → the product module imported **lazily** (so OTel patches
+  pg/http/ioredis before they load) → Nest with `bufferLogs` → the shared pino logger installed →
+  graceful shutdown → listen → unhandled-error handlers. Any boot failure is **one JSON line on stderr
+  and exit 1**, never Nest text and SIGABRT. A conformance test kit (`observability/testing`'s
+  `runLoggingConformance`, `assertLogContract`) boots the real bootstrap and fails on any line that is
+  not the log contract below — including the regression it exists for, a process created without the
+  logger installed.
 
 ## 2. Health
 
@@ -122,9 +131,16 @@ Reference: `platform-runtime` `enableGracefulShutdown(app)`. Resource release be
 - Every line MUST carry: `time`, `level`, `msg`, `service`, `env`, `version`.
   - `service` — the service name (`rova-api`, `rova-worker`); `env` — `NODE_ENV`/deployment
     environment; `version` — `SERVICE_VERSION` (the release tag, set by CI; `dev` if unset).
-  - The TypeScript reference (pino) writes `time` as epoch milliseconds and `level` on pino's numeric
-    scale (10 trace … 60 fatal). Another implementation SHOULD use the same representation so one
-    collector pipeline parses both.
+  - `level` is the **label** (`trace` … `fatal`), and `time` is **ISO-8601 UTC** — in every runtime,
+    not only the request-bound lines (a worker's crons and a bootstrap's fatal line use the same
+    factory). Another implementation SHOULD use the same representation so one collector pipeline
+    parses both.
+- `service`, `env` and `version` are on **every** line, workers and bootstrap included — they are
+  root bindings of the logger, not request properties. `env` is the **deployment environment**
+  (`DEPLOYMENT_ENV`), falling back to `NODE_ENV` only when no deployment environment is known, so a
+  develop pod pinned to `NODE_ENV=production` does not log `env:"production"`. With no
+  `OTEL_SERVICE_NAME`, every line (the fatal line included) names `otel.defaultServiceName`, the same
+  name OpenTelemetry falls back to — never `app` or `bootstrap`.
 - When a span is active a line MUST carry **`trace.id`** and **`span.id`** (W3C hex ids, the dotted
   names as shown) so a log links to its trace. _(Decided 2026-10-10, [Q3](#decisions-on-the-questions-found-while-deriving-this-document):
   the logger's dotted names stay. The plan's draft used `trace_id`/`span_id`; a non-TypeScript service
@@ -135,18 +151,26 @@ Reference: `platform-runtime` `enableGracefulShutdown(app)`. Resource release be
 - **No secrets and no personal data.** The redaction list is part of the contract and applies in every
   environment: `req.headers.authorization`, `req.headers.cookie`, `res.headers["set-cookie"]`,
   `req.headers["x-api-key"]`, `req.headers["x-csrf-token"]`, and the same headers nested inside SDK
-  error objects (`err.config.headers.authorization`, `err.request.headers.authorization`), replaced by
-  `[REDACTED]`. A worker has no inbound request, so its SDK errors are the realistic leak path; it uses
-  the same factory as the API.
+  error objects under every key an error is logged under — `err`/`error`/`reason` ×
+  `config`/`request`/`response` (`err.config.headers.authorization`, `error.request.headers.cookie`, …),
+  replaced by `[REDACTED]`. An error logged under `err`, `error` or `reason` goes through **one
+  serializer** that keeps `type`, `message`, `stack`, scalar `code`/`status`/`errno` and the `cause`
+  chain, and **drops** `config`, `request`, `response`, `headers`, `req`, `res`, `options`, `body` and
+  `data` outright (an `Error` is never logged as `{}`). A worker has no inbound request, so its SDK
+  errors are the realistic leak path; it uses the same factory as the API.
 - One request-summary line per request, emitted by the application (the framework's automatic request
-  logging is off, to avoid a duplicate). It carries method, URL, status code, duration, `userId`,
-  `correlationId` and the client IP ([§8](#8-client-ip)). Probe paths are skipped ([§2](#2-health)).
+  logging is off, to avoid a duplicate). It carries `method`, `url`, `statusCode`, `duration`, `userId`,
+  `correlationId`, the client IP (`ip`, [§8](#8-client-ip)) and the request's `query`; on an error it
+  adds the error `errorCode` ([§7](#7-errors-and-http-behaviour)). Probe paths are skipped
+  ([§2](#2-health)).
 - **Security fail-open events** carry the literal field **`securityFailOpen`** with one of `denylist`,
   `rate_limit`, `authz_epoch`, `authz_epoch_bump` (`denylist` is emitted only by a product still on identity 7.x; nothing emits the
   two `authz_epoch*` values any more, and they leave the union at the next `observability` major). Alerts match that literal; renaming it silently
   disarms them. It is paired with the `security.fail_open` metric ([§5](#5-telemetry)).
 
-Reference: `observability` `createLoggerOptions`, `failOpenLog`, `FAIL_OPEN_FIELD`, `withJobContext`.
+Reference: `observability` `createLoggerOptions` / `loggerOptionsFromEnv` / `createScriptLogger`,
+`serializeError`, `failOpenLog`, `FAIL_OPEN_FIELD`, `withJobContext`; `platform-runtime/bootstrap`
+`createHttpApp` / `createWorkerApp`; `observability/testing` `runLoggingConformance`.
 
 ## 5. Telemetry
 
@@ -170,22 +194,42 @@ OpenTelemetry, OTLP over HTTP, to the collector (Alloy) — usually a sidecar or
   sampling (100 % of errors and slow traces) and leave this at `1.0` where the collector does it.
 - Instrumentation is on for HTTP, PostgreSQL and the cache client, **off** for filesystem, DNS, raw
   sockets and the AWS SDK (object storage is plain HTTP and is already traced).
+- **One request duration:** `@opentelemetry/instrumentation-http`'s own server duration series
+  (`http.server.request.duration`, seconds, on 0.221+) is **dropped by a View**; `HttpMetrics`'
+  `http.server.duration` (ms; `route`, `method`, `status_class`) is the one request duration. The drop
+  also guards an older instrumentation that records the legacy `http.server.duration` name, which would
+  collide with `HttpMetrics`' series. `startOtel({ httpInstrumentationDuration: 'keep' })` restores the
+  instrumentation's series while migrating a dashboard.
+- The unused `v8js.gc.duration` / `v8js.memory.heap.space.*` series are dropped (`v8js.memory.heap.used`
+  and `.limit` stay).
 - Telemetry MUST NOT break the request: recording a metric or span can cost a data point, never a
   response. (`observability`'s recorders catch and log once.)
 
 **Metrics** (names are part of the contract: dashboards and alerts are built on them).
 
-| Instrument                                                           | Kind                | Notes                                                                                          |
-| -------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------- |
-| `http.server.requests`, `http.server.errors`, `http.server.duration` | counter / histogram | RED per route. Duration in ms; see the bucket warning in the `observability` README.           |
-| `job.runs`, `job.failures`, `job.duration`, `job.unlocked_runs`      | counter / histogram | `job.unlocked_runs > 0` with more than one replica means a scheduled job ran on every replica. |
-| `queue.processed`, `queue.failures`, `queue.lag_seconds`             | counter / gauge     | Lag, not throughput, reveals a consumer falling behind.                                        |
-| `db.pool.in_use`, `db.pool.waiting`                                  | gauge               | Registered once; pulled on collection.                                                         |
-| `security.fail_open`, `auth.login`, `authz.stale_token`              | counter             | Pairs with the `securityFailOpen` log field.                                                   |
+| Instrument                                                           | Kind                | Labels                                                    | Notes                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------- | ------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `http.server.requests`, `http.server.errors`, `http.server.duration` | counter / histogram | `route`, `method`, `status_class`; `error_code` on errors | RED per route. Duration in ms; see the bucket warning in the `observability` README.                                                                                                                                                                                                                                                                                             |
+| `job.runs`, `job.duration`                                           | counter / histogram | `job_name`, `outcome`                                     | `outcome` is `success` \| `failure`.                                                                                                                                                                                                                                                                                                                                             |
+| `job.failures`, `job.unlocked_runs`                                  | counter             | `job_name`                                                | `job.unlocked_runs > 0` with more than one replica means a scheduled job ran on every replica. The failure counter is **created at 0 before every run**, so a failure after an earlier run is an `increase()` from 0 to 1; a job whose very first run after a process start fails still exports 0 and 1 in one scrape batch — the alert covers that with an `offset` comparison. |
+| `queue.processed`, `queue.failures`, `queue.lag_seconds`             | counter / gauge     | `queue`                                                   | Lag, not throughput, reveals a consumer falling behind.                                                                                                                                                                                                                                                                                                                          |
+| `db.pool.in_use`, `db.pool.waiting`                                  | gauge               | —                                                         | Registered once; pulled on collection.                                                                                                                                                                                                                                                                                                                                           |
+| `security.fail_open`, `auth.login`, `authz.stale_token`              | counter             | —                                                         | Pairs with the `securityFailOpen` log field.                                                                                                                                                                                                                                                                                                                                     |
+
+**Metric attribute names are part of the contract.** Never name a metric attribute `job`, `instance`,
+`le`, `quantile`, or anything starting `__`. Through OTLP → Prometheus these scrape labels are
+**overwritten from the resource** (`job` → `service.namespace/service.name`, `instance` →
+`service.instance.id`), so an attribute with such a name collapses every series that differed only by
+it into one, and same-timestamp writers are discarded as duplicates. `JobMetrics` did exactly this with
+`job` until observability 0.6.0 — every cron of a worker was ONE series and no alert could name the
+failing job — which is why the label is **`job_name`** on every `job.*` metric (queries that `by (job)`
+or filter `{job=…}` must use `job_name`; `sum(rate(…))` queries are unchanged). A spec exports every
+recorder's instruments through the real SDK and fails on a reserved name or on two attributes that
+sanitise to the same Prometheus label.
 
 **Labels are bounded.** Status collapses to `2xx/3xx/4xx/5xx`; method to a fixed set plus `OTHER`;
 ids never appear as labels (they belong on spans and logs). Where the type system cannot enforce it,
-distinct values per label are capped — `route` 500, `error_code` 200, `job` and `queue` 100 — and
+distinct values per label are capped — `route` 500, `error_code` 200, `job_name` and `queue` 100 — and
 further values are recorded as `__other__`. A request that matches **no route** (a scanner, a typo)
 MUST be labelled with the constant **`unmatched`**, never its raw URL, or scanner traffic alone spends
 the route budget. The caps are tripwires, not settings; there is deliberately no per-product override.
@@ -227,8 +271,10 @@ required variable that is missing is a **startup error that names the variable**
 | Mail       | `MAIL_TRANSPORT`                                                                                |                                               | `graph` \| `smtp`. **Required** (no default); `smtp` is refused when `NODE_ENV=production` ([§14](#14-email))                                                                                                                                                                            |
 |            | `MAIL_GRAPH_SENDER`                                                                             | — (required for `graph`)                      | the product's shared mailbox, a plain address                                                                                                                                                                                                                                            |
 |            | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`                                                            | — (required for `graph`)                      | the tenant and the product's **own** Entra app (its login app)                                                                                                                                                                                                                           |
-|            | `AZURE_FEDERATED_TOKEN_FILE`                                                                    | —                                             | path of the projected ServiceAccount token: workload identity federation, no stored secret. Wins over a client secret whenever it is set                                                                                                                                                 |
-|            | `AZURE_CLIENT_SECRET`                                                                           | —                                             | local testing only; **refused when `NODE_ENV=production`**                                                                                                                                                                                                                               |
+|            | `AZURE_FEDERATED_TOKEN_FILE`                                                                    | —                                             | path of the projected ServiceAccount token: workload identity federation, no stored secret. Wins over a certificate and a client secret whenever it is set                                                                                                                               |
+|            | `AZURE_CLIENT_CERTIFICATE_PATH`                                                                 | —                                             | path of the **ONE combined PEM** (private key first) mounted worker-only — the Service app's certificate credential. Read and parsed at start; wins over the inline PEM. Allowed in production (platform-mail 0.1.6)                                                                     |
+|            | `AZURE_CLIENT_CERTIFICATE`                                                                      | —                                             | the same combined PEM, inline, raw or base64 — for a secret store that holds one line. Parsed at start. Allowed in production                                                                                                                                                            |
+|            | `AZURE_CLIENT_SECRET`                                                                           | —                                             | local testing only; **refused when `NODE_ENV=production`**. A Service app NEVER uses one: its credential is a certificate (or the projected token on the pod)                                                                                                                            |
 |            | `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT`, `MAIL_SMTP_FROM`                                            | `localhost`, `1025`, `noreply@localhost.test` | `smtp` only (Mailpit); non-production                                                                                                                                                                                                                                                    |
 |            | `MAIL_SMOKE_TO`                                                                                 | — (required by the smoke test)                | read only by `platform-mail-smoke`, never by the app: one address in `@qnsc.vn`                                                                                                                                                                                                          |
 | Storage    | `S3_*`                                                                                          |                                               | Product-owned (R2 through the S3 API) with per-product names (`S3_ATTACHMENTS_BUCKET`, …). **Not part of the contract until WP-17** (decided 2026-10-10, Q4)                                                                                                                             |
@@ -395,6 +441,10 @@ Both store their state in the cache, and both are **only as good as it**.
 - **Algorithm:** atomic sliding-window log (server-side script), not a fixed window, so there is no burst
   at the boundary. Response headers: `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` (Unix
   seconds), and `Retry-After` (seconds) on `429`.
+- **A slot can be refunded by its id.** A limiter that must count **before** it knows the outcome (an
+  auth limiter counts a burst of parallel attempts first, then refunds the ones that pass) takes
+  `consumeRateLimit`'s returned slot `id` and gives back exactly that entry with
+  `refundRateLimit(key, id)`; a refund of a gone entry or an id never issued is a no-op. (`platform-cache`.)
 - **Tiers are named by intent.** The platform ships the mechanism and these defaults; which route gets
   which tier is the product's policy.
 
@@ -419,7 +469,11 @@ Both store their state in the cache, and both are **only as good as it**.
     **marker** with its status: a retry gets `409 IDEMPOTENCY_NOT_REPLAYABLE`, never a second execution, and nothing of the
     response is cached.
   - The entry is scoped to user (the principal, [§12](#the-principal-who-is-calling)), method, URL and key; an anonymous caller is a
-    hash of client IP and user agent.
+    hash of client IP and user agent. The cache key carries a **cluster hash tag**
+    (`idem:{<who>:<digest>}` for the record and `<…>:claim` for the lease), so the one Lua script that
+    reads or claims both is valid on a Redis Cluster — without it, ElastiCache Serverless answers
+    `CROSSSLOT` and the fail-open path runs every request unprotected, silently. A `}` or `{` in the
+    principal id is hashed away first, so the tag is always non-empty and single.
   - **Fails open**: an unreachable cache, or an error reading the key or taking the claim, is logged and the request runs
     unprotected; an error storing the response never fails a request that succeeded.
   - On a replay the guards run, the handler and the interceptors registered after it do not, and the interceptors registered before it
@@ -430,8 +484,9 @@ Reference: `platform-http` `RateLimitGuard`, `IdempotencyInterceptor`, `RATE_LIM
 
 ## 10. Database
 
-PostgreSQL, one CloudNativePG cluster per product in production (one shared cluster with a database per
-product in dev). Roles `<product>_app` and `<product>_migrator`.
+**PostgreSQL 18.6** (pinned everywhere — dev, CI containers, production), one CloudNativePG cluster per
+product in production (one shared cluster with a database per product in dev). Roles `<product>_app` and
+`<product>_migrator`.
 
 - **Password auth only**, with the credentials CloudNativePG generates inside the cluster. No IAM and
   no cloud token. A rotation needs a rolling restart.
@@ -465,8 +520,10 @@ Reference: `platform-db` (`createPool`, `pingDatabase`, `withAdvisoryLock`, `DbE
 
 ## 11. Cache
 
-Valkey, **one per product** in production, one shared in dev. The product's own instance: sessions and
-rate-limit state are never shared across products. Keys carry a per-product prefix.
+**Valkey 8.1** (pinned everywhere; **never 8.2** — ElastiCache's "8.2" is OSS 8.1 plus the search
+extension, not a newer Valkey), **one per product** in production, one shared in dev. The product's own
+instance: sessions and rate-limit state are never shared across products. Keys carry a per-product
+prefix.
 
 - Mode `required` (default): a missing URL is a startup error. Mode `optional`: a missing URL disables
   the cache and every operation no-ops — which is exactly why [§9](#9-rate-limiting-and-idempotency)
@@ -539,11 +596,43 @@ Authentication tells the rest of the process who the caller is in **one place, t
 Reference: `observability` `setRequestPrincipal`, `getRequestPrincipal`; `platform-http` `currentUserId`;
 `identity/nest` `SessionGuard`, `PrincipalHook`.
 
+### The session's active context (identity 8.4, opt-in)
+
+A multi-tenant product needs "this session is acting in workspace X", checked against membership, not
+just carried. `IdentityModule`'s `context` option (`{ membership(userId, contextId), initial?(userId),
+revalidateSeconds? }`) gives it, without the product inventing its own column and routes:
+
+- `session.context_id` is a **nullable UUID column** that no request body can write
+  (`input: false`; sign-in and update bodies ignore it).
+- The context is set through `POST /api/auth/context/set { contextId | null }`, or the service-side
+  `setContext(auth, { headers, contextId })` for a product that keeps its own route (and its own CSRF
+  story). `403 CONTEXT_FORBIDDEN` when `membership` refuses; the origin/CSRF check applies either way.
+- `initial()` names the context a session **starts in** and **falls back to**; the package asks
+  `membership` about it too (a non-UUID, a refusal or a throw is "no context" and never fails the sign-in).
+- **Lazy re-check:** a session holding a context is re-checked on read, at most once per
+  `revalidateSeconds` (default **60**, `0` = every read) per process, like the banned-user check. A user
+  who has lost membership falls back to `initial()`/none and **stays signed in** — a context is not
+  authentication. A throwing `membership` on a read keeps the current context (fail-open; the product
+  authorizes per request regardless).
+- `clearContext(auth, …)` / `clearContextEverywhere(…)` set the column and the cached copy to null; the
+  sessions stay valid.
+- `SessionGuard` records `contextId` as the request's `workspaceId` unless the `principal` hook returns
+  one — the access log and the rate-limit keys see it through the request context, not through `req.user`.
+
+**A credential that is not a browser session.** A product guard that authenticates a non-browser
+credential (an API token) before `IdentityModule` calls **`markPreAuthenticated(req, { userId })`** to
+tell the global `SessionGuard` to stand aside (`Symbol.for` on the in-process request; nothing in an
+HTTP request can carry it; `@Public()` still short-circuits first). With the mark the guard owns the
+credential — and two duties come with it: the ban check (`isUserBanned(auth, userId)`; `SessionGuard`
+otherwise runs it), and **fail closed**: a marked request with a request context but no principal is
+refused `401`, and a principal hook returning no user id is an error log, not a pass-through. Identity
+itself does not verify the credential.
+
 ### Current state and what is pending
 
 |                                        | State                                                                                                                                                                                                                                                                                                                                 |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identity` 8.x on Better Auth          | **Shipped** (8.0.0; current 8.1.x). Replaces the Passport/JWT, BFF and refresh-token `identity` 7.x. Products move over one by one (opshub in its PR, rova on its own); a product still on 7.x keeps its own tokens, denylist and `AUTH_REFRESH` tier until it moves ([migration guide](../packages/identity/MIGRATION-v7-to-v8.md)). |
+| `identity` 8.x on Better Auth          | **Shipped** (8.0.0; current 8.4.2). Replaces the Passport/JWT, BFF and refresh-token `identity` 7.x. Products move over one by one (opshub in its PR, rova on its own); a product still on 7.x keeps its own tokens, denylist and `AUTH_REFRESH` tier until it moves ([migration guide](../packages/identity/MIGRATION-v7-to-v8.md)). |
 | Manual checks M1–M4 on the QNSC tenant | Owned by the platform lead ([ADR 0002](adr/0002-identity-v8-better-auth.md), _Manual checks_). **This document does not record their result.**                                                                                                                                                                                        |
 
 Decided for 8.0.0 ([ADR 0002](adr/0002-identity-v8-better-auth.md), decisions 1–6) and enforced by the package:
@@ -715,8 +804,11 @@ subject, html, text, headers?, category, idempotencyKey, correlationId?`. Addres
   network call or database write; an error never contains the subject, a recipient, the body or a
   credential.
 - **`graph`.** `POST /users/{MAIL_GRAPH_SENDER}/sendMail`, `saveToSentItems: false`, an app-only token
-  from workload identity federation (`AZURE_FEDERATED_TOKEN_FILE`); a client secret is refused in
-  production. Graph's JSON body carries one part, so the **HTML is sent and the plain-text
+  from the Service app's **certificate** — `AZURE_CLIENT_CERTIFICATE_PATH` (a combined PEM mounted
+  worker-only, which wins over the inline PEM) or `AZURE_CLIENT_CERTIFICATE` (inline, for a one-line
+  secret store) — or from workload identity federation (`AZURE_FEDERATED_TOKEN_FILE`, preferred where
+  the platform projects it). A client secret is refused in production, and a Service app never uses
+  one: its credential is certificate-only. Graph's JSON body carries one part, so the **HTML is sent and the plain-text
   alternative is not**. Inside one send, `429`, `502`, `503` and `504` — responses on which Graph did
   not accept the message — are retried up to 3 attempts, honouring `Retry-After` up to 30 s, else
   backoff with jitter. A timeout or a `500` is not retried in place: the message may have been
@@ -800,7 +892,7 @@ for any other language each is the service's own to implement and demonstrate.
 | 1   | `GET /livez` is `200`, unprefixed, unauthenticated, touches no dependency                                                                                                 | `curl` with the database stopped: still `200`                    |
 | 2   | `GET /readyz` is `503` when a dependency is down, and from the first moment of shutdown                                                                                   | stop the database; send `SIGTERM` and poll                       |
 | 3   | Shutdown order: not-ready, delay, drain, stop work, release resources, flush, exit; bounded by a timeout below the grace period                                           | `SIGTERM` under load: no dropped request; exit `0`               |
-| 4   | Logs are JSON lines on stdout with `time level msg service env version`, plus `trace.id`/`span.id` under a span                                                           | read the stream                                                  |
+| 4   | Logs are JSON lines on stdout with `time level msg service env version` on **every** line (workers included), plus `trace.id`/`span.id` under a span                      | read the stream                                                  |
 | 5   | The redaction list is applied in the API **and** the worker                                                                                                               | log an error object holding an `Authorization` header            |
 | 6   | Probe paths create no spans and no access-log lines                                                                                                                       | tail the logs during a probe                                     |
 | 7   | Telemetry via OTLP; resource attributes include `service.*`, `deployment.environment.name`, `k8s.*`                                                                       | collector view                                                   |
@@ -843,3 +935,13 @@ document's own (the plan's §11 has Q5–Q8 for the same decisions).
   service in another language emits the dotted names.
 - **Q4 — `S3_*` waits for WP-17.** Storage stays product-owned, with per-product variable names, until it
   is measured.
+
+---
+
+_Refresh (v1.3, 2026-10-20): the file was emptied by mistake on 2026-10-10 (restored from `70af81d`) and
+had drifted from `main` while empty. This version re-derives the touched statements from the code: metric
+names, labels and the reserved-attribute rule (#237, #250, #251), the log line shape, redaction and the
+shared bootstrap with its conformance kit (#240, #242, #245, #246, #253), identity's session context and
+`markPreAuthenticated` (#257), the idempotency keys' cluster hash tag (#238), rate-limit slot refunds
+(#269), and the pinned data stores (PostgreSQL 18.6, Valkey 8.1). Everything else is carried over from
+v1.2 unchanged._

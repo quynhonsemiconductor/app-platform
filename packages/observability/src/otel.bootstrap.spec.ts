@@ -25,6 +25,8 @@ import { PROBE_PATHS } from './ignored-paths';
 import {
   __ignoredRequestPaths,
   resetOtelForTesting,
+  DEFAULT_METRIC_EXPORT_INTERVAL_MS,
+  resolveMetricExportInterval,
   shutdownOtel,
   startOtel,
 } from './otel.bootstrap';
@@ -922,4 +924,79 @@ describe('shutdownOtel', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     delete process.env['OTEL_ENABLED'];
   });
+});
+
+describe('metric export interval', () => {
+  beforeEach(() => {
+    resetOtelForTesting();
+    process.env['OTEL_ENABLED'] = 'true';
+    delete process.env['OTEL_METRIC_EXPORT_INTERVAL'];
+  });
+
+  afterEach(() => {
+    resetOtelForTesting();
+    delete process.env['OTEL_ENABLED'];
+    delete process.env['OTEL_METRIC_EXPORT_INTERVAL'];
+  });
+
+  // The SDK keeps the interval on the reader; reading it back proves the value reaches the
+  // exporter, not only that the resolver works in isolation.
+  const readerOf = () =>
+    (
+      nodeSdkConstructor.mock.calls.at(-1)![0] as {
+        metricReader: { _exportInterval: number; _exportTimeout: number };
+      }
+    ).metricReader;
+  const exportIntervalOf = () => readerOf()._exportInterval;
+
+  it('reaches the metric reader at 60 seconds by default', () => {
+    startOtel({ defaultServiceName: 'svc' });
+    expect(exportIntervalOf()).toBe(60_000);
+  });
+
+  it("keeps the SDK's 30 s export timeout at the default interval", () => {
+    startOtel({ defaultServiceName: 'svc' });
+    expect(readerOf()._exportTimeout).toBe(30_000);
+  });
+
+  // The SDK throws when the timeout exceeds the interval; a 1 s override must start cleanly.
+  it('caps the export timeout at the interval so a short override starts', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '1000';
+    expect(() => startOtel({ defaultServiceName: 'svc' })).not.toThrow();
+    expect(readerOf()._exportTimeout).toBeLessThanOrEqual(1_000);
+  });
+
+  it('reaches the metric reader when overridden', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '15000';
+    startOtel({ defaultServiceName: 'svc' });
+    expect(exportIntervalOf()).toBe(15_000);
+  });
+
+  // Free tier bills one data point per minute; 60 s is the default for every environment.
+  it('is 60 seconds by default, in production and develop alike', () => {
+    expect(DEFAULT_METRIC_EXPORT_INTERVAL_MS).toBe(60_000);
+    expect(resolveMetricExportInterval(undefined)).toBe(60_000);
+  });
+
+  it('is overridable with OTEL_METRIC_EXPORT_INTERVAL in milliseconds', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '15000';
+    expect(resolveMetricExportInterval(process.env['OTEL_METRIC_EXPORT_INTERVAL'])).toBe(15_000);
+  });
+
+  // A bad value must not reach the SDK: a zero or negative interval is a busy loop or a timer
+  // that never fires, and an unparseable one would be NaN. '1000.5' is the whole-number check
+  // above the minimum: a laxer regex would read it as 1000.5 and start the reader on it.
+  it.each(['', 'soon', '0', '-5', '15abc', '1.5', '1', '1000.5'])(
+    'falls back to the default for %o and says so',
+    (value) => {
+      const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+
+      expect(resolveMetricExportInterval(value)).toBe(60_000);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining('OTEL_METRIC_EXPORT_INTERVAL'),
+        'OtelMetricIntervalWarning',
+      );
+      warning.mockRestore();
+    },
+  );
 });

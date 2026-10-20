@@ -208,6 +208,34 @@ function validateHttpDurationBoundaries(boundaries: number[]): void {
 }
 
 /**
+ * Metric export interval in milliseconds. Grafana Cloud's free tier bills active series at
+ * one data point per minute, so every faster export multiplies the billable samples: the
+ * former 30 s prod and 10 s develop cadence put the stack at roughly 2x and 6x the free
+ * cap. 60 s is the free-tier rate. Overridable with OTEL_METRIC_EXPORT_INTERVAL. A
+ * non-positive or unparseable override falls back to the default and says so, as the
+ * sampling override does: the SDK would otherwise export on a timer it cannot honour.
+ */
+export const DEFAULT_METRIC_EXPORT_INTERVAL_MS = 60_000;
+/** Below one second the exporter would fire more often than the free tier can absorb. */
+const MIN_METRIC_EXPORT_INTERVAL_MS = 1_000;
+
+export function resolveMetricExportInterval(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_METRIC_EXPORT_INTERVAL_MS;
+
+  // Strict: `Number.parseInt` would read '15abc' as 15 and `Number('1.5')` is not whole, so
+  // the value must be all digits and at least the minimum, or the default is used.
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!(parsed >= MIN_METRIC_EXPORT_INTERVAL_MS)) {
+    process.emitWarning(
+      `OTEL_METRIC_EXPORT_INTERVAL=${JSON.stringify(raw)} is not a whole number of milliseconds of at least ${MIN_METRIC_EXPORT_INTERVAL_MS}; using ${DEFAULT_METRIC_EXPORT_INTERVAL_MS}.`,
+      'OtelMetricIntervalWarning',
+    );
+    return DEFAULT_METRIC_EXPORT_INTERVAL_MS;
+  }
+  return parsed;
+}
+
+/**
  * Resolve the root sampling ratio. An unparseable override must not silently turn
  * tracing off: `TraceIdRatioBasedSampler` normalises NaN to 0, so
  * `OTEL_SAMPLING_PROBABILITY=ten-percent` would drop every trace with no error anywhere.
@@ -291,6 +319,9 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
   const serviceName =
     process.env[options.serviceNameEnvVar ?? 'OTEL_SERVICE_NAME'] ?? options.defaultServiceName;
   const endpoint = process.env['OTEL_EXPORTER_OTLP_ENDPOINT'] ?? 'http://localhost:4318';
+  const metricExportIntervalMs = resolveMetricExportInterval(
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'],
+  );
 
   // Head-sampling ratio: `parentbased_traceidratio`, default 0.1 in production and 1.0
   // elsewhere, overridable with OTEL_SAMPLING_PROBABILITY (the variable the products'
@@ -382,7 +413,10 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
 
     metricReader: new PeriodicExportingMetricReader({
       exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
-      exportIntervalMillis: isProd ? 30_000 : 10_000,
+      exportIntervalMillis: metricExportIntervalMs,
+      // The SDK refuses a timeout longer than the interval, so a short override must cap it or
+      // startup throws.
+      exportTimeoutMillis: Math.min(30_000, metricExportIntervalMs),
     }),
 
     // Spread, not `views: views` — when the caller omits the option the key must be

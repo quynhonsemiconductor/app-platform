@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.3.1...platform-runtime-v0.3.2) (2026-10-21)
+
+
+### ✨ Features
+
+* **runtime:** keep-alive-aligned HTTP server timeouts (65 s / 66 s) ([#285](https://github.com/quynhonsemiconductor/app-platform/issues/285)) ([946e2a7](https://github.com/quynhonsemiconductor/app-platform/commit/946e2a784ace4c22f6bd9ac9407c30a891cbf333))
+
 ## [0.3.1](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.3.0...platform-runtime-v0.3.1) (2026-10-16)
 
 

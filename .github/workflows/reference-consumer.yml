@@ -16,6 +16,7 @@
 name: Reference consumer
 
 on:
+  merge_group:
   pull_request:
     paths:
       - 'reference-consumer/**'

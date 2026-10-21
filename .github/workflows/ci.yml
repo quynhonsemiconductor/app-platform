@@ -22,15 +22,42 @@ on:
     # `main` is this repo's only long-lived branch, so the filter skipped nothing anyone
     # wanted skipped. No upside, one silent failure mode.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A PUSH TO MAIN IS NEVER CANCELLED, and that takes a group of its own per commit — the old
+  # `ci-<ref>` group shared one slot across main pushes, so a second push cancelled the first's
+  # run (rova's incident, copied here before it happens). pull_request keeps one group per PR,
+  # cancelled in progress.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'push' && format('main-{0}', github.sha) || format('{0}-{1}', github.event_name, github.run_id)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  # ── Which parts changed ─────────────────────────────────────────────────────
+  # Docs-only changes cannot affect the packages, so the heavy jobs skip and the gate reports a
+  # clean "nothing to test" instead of counting skipped-as-passing. Every doubt runs everything —
+  # see actions/changed-paths in the ci repo (handles pull_request and merge_group; pushes to
+  # main always run everything, because deploys and release-please wait for that run).
+  changes:
+    name: Which parts changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - id: paths
+        uses: quynhonsemiconductor/ci/actions/changed-paths@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
+        with:
+          ignore: |
+            **/*.md
+            docs/**
+    outputs:
+      run: ${{ steps.paths.outputs.run }}
   lint:
     name: Lint & typecheck
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -59,6 +86,8 @@ jobs:
 
   test:
     name: Tests
+    needs: [changes, lint]
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -94,8 +123,10 @@ jobs:
   # peer range (`>=2.0.0`) satisfiable -- a `-pr.N` prerelease would not satisfy one.
   tarballs:
     name: Pack packages for consumer CI
+    needs: changes
     # Same-repo pull requests only: a fork has no access to the App credentials below.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    # (And not on a docs-only change: `changes` gates the heavy jobs.)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -145,7 +176,8 @@ jobs:
 
   consumer:
     name: Consumer · ${{ matrix.product }}
-    needs: tarballs
+    needs: [changes, tarballs]
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # `packages: read` only so `${NODE_AUTH_TOKEN}` in the product's .npmrc resolves; every
@@ -264,18 +296,26 @@ jobs:
   ci-required:
     name: CI required
     if: always()
-    needs: [lint, test, tarballs, consumer]
+    needs: [changes, lint, test, tarballs, consumer]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Docs-only change: only `changes` itself must have succeeded; the rest are skipped by design.
+      - name: Nothing here to test (every changed file is ignorable)
+        if: ${{ needs.changes.outputs.run != 'true' }}
+        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
+        with:
+          results: ${{ needs.changes.result }}
+
       - name: lint and test must succeed
+        if: ${{ needs.changes.outputs.run == 'true' }}
         uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@v1
         with:
           results: ${{ needs.lint.result }},${{ needs.test.result }}
 
-      # `always()`: report this too when the step above failed, so one red run shows both.
+      # `always()`: report this too when a step above failed, so one red run shows both.
       - name: consumer jobs must succeed (skipped only off same-repo pull requests)
-        if: always()
+        if: ${{ always() && needs.changes.outputs.run == 'true' }}
         uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@v1
         with:
           results: ${{ needs.tarballs.result }},${{ needs.consumer.result }}

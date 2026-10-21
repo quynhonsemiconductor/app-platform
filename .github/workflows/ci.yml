@@ -49,9 +49,11 @@ jobs:
       - id: paths
         uses: quynhonsemiconductor/ci/actions/changed-paths@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
         with:
+          # DELIBERATELY EMPTY today: `lint` runs `pnpm format:check` over every file including
+          # markdown and docs/, so an ignore list that covered those would let formatting drift
+          # straight past the gate. The changed-paths contract stays wired so a future list is
+          # one edit — narrow it only when the checked paths and the ignore list agree.
           ignore: |
-            **/*.md
-            docs/**
     outputs:
       run: ${{ steps.paths.outputs.run }}
   lint:
@@ -300,7 +302,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # Docs-only change: only `changes` itself must have succeeded; the rest are skipped by design.
+      # Nothing to run (ignore list matched): only `changes` itself must have succeeded.
       - name: Nothing here to test (every changed file is ignorable)
         if: ${{ needs.changes.outputs.run != 'true' }}
         uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
@@ -309,14 +311,14 @@ jobs:
 
       - name: lint and test must succeed
         if: ${{ needs.changes.outputs.run == 'true' }}
-        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@v1
+        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
         with:
           results: ${{ needs.lint.result }},${{ needs.test.result }}
 
       # `always()`: report this too when a step above failed, so one red run shows both.
       - name: consumer jobs must succeed (skipped only off same-repo pull requests)
         if: ${{ always() && needs.changes.outputs.run == 'true' }}
-        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@v1
+        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
         with:
           results: ${{ needs.tarballs.result }},${{ needs.consumer.result }}
           allow-skipped: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository }}

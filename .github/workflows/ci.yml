@@ -4,6 +4,7 @@
 name: CI
 
 on:
+  merge_group:
   push:
     branches: [main]
   # Manual run. Like a push, it is not a pull request, so the consumer jobs skip and the gate

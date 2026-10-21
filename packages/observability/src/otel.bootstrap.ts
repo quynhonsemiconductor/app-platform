@@ -95,15 +95,17 @@ export interface OtelBootstrapOptions {
    */
   httpInstrumentationDuration?: 'drop' | 'keep';
   /**
-   * What to do with the instrument series that nothing reads, and that cost money on the metrics backend (billed per active series).
+   * What to do with the instrument series that nothing reads, and that cost money on the metrics backend (billed per active series, and
+   * per DPM above the included 1 datapoint/minute).
    *
    * - `'drop'` (default): drop, at the SDK, with Views (nothing is created, sent or stored):
    *   - `v8js.gc.duration`: a histogram per GC type, per process;
    *   - `v8js.memory.heap.space.*` (`available_size`, `physical_size`, `size`): a series per heap space (7 or so), per process, per instrument.
-   *   KEPT: `v8js.memory.heap.used` (the heap panel) and `.limit`. NOT dropped, on purpose: `http.client.request.duration`. With
-   *   `@opentelemetry/instrumentation-http` 0.221 (the version rova and opshub lock) it is the ONLY outbound-HTTP series (the legacy
-   *   `http.client.duration` is no longer created), so the "Outbound HTTP client calls" panels must read it
-   *   (`http_client_request_duration_seconds_*`, by `server_address`). An earlier draft of this option dropped it on the wrong premise.
+   *   - `job.duration`: recorded per job name, never visualised. New in 0.6.2: by default it is NO LONGER exported; opt back in with
+   *     `unusedSeries: 'keep'`.
+   *   KEPT: `v8js.memory.heap.used` (the heap panel), `.limit`, and the outbound-HTTP client histograms — Grafana's Unused analysis cannot
+   *   see Terraform-provisioned dashboards, and the products' "Outbound HTTP client calls" panels read
+   *   `http_client_request_duration_seconds_count` (rova `infra/modules/stack/main.tf`, opshub likewise).
    * - `'keep'`: export all of them again, for a product that has a dashboard or alert on one of them.
    */
   unusedSeries?: 'drop' | 'keep';
@@ -127,9 +129,12 @@ const RUNTIME_INSTRUMENTATION_METER = '@opentelemetry/instrumentation-runtime-no
 
 /**
  * Series nothing reads (see {@link OtelBootstrapOptions.unusedSeries}), as `[meter, instrument]`. Selected by METER AND NAME so a product's
- * own instrument that happens to share a name is never touched. `v8js.memory.heap.used` and `.limit` are deliberately absent.
+ * own instrument that happens to share a name is never touched. `v8js.memory.heap.used` and `.limit` are deliberately absent — and so are
+ * the outbound-HTTP client histograms: Grafana Cloud's Cardinality page marks them Unused, but that analysis cannot see Terraform-
+ * provisioned dashboards, and the products' "Outbound HTTP client calls" panels read `http_client_request_duration_seconds_count`.
  */
 const UNUSED_SERIES: readonly (readonly [string, string])[] = [
+  [QNSC_METER, 'job.duration'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.gc.duration'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.available_size'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.physical_size'],

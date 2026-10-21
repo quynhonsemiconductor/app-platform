@@ -47,7 +47,7 @@ jobs:
       pull-requests: read
     steps:
       - id: paths
-        uses: quynhonsemiconductor/ci/actions/changed-paths@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
+        uses: quynhonsemiconductor/ci/actions/changed-paths@691668f7a1bd4f4a3416f9224ae7ff7ebe831a3a # v1.23.0
         with:
           # DELIBERATELY EMPTY today: `lint` runs `pnpm format:check` over every file including
           # markdown and docs/, so an ignore list that covered those would let formatting drift
@@ -226,7 +226,7 @@ jobs:
           name: consumer-tarballs
           path: tarballs
 
-      - uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@v1
+      - uses: quynhonsemiconductor/ci/actions/setup-node-pnpm@691668f7a1bd4f4a3416f9224ae7ff7ebe831a3a # v1.23.0
         with:
           node-version: '24'
           pnpm-version: ${{ matrix.pnpm }}
@@ -305,20 +305,20 @@ jobs:
       # Nothing to run (ignore list matched): only `changes` itself must have succeeded.
       - name: Nothing here to test (every changed file is ignorable)
         if: ${{ needs.changes.outputs.run != 'true' }}
-        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
+        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@691668f7a1bd4f4a3416f9224ae7ff7ebe831a3a # v1.23.0
         with:
           results: ${{ needs.changes.result }}
 
       - name: lint and test must succeed
         if: ${{ needs.changes.outputs.run == 'true' }}
-        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
+        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@691668f7a1bd4f4a3416f9224ae7ff7ebe831a3a # v1.23.0
         with:
           results: ${{ needs.lint.result }},${{ needs.test.result }}
 
       # `always()`: report this too when a step above failed, so one red run shows both.
       - name: consumer jobs must succeed (skipped only off same-repo pull requests)
         if: ${{ always() && needs.changes.outputs.run == 'true' }}
-        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@5a57261635f88c46fa1e6e553f9b930a138b4b2e # v1.22.0
+        uses: quynhonsemiconductor/ci/actions/assert-jobs-succeeded@691668f7a1bd4f4a3416f9224ae7ff7ebe831a3a # v1.23.0
         with:
           results: ${{ needs.tarballs.result }},${{ needs.consumer.result }}
           allow-skipped: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository }}

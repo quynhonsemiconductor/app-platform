@@ -309,8 +309,8 @@ describe('startOtel', () => {
   });
 
   /**
-   * `unusedSeries`: the v8js heap-space and GC series are dropped at the SDK by default. `v8js.memory.heap.used` and instrumentation-http's
-   * `http.client.request.duration` (the ONLY outbound-HTTP series in 0.221) are NOT.
+   * `unusedSeries`: the v8js heap-space and GC series and `job.duration` are dropped at the SDK by default. `v8js.memory.heap.used`,
+   * `.limit`, and the outbound-HTTP client histograms are NOT — the client histograms are live Terraform-provisioned dashboard series.
    */
   describe('unusedSeries', () => {
     beforeEach(() => {
@@ -328,6 +328,7 @@ describe('startOtel', () => {
       startOtel({ defaultServiceName: 'svc', httpInstrumentationDuration: 'keep' });
       expect(dropped().sort()).toEqual(
         [
+          'qnsc|job.duration',
           '@opentelemetry/instrumentation-runtime-node|v8js.gc.duration',
           '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.available_size',
           '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.physical_size',
@@ -416,9 +417,10 @@ describe('startOtel', () => {
       expect(names.some((n) => n.startsWith('v8js.memory.heap.space.'))).toBe(true);
     });
 
-    // The REAL instrumentation-http (0.221, the version rova and opshub lock). The first version of this option dropped
-    // `http.client.request.duration` on the premise that `http.client.duration` was the series a dashboard reads. 0.221 does not create the
-    // legacy name at all, so that dropped the ONLY outbound-HTTP series. This test is what would have failed.
+    // The REAL instrumentation-http (0.221, the version rova and opshub lock). An earlier draft of this option dropped
+    // `http.client.request.duration` on the premise that `http.client.duration` was the series a dashboard reads — and 0.221 does not create
+    // the legacy name, so that draft dropped the ONLY outbound-HTTP series while a dashboard still read it. Grafana's Unused analysis would
+    // have blessed that draft: it cannot see Terraform-provisioned dashboards. This test is what catches it.
     it('against the REAL instrumentation-http: the outbound-HTTP duration is exported by default, and the legacy name does not exist', async () => {
       const { createRequire } = await import('node:module');
       const fromAuto = createRequire(
@@ -509,14 +511,16 @@ describe('startOtel', () => {
       expect(viewsOf()).toBeUndefined();
     });
 
-    it("the drop views never name our meter: HttpMetrics' own series is not selected", () => {
+    it('on our meter the only drop is `job.duration` — HttpMetrics series stay, and the assertion is not vacuous', () => {
       startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: [1, 2] });
-      for (const view of viewsOf()!) {
-        if ((view['aggregation'] as { type: unknown }).type === AggregationType.DROP) {
-          // every drop names a THIRD-PARTY instrumentation's meter, never `qnsc` (and always names one)
-          expect(view['meterName']).toMatch(/^@opentelemetry\/instrumentation-/);
-        }
-      }
+      const onOurMeter = (viewsOf() ?? []).filter(
+        (v) =>
+          v['meterName'] === 'qnsc' &&
+          (v['aggregation'] as { type: unknown }).type === AggregationType.DROP,
+      );
+      // assert the qnsc drop view EXISTS first, or the loop below proves nothing when the list changes
+      expect(onOurMeter).toHaveLength(1);
+      expect(onOurMeter[0]['instrumentName']).toBe('job.duration');
     });
 
     // The REAL instrumentation, from the version this repository locks (0.221): which instruments it creates, on

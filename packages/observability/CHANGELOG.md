@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.2](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.6.1...observability-v0.6.2) (2026-10-21)
+
+
+### 🐛 Bug Fixes
+
+* **observability:** drop job.duration from the default metric export ([#293](https://github.com/quynhonsemiconductor/app-platform/issues/293)) ([9444c86](https://github.com/quynhonsemiconductor/app-platform/commit/9444c861473278d716037e24c3b006017a7d98f6))
+
+## [0.6.1](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.6.0...observability-v0.6.1) (2026-10-20)
+
+
+### 🐛 Bug Fixes
+
+* **observability:** export metrics every 60s by default to stay in the free tier ([#281](https://github.com/quynhonsemiconductor/app-platform/issues/281)) ([afe6f4a](https://github.com/quynhonsemiconductor/app-platform/commit/afe6f4af2f9ed15a4ecdd99b90dedb0d6f3a5ddb))
+
 ## [0.6.0](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.5.0...observability-v0.6.0) (2026-10-16)
 
 

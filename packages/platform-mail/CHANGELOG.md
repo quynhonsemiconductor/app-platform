@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.5...platform-mail-v0.1.6) (2026-10-20)
+
+
+### ✨ Features
+
+* **mail:** read the Graph certificate from AZURE_CLIENT_CERTIFICATE_PATH ([#284](https://github.com/quynhonsemiconductor/app-platform/issues/284)) ([5889bb3](https://github.com/quynhonsemiconductor/app-platform/commit/5889bb33aa1248547849a54c31aacafd3297a146))
+
 ## [0.1.5](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.4...platform-mail-v0.1.5) (2026-10-18)
 
 

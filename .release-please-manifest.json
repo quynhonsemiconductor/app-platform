@@ -2,9 +2,9 @@
   "packages/identity": "8.4.2",
   "packages/platform-cache": "3.3.1",
   "packages/platform-http": "5.0.0",
-  "packages/observability": "0.6.0",
-  "packages/platform-runtime": "0.3.1",
+  "packages/observability": "0.6.2",
+  "packages/platform-runtime": "0.3.2",
   "packages/platform-db": "0.1.2",
   "packages/platform-jobs": "0.1.2",
-  "packages/platform-mail": "0.1.5"
+  "packages/platform-mail": "0.1.6"
 }

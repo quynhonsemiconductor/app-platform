@@ -25,6 +25,8 @@ import { PROBE_PATHS } from './ignored-paths';
 import {
   __ignoredRequestPaths,
   resetOtelForTesting,
+  DEFAULT_METRIC_EXPORT_INTERVAL_MS,
+  resolveMetricExportInterval,
   shutdownOtel,
   startOtel,
 } from './otel.bootstrap';
@@ -307,8 +309,8 @@ describe('startOtel', () => {
   });
 
   /**
-   * `unusedSeries`: the v8js heap-space and GC series are dropped at the SDK by default. `v8js.memory.heap.used` and instrumentation-http's
-   * `http.client.request.duration` (the ONLY outbound-HTTP series in 0.221) are NOT.
+   * `unusedSeries`: the v8js heap-space and GC series and `job.duration` are dropped at the SDK by default. `v8js.memory.heap.used`,
+   * `.limit`, and the outbound-HTTP client histograms are NOT — the client histograms are live Terraform-provisioned dashboard series.
    */
   describe('unusedSeries', () => {
     beforeEach(() => {
@@ -326,6 +328,7 @@ describe('startOtel', () => {
       startOtel({ defaultServiceName: 'svc', httpInstrumentationDuration: 'keep' });
       expect(dropped().sort()).toEqual(
         [
+          'qnsc|job.duration',
           '@opentelemetry/instrumentation-runtime-node|v8js.gc.duration',
           '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.available_size',
           '@opentelemetry/instrumentation-runtime-node|v8js.memory.heap.space.physical_size',
@@ -414,9 +417,10 @@ describe('startOtel', () => {
       expect(names.some((n) => n.startsWith('v8js.memory.heap.space.'))).toBe(true);
     });
 
-    // The REAL instrumentation-http (0.221, the version rova and opshub lock). The first version of this option dropped
-    // `http.client.request.duration` on the premise that `http.client.duration` was the series a dashboard reads. 0.221 does not create the
-    // legacy name at all, so that dropped the ONLY outbound-HTTP series. This test is what would have failed.
+    // The REAL instrumentation-http (0.221, the version rova and opshub lock). An earlier draft of this option dropped
+    // `http.client.request.duration` on the premise that `http.client.duration` was the series a dashboard reads — and 0.221 does not create
+    // the legacy name, so that draft dropped the ONLY outbound-HTTP series while a dashboard still read it. Grafana's Unused analysis would
+    // have blessed that draft: it cannot see Terraform-provisioned dashboards. This test is what catches it.
     it('against the REAL instrumentation-http: the outbound-HTTP duration is exported by default, and the legacy name does not exist', async () => {
       const { createRequire } = await import('node:module');
       const fromAuto = createRequire(
@@ -507,14 +511,16 @@ describe('startOtel', () => {
       expect(viewsOf()).toBeUndefined();
     });
 
-    it("the drop views never name our meter: HttpMetrics' own series is not selected", () => {
+    it('on our meter the only drop is `job.duration` — HttpMetrics series stay, and the assertion is not vacuous', () => {
       startOtel({ defaultServiceName: 'svc', httpDurationBoundaries: [1, 2] });
-      for (const view of viewsOf()!) {
-        if ((view['aggregation'] as { type: unknown }).type === AggregationType.DROP) {
-          // every drop names a THIRD-PARTY instrumentation's meter, never `qnsc` (and always names one)
-          expect(view['meterName']).toMatch(/^@opentelemetry\/instrumentation-/);
-        }
-      }
+      const onOurMeter = (viewsOf() ?? []).filter(
+        (v) =>
+          v['meterName'] === 'qnsc' &&
+          (v['aggregation'] as { type: unknown }).type === AggregationType.DROP,
+      );
+      // assert the qnsc drop view EXISTS first, or the loop below proves nothing when the list changes
+      expect(onOurMeter).toHaveLength(1);
+      expect(onOurMeter[0]['instrumentName']).toBe('job.duration');
     });
 
     // The REAL instrumentation, from the version this repository locks (0.221): which instruments it creates, on
@@ -922,4 +928,79 @@ describe('shutdownOtel', () => {
     expect(shutdown).toHaveBeenCalledTimes(1);
     delete process.env['OTEL_ENABLED'];
   });
+});
+
+describe('metric export interval', () => {
+  beforeEach(() => {
+    resetOtelForTesting();
+    process.env['OTEL_ENABLED'] = 'true';
+    delete process.env['OTEL_METRIC_EXPORT_INTERVAL'];
+  });
+
+  afterEach(() => {
+    resetOtelForTesting();
+    delete process.env['OTEL_ENABLED'];
+    delete process.env['OTEL_METRIC_EXPORT_INTERVAL'];
+  });
+
+  // The SDK keeps the interval on the reader; reading it back proves the value reaches the
+  // exporter, not only that the resolver works in isolation.
+  const readerOf = () =>
+    (
+      nodeSdkConstructor.mock.calls.at(-1)![0] as {
+        metricReader: { _exportInterval: number; _exportTimeout: number };
+      }
+    ).metricReader;
+  const exportIntervalOf = () => readerOf()._exportInterval;
+
+  it('reaches the metric reader at 60 seconds by default', () => {
+    startOtel({ defaultServiceName: 'svc' });
+    expect(exportIntervalOf()).toBe(60_000);
+  });
+
+  it("keeps the SDK's 30 s export timeout at the default interval", () => {
+    startOtel({ defaultServiceName: 'svc' });
+    expect(readerOf()._exportTimeout).toBe(30_000);
+  });
+
+  // The SDK throws when the timeout exceeds the interval; a 1 s override must start cleanly.
+  it('caps the export timeout at the interval so a short override starts', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '1000';
+    expect(() => startOtel({ defaultServiceName: 'svc' })).not.toThrow();
+    expect(readerOf()._exportTimeout).toBeLessThanOrEqual(1_000);
+  });
+
+  it('reaches the metric reader when overridden', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '15000';
+    startOtel({ defaultServiceName: 'svc' });
+    expect(exportIntervalOf()).toBe(15_000);
+  });
+
+  // Free tier bills one data point per minute; 60 s is the default for every environment.
+  it('is 60 seconds by default, in production and develop alike', () => {
+    expect(DEFAULT_METRIC_EXPORT_INTERVAL_MS).toBe(60_000);
+    expect(resolveMetricExportInterval(undefined)).toBe(60_000);
+  });
+
+  it('is overridable with OTEL_METRIC_EXPORT_INTERVAL in milliseconds', () => {
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'] = '15000';
+    expect(resolveMetricExportInterval(process.env['OTEL_METRIC_EXPORT_INTERVAL'])).toBe(15_000);
+  });
+
+  // A bad value must not reach the SDK: a zero or negative interval is a busy loop or a timer
+  // that never fires, and an unparseable one would be NaN. '1000.5' is the whole-number check
+  // above the minimum: a laxer regex would read it as 1000.5 and start the reader on it.
+  it.each(['', 'soon', '0', '-5', '15abc', '1.5', '1', '1000.5'])(
+    'falls back to the default for %o and says so',
+    (value) => {
+      const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+
+      expect(resolveMetricExportInterval(value)).toBe(60_000);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining('OTEL_METRIC_EXPORT_INTERVAL'),
+        'OtelMetricIntervalWarning',
+      );
+      warning.mockRestore();
+    },
+  );
 });

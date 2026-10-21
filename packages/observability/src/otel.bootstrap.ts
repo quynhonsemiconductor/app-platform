@@ -95,15 +95,17 @@ export interface OtelBootstrapOptions {
    */
   httpInstrumentationDuration?: 'drop' | 'keep';
   /**
-   * What to do with the instrument series that nothing reads, and that cost money on the metrics backend (billed per active series).
+   * What to do with the instrument series that nothing reads, and that cost money on the metrics backend (billed per active series, and
+   * per DPM above the included 1 datapoint/minute).
    *
    * - `'drop'` (default): drop, at the SDK, with Views (nothing is created, sent or stored):
    *   - `v8js.gc.duration`: a histogram per GC type, per process;
    *   - `v8js.memory.heap.space.*` (`available_size`, `physical_size`, `size`): a series per heap space (7 or so), per process, per instrument.
-   *   KEPT: `v8js.memory.heap.used` (the heap panel) and `.limit`. NOT dropped, on purpose: `http.client.request.duration`. With
-   *   `@opentelemetry/instrumentation-http` 0.221 (the version rova and opshub lock) it is the ONLY outbound-HTTP series (the legacy
-   *   `http.client.duration` is no longer created), so the "Outbound HTTP client calls" panels must read it
-   *   (`http_client_request_duration_seconds_*`, by `server_address`). An earlier draft of this option dropped it on the wrong premise.
+   *   - `job.duration`: recorded per job name, never visualised. New in 0.6.2: by default it is NO LONGER exported; opt back in with
+   *     `unusedSeries: 'keep'`.
+   *   KEPT: `v8js.memory.heap.used` (the heap panel), `.limit`, and the outbound-HTTP client histograms — Grafana's Unused analysis cannot
+   *   see Terraform-provisioned dashboards, and the products' "Outbound HTTP client calls" panels read
+   *   `http_client_request_duration_seconds_count` (rova `infra/modules/stack/main.tf`, opshub likewise).
    * - `'keep'`: export all of them again, for a product that has a dashboard or alert on one of them.
    */
   unusedSeries?: 'drop' | 'keep';
@@ -127,9 +129,12 @@ const RUNTIME_INSTRUMENTATION_METER = '@opentelemetry/instrumentation-runtime-no
 
 /**
  * Series nothing reads (see {@link OtelBootstrapOptions.unusedSeries}), as `[meter, instrument]`. Selected by METER AND NAME so a product's
- * own instrument that happens to share a name is never touched. `v8js.memory.heap.used` and `.limit` are deliberately absent.
+ * own instrument that happens to share a name is never touched. `v8js.memory.heap.used` and `.limit` are deliberately absent — and so are
+ * the outbound-HTTP client histograms: Grafana Cloud's Cardinality page marks them Unused, but that analysis cannot see Terraform-
+ * provisioned dashboards, and the products' "Outbound HTTP client calls" panels read `http_client_request_duration_seconds_count`.
  */
 const UNUSED_SERIES: readonly (readonly [string, string])[] = [
+  [QNSC_METER, 'job.duration'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.gc.duration'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.available_size'],
   [RUNTIME_INSTRUMENTATION_METER, 'v8js.memory.heap.space.physical_size'],
@@ -205,6 +210,34 @@ function validateHttpDurationBoundaries(boundaries: number[]): void {
       }
     }
   }
+}
+
+/**
+ * Metric export interval in milliseconds. Grafana Cloud's free tier bills active series at
+ * one data point per minute, so every faster export multiplies the billable samples: the
+ * former 30 s prod and 10 s develop cadence put the stack at roughly 2x and 6x the free
+ * cap. 60 s is the free-tier rate. Overridable with OTEL_METRIC_EXPORT_INTERVAL. A
+ * non-positive or unparseable override falls back to the default and says so, as the
+ * sampling override does: the SDK would otherwise export on a timer it cannot honour.
+ */
+export const DEFAULT_METRIC_EXPORT_INTERVAL_MS = 60_000;
+/** Below one second the exporter would fire more often than the free tier can absorb. */
+const MIN_METRIC_EXPORT_INTERVAL_MS = 1_000;
+
+export function resolveMetricExportInterval(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_METRIC_EXPORT_INTERVAL_MS;
+
+  // Strict: `Number.parseInt` would read '15abc' as 15 and `Number('1.5')` is not whole, so
+  // the value must be all digits and at least the minimum, or the default is used.
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!(parsed >= MIN_METRIC_EXPORT_INTERVAL_MS)) {
+    process.emitWarning(
+      `OTEL_METRIC_EXPORT_INTERVAL=${JSON.stringify(raw)} is not a whole number of milliseconds of at least ${MIN_METRIC_EXPORT_INTERVAL_MS}; using ${DEFAULT_METRIC_EXPORT_INTERVAL_MS}.`,
+      'OtelMetricIntervalWarning',
+    );
+    return DEFAULT_METRIC_EXPORT_INTERVAL_MS;
+  }
+  return parsed;
 }
 
 /**
@@ -291,6 +324,9 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
   const serviceName =
     process.env[options.serviceNameEnvVar ?? 'OTEL_SERVICE_NAME'] ?? options.defaultServiceName;
   const endpoint = process.env['OTEL_EXPORTER_OTLP_ENDPOINT'] ?? 'http://localhost:4318';
+  const metricExportIntervalMs = resolveMetricExportInterval(
+    process.env['OTEL_METRIC_EXPORT_INTERVAL'],
+  );
 
   // Head-sampling ratio: `parentbased_traceidratio`, default 0.1 in production and 1.0
   // elsewhere, overridable with OTEL_SAMPLING_PROBABILITY (the variable the products'
@@ -382,7 +418,10 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
 
     metricReader: new PeriodicExportingMetricReader({
       exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
-      exportIntervalMillis: isProd ? 30_000 : 10_000,
+      exportIntervalMillis: metricExportIntervalMs,
+      // The SDK refuses a timeout longer than the interval, so a short override must cap it or
+      // startup throws.
+      exportTimeoutMillis: Math.min(30_000, metricExportIntervalMs),
     }),
 
     // Spread, not `views: views` — when the caller omits the option the key must be

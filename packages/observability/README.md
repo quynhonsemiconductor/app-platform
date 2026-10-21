@@ -173,7 +173,8 @@ fails in local dev and CI rather than waiting for the one environment that has
 telemetry switched on.
 
 Only `HttpMetrics`' `http.server.duration` is affected (the view is scoped to its meter, `qnsc`).
-`job.duration` and every other instrument keep their defaults.
+Every other instrument keeps its defaults here — `job.duration`'s export is governed by
+`unusedSeries` below, not by this option.
 
 ### One source of truth for the request duration (`httpInstrumentationDuration`)
 
@@ -503,10 +504,12 @@ reads. With `OTEL_ENABLED` unset, `startOtel` is a no-op and tests run without a
 
 ## Unused series and the log `env` field
 
-- **`unusedSeries`** (`startOtel`, default `'drop'`): drops, at the SDK with Views, `v8js.gc.duration` and `v8js.memory.heap.space.*`
-  (`available_size`, `physical_size`, `size`). Kept: `v8js.memory.heap.used` and `.limit`. **`http.client.request.duration` is NOT dropped:** with
+- **`unusedSeries`** (`startOtel`, default `'drop'`): drops, at the SDK with Views, `v8js.gc.duration`, `v8js.memory.heap.space.*`
+  (`available_size`, `physical_size`, `size`) and `job.duration` (new in 0.6.2: no dashboard or alert ever read it; pass `'keep'` to export it
+  again). Kept: `v8js.memory.heap.used` and `.limit`. **`http.client.request.duration` is NOT dropped:** with
   `@opentelemetry/instrumentation-http` 0.221 it is the only outbound-HTTP series (the legacy `http.client.duration` is no longer created), so the
-  products' "Outbound HTTP client calls" panels read `http_client_request_duration_seconds_count` by `server_address`. A test runs the real
-  instrumentation and fails if it is dropped. Pass `'keep'` if a dashboard or alert reads a dropped `v8js` name.
+  products' "Outbound HTTP client calls" panels read `http_client_request_duration_seconds_count` by `server_address` — and Grafana Cloud's
+  Unused analysis cannot see Terraform-provisioned dashboards, which is exactly the trap a too-eager drop here would fall into. A test runs the
+  real instrumentation and fails if it is dropped.
 - **Log `env`** is the deployment environment: `createLoggerOptions({ deploymentEnv })`, else `DEPLOYMENT_ENV`, else `nodeEnv`. It used to be `NODE_ENV`,
   which products pin to `production` in develop, so every develop line said `"env":"production"`.

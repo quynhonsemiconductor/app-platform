@@ -6,7 +6,15 @@ import {
   createLogCapture,
   runLoggingConformance,
 } from '@quynhonsemiconductor/observability/testing';
-import { boundPort, installProcessErrorHandlers, prepareHttpApp, prepareWorkerApp } from './index';
+import {
+  HTTP_HEADERS_TIMEOUT_MS,
+  HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  boundPort,
+  installProcessErrorHandlers,
+  prepareHttpApp,
+  prepareWorkerApp,
+  type HttpAppOptions,
+} from './index';
 
 const ENV = {
   NODE_ENV: 'production', // pinned to production in deployed environments on purpose
@@ -172,6 +180,78 @@ describe('the shared bootstrap writes the log contract', () => {
     } finally {
       await app.close();
     }
+  });
+
+  describe('HTTP server keep-alive alignment', () => {
+    const timeouts = async (
+      http?: HttpAppOptions['http'],
+    ): Promise<{ keepAlive: number; headers: number; requestTimeout: number }> => {
+      const app = await prepareHttpApp({
+        module: async () => HttpProductModule,
+        env: ENV,
+        logStream: createLogCapture().stream,
+        ...(http ? { http } : {}),
+      });
+      await app.listen(0, '127.0.0.1');
+      try {
+        const server = app.getHttpServer();
+        expect(server.keepAliveTimeout).toBeDefined();
+        expect(server.headersTimeout).toBeDefined();
+        // Fastify's own setup ran: its requestTimeout default (0, unlike Node's 300 s) is intact.
+        expect(server.requestTimeout).toBe(0);
+        return {
+          keepAlive: server.keepAliveTimeout,
+          headers: server.headersTimeout,
+          requestTimeout: server.requestTimeout,
+        };
+      } finally {
+        await app.close();
+      }
+    };
+
+    it('defaults: keepAliveTimeout 65 s and headersTimeout 66 s, above a 60 s proxy idle so no request lands on a closing socket', async () => {
+      expect(await timeouts()).toEqual({
+        keepAlive: HTTP_KEEP_ALIVE_TIMEOUT_MS,
+        headers: HTTP_HEADERS_TIMEOUT_MS,
+        requestTimeout: 0,
+      });
+      expect(HTTP_KEEP_ALIVE_TIMEOUT_MS).toBe(65_000);
+      expect(HTTP_HEADERS_TIMEOUT_MS).toBe(66_000);
+    });
+
+    it('the product can override both, and a real request still routes on the overridden server', async () => {
+      const app = await prepareHttpApp({
+        module: async () => HttpProductModule,
+        env: ENV,
+        logStream: createLogCapture().stream,
+        http: { keepAliveTimeoutMs: 10_000, headersTimeoutMs: 11_000 },
+      });
+      await app.listen(0, '127.0.0.1');
+      try {
+        const server = app.getHttpServer();
+        expect(server.keepAliveTimeout).toBe(10_000);
+        expect(server.headersTimeout).toBe(11_000);
+        const port = boundPort(app, 0);
+        const res = await fetch(`http://127.0.0.1:${port}/ping`);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ ok: true });
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('refuses a boot whose headersTimeout does not sit above the keep-alive', async () => {
+      await expect(
+        prepareHttpApp({
+          module: async () => HttpProductModule,
+          env: ENV,
+          logStream: createLogCapture().stream,
+          http: { keepAliveTimeoutMs: 10_000, headersTimeoutMs: 10_000 },
+        }),
+      ).rejects.toThrow(
+        /headersTimeoutMs \(10000\) must be greater than http.keepAliveTimeoutMs \(10000\)/,
+      );
+    });
   });
 
   it('with no OTEL_SERVICE_NAME, every line says the product\'s default service name (as OpenTelemetry does), never "app" or "bootstrap"', async () => {

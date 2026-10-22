@@ -60,7 +60,7 @@
     "@quynhonsemiconductor/platform-db": ">=0.1.1",
     "@quynhonsemiconductor/platform-http": ">=4.1.0",
     "drizzle-orm": ">=0.45.2 <1",
-    "fastify": ">=5",
+    "fastify": ">=5.12.6",
     "pg": ">=8.11",
     "ioredis": ">=5"
   },

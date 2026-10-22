@@ -326,7 +326,9 @@ Acceptance: used by WP-2 and WP-7 tests; CI runs them (Docker available on GitHu
 Run the seven scenarios in `PORTFOLIO-TECH-REVIEW.md` §2A.6 plus: per-queue polling interval of
 ≤1 s measured end-to-end; enqueue through a Drizzle transaction via the `DbExecutor` from WP-2.
 Pass → WP-7 builds on pg-boss. Fail → WP-7 builds the **same public API** on BullMQ + a Postgres
-outbox. Record the result as an ADR.
+outbox. Record the result as an ADR. (The spike code at `spikes/pg-boss/` has since been removed
+from the repository; the verdict and measurements it produced are preserved in
+[ADR 0001](./adr/0001-job-queue.md).)
 
 ### 6.7 WP-7 — `platform-jobs` (W3–W4)
 

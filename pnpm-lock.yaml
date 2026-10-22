@@ -36,7 +36,7 @@ importers:
         specifier: ^24.19.1
         version: 24.19.2
       '@vitest/coverage-v8':
-        specifier: ^4.1.11
+        specifier: ^4.1.12
         version: 4.1.12(vitest@4.1.12)
       eslint:
         specifier: ^9.17.0
@@ -54,7 +54,7 @@ importers:
         specifier: ^8.18.0
         version: 8.71.2(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
       vitest:
-        specifier: ^4.1.11
+        specifier: ^4.1.12
         version: 4.1.12(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@4.1.12)(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)(yaml@2.9.0))
 
   packages/identity:

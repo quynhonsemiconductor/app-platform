@@ -5,8 +5,6 @@ import { MailConfigError } from './errors';
 /** What the environment can say. `process.env` in production; a plain object in tests. */
 export type MailEnv = Readonly<Record<string, string | undefined>>;
 
-export type MailTransportName = 'graph' | 'smtp';
-
 export interface GraphConfig {
   transport: 'graph';
   /** The product's shared mailbox, e.g. `noreply-academy@qnsc.vn`. */

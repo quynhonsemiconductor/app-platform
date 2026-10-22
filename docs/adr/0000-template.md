@@ -13,7 +13,7 @@ platform contract), and what was measured. Facts only; the decision comes later.
 ## Decision
 
 What we will do, in the active voice: "We will …". If a spike produced it, say which scenarios
-passed, with the numbers, and link the code under `spikes/`.
+passed, with the numbers, and link the code (a permalink if the spike directories have since been removed from the repo).
 
 ## Alternatives considered
 

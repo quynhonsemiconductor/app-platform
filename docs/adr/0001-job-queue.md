@@ -19,13 +19,13 @@ made that adoption conditional on a two-day spike over seven scenarios; WP-6 add
 The fallback if it fails is BullMQ on a persistent Valkey plus a Postgres outbox, behind the same
 `platform-jobs` API (R1).
 
-**What was run.** `spikes/pg-boss/` (private, never published, not in the root `pnpm test`). It
+**What was run.** [`spikes/pg-boss/`](https://github.com/quynhonsemiconductor/app-platform/tree/19c6e309e66ae272a1d6cbf7a1b64b2179f81dff/spikes/pg-boss) (private, never published, not in the root `pnpm test`). It
 uses pg-boss **12.37.0** — pinned exactly; 12.37.1 was published 2026-10-08 and the repo's pnpm
 `minimumReleaseAge` refuses it until it has aged a day, so WP-7 starts from 12.37.0 or from
 12.37.1 once that gate opens. The database is PostgreSQL 18 over **verified TLS** (a CA generated
 per run) through `platform-db`'s `createPool`; pg-boss never opens a connection of its own.
 Workers that are killed or drained are real OS processes, and "killed" means SIGKILL. Every
-number below is in `spikes/pg-boss/results/*.json`, written by the runs themselves.
+number below is in [`spikes/pg-boss/results/*.json`](https://github.com/quynhonsemiconductor/app-platform/tree/19c6e309e66ae272a1d6cbf7a1b64b2179f81dff/spikes/pg-boss/results), written by the runs themselves.
 
 **Environment and its limits.** One developer machine (macOS, Docker Desktop VM, 12 CPUs), Node
 24.11.1, Grafana 13.0.2. The load test's database was capped at 2 CPUs / 2 GiB. Nothing here ran

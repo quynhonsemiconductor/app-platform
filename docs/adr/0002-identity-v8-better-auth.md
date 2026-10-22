@@ -17,7 +17,7 @@ product knobs, env-only configuration, framework-agnostic core plus a `/nest` ad
 dependencies WP-9 is told to use: `platform-db` 0.1.1 (`DbExecutor`, `withTransaction`, `/nest`),
 `platform-cache` 3.1.1, `platform-http` 4.1.0 (`clientIp`), and a `platform-jobs` / `platform-mail` API of
 the §6.7 / §6.8 shape. The last two do not exist yet (WP-7, WP-8), and the WP-6 pg-boss spike has not
-merged, so `spikes/better-auth/src/jobs/` is a **stand-in** with the same shape and the same observable
+merged, so [`spikes/better-auth/src/jobs/`](https://github.com/quynhonsemiconductor/app-platform/tree/19c6e309e66ae272a1d6cbf7a1b64b2179f81dff/spikes/better-auth/src/jobs) is a **stand-in** with the same shape and the same observable
 semantics (job row written through the caller's `DbExecutor`; a duplicate idempotency key returns
 `null`). It is not pg-boss.
 
@@ -31,14 +31,14 @@ Versions under test, all pinned exactly: `better-auth` 1.7.7, `@better-auth/sso`
 criterion 11 produced a list of differences from the plan (below). None of them is a blocker; each is
 either already solved in the spike code or is a named requirement for WP-10. Option C is not needed.
 
-Code: [`spikes/better-auth/`](../../spikes/better-auth/) (README there). Evidence: **111 tests in 12
-files, all passing, ~10 s** (`cd spikes/better-auth && pnpm test`), run three times in a row without a
+Code: [`spikes/better-auth/`](https://github.com/quynhonsemiconductor/app-platform/tree/19c6e309e66ae272a1d6cbf7a1b64b2179f81dff/spikes/better-auth) (README there; the spike directories have since been removed from the repo, so this links a permalink). Evidence: **111 tests in 12
+files, all passing, ~10 s** ([`cd spikes/better-auth && pnpm test`](https://github.com/quynhonsemiconductor/app-platform/tree/19c6e309e66ae272a1d6cbf7a1b64b2179f81dff/spikes/better-auth)), run three times in a row without a
 failure. `pnpm build && pnpm typecheck && pnpm test && pnpm lint` at the repo root are unaffected (the
 spike is outside the pnpm workspace) and its own lockfile is clean under `osv-scanner`.
 
 ### Criteria and evidence
 
-Each row names the test file in `spikes/better-auth/test/`. "Mock IdP" means the local OpenID Provider in
+Each row names the test file in [`spikes/better-auth/test/`](https://github.com/quynhonsemiconductor/app-platform/tree/19c6e309e66ae272a1d6cbf7a1b64b2179f81dff/spikes/better-auth/test). "Mock IdP" means the local OpenID Provider in
 `test/support/mock-idp.ts`, because no Entra tenant is reachable from here (see Manual checks).
 
 | #   | Criterion                                                                                             | Result                   | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -353,7 +353,7 @@ solodesk is retired: its repository is archived and it is no longer a consumer o
 amendment changes nothing in the decision; it only records what the references to solodesk above now mean.
 
 - **Criterion 8 still holds, and is still tested.** The result (hashes minted by solodesk's own code path
-  verify through the v8 password override) stays as the record of the spike, and `c08` stays in `spikes/`
+  verify through the v8 password override) stays as the record of the spike, and `c08` stays in [`spikes/`](https://github.com/quynhonsemiconductor/app-platform/tree/19c6e309e66ae272a1d6cbf7a1b64b2179f81dff/spikes)
   untouched. The behaviour it proved is not solodesk-specific: PHC strings carry their parameters, so
   `identity`'s conformance kit keeps a product-neutral case, "verifies an argon2id hash minted with other
   parameters (existing product hashes)".

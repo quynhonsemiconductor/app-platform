@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.0.1](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v5.0.0...platform-http-v5.0.1) (2026-10-23)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** fastify 5.12.7 for GHSA-389g-gv7q-r4x8 ([#297](https://github.com/quynhonsemiconductor/app-platform/issues/297)) ([57cd0e7](https://github.com/quynhonsemiconductor/app-platform/commit/57cd0e775afac35a4a1e3203c26d192c78a345bf))
+
 ## [5.0.0](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v4.3.0...platform-http-v5.0.0) (2026-10-13)
 
 

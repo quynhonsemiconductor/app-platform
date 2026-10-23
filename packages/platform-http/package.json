@@ -34,7 +34,7 @@
     "fastify": ">=5",
     "ioredis": ">=5",
     "nestjs-zod": ">=5",
-    "zod": ">=4"
+    "zod": ">=4.6.6"
   },
   "devDependencies": {
     "@quynhonsemiconductor/observability": "workspace:^",

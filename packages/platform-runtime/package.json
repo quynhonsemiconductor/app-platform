@@ -43,7 +43,7 @@
     "@quynhonsemiconductor/observability": ">=0.5.0",
     "@quynhonsemiconductor/platform-cache": ">=3.2.0",
     "fastify": ">=5",
-    "zod": ">=4",
+    "zod": ">=4.6.6",
     "@quynhonsemiconductor/platform-db": ">=0.1.0",
     "@nestjs/platform-fastify": ">=11",
     "nestjs-pino": ">=4",

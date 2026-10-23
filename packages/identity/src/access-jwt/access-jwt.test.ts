@@ -268,18 +268,28 @@ describe('createAccessJwtVerifier', () => {
     });
   });
 
+  it('a JWKS carrying the same kid twice is a JWKS problem (jwks_unavailable), not a bad token', async () => {
+    const dupe = await rsaKey('kid-a'); // same kid as keyA, served twice
+    await jwks.setKeys([keyA.publicJwk as never, dupe.publicJwk as never]);
+    const verifier = createAccessJwtVerifier(configFor(jwks.origin));
+    await expect(verifier.verify(await token({}))).rejects.toMatchObject({
+      code: 'jwks_unavailable',
+    });
+    await jwks.setKeys([keyA.publicJwk as never]); // put the fixture back
+  });
+
   it('rejects a malformed token', async () => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin));
     await expect(verifier.verify('not-a-jwt')).rejects.toMatchObject({ code: 'malformed' });
   });
 
   it('rejects a config with a non-origin teamDomain', () => {
-    expect(() => createAccessJwtVerifier(configFor('qnsic.cloudflareaccess.com'))).toThrow(
+    expect(() => createAccessJwtVerifier(configFor('example-team.cloudflareaccess.com'))).toThrow(
       AccessJwtError,
     );
-    expect(() => createAccessJwtVerifier(configFor('ftp://qnsic.cloudflareaccess.com'))).toThrow(
-      AccessJwtError,
-    );
+    expect(() =>
+      createAccessJwtVerifier(configFor('ftp://example-team.cloudflareaccess.com')),
+    ).toThrow(AccessJwtError);
   });
 
   it('rejects a config without an audience', () => {

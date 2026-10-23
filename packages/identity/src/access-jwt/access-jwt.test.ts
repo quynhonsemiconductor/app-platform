@@ -32,11 +32,14 @@ async function startJwksServer(): Promise<JwksServer> {
     setKeys: async (next) => {
       keys = next;
     },
-    close: () => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+    close: () =>
+      new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
   };
 }
 
-async function rsaKey(kid: string): Promise<{ privateJwk: Record<string, unknown>; publicJwk: Record<string, unknown> }> {
+async function rsaKey(
+  kid: string,
+): Promise<{ privateJwk: Record<string, unknown>; publicJwk: Record<string, unknown> }> {
   const { publicKey, privateKey } = await generateKeyPair('RS256', { extractable: true });
   return {
     privateJwk: { ...(await exportJWK(privateKey)), kid, alg: 'RS256' },
@@ -65,7 +68,13 @@ const BASE_CLAIMS = {
 };
 
 function configFor(origin: string, overrides: Partial<AccessJwtConfig> = {}): AccessJwtConfig {
-  return { teamDomain: origin, audience: 'test-aud-tag.access', clockToleranceSeconds: 5, jwksCooldownSeconds: 0, ...overrides };
+  return {
+    teamDomain: origin,
+    audience: 'test-aud-tag.access',
+    clockToleranceSeconds: 5,
+    jwksCooldownSeconds: 0,
+    ...overrides,
+  };
 }
 
 describe('createAccessJwtVerifier', () => {
@@ -83,10 +92,20 @@ describe('createAccessJwtVerifier', () => {
     await jwks.close();
   });
 
-  function token(claims: Record<string, unknown>, key = keyA, kid = 'kid-a', alg = 'RS256'): Promise<string> {
+  function token(
+    claims: Record<string, unknown>,
+    key = keyA,
+    kid = 'kid-a',
+    alg = 'RS256',
+  ): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
     const fresh = { exp: now + 600, iat: now, nbf: now };
-    return signToken(key.privateJwk, { ...BASE_CLAIMS, ...fresh, iss: jwks.origin, ...claims }, kid, alg);
+    return signToken(
+      key.privateJwk,
+      { ...BASE_CLAIMS, ...fresh, iss: jwks.origin, ...claims },
+      kid,
+      alg,
+    );
   }
 
   it('verifies a valid token and maps oid, email, sub', async () => {
@@ -112,8 +131,12 @@ describe('createAccessJwtVerifier', () => {
     const raw = await token({});
     const [head, , sig] = raw.split('.');
     // Flip the subject inside the payload, keep the signature: verification must fail.
-    const forgedPayload = Buffer.from(JSON.stringify({ ...BASE_CLAIMS, iss: jwks.origin, sub: 'attacker' })).toString('base64url');
-    await expect(verifier.verify(`${head}.${forgedPayload}.${sig}`)).rejects.toMatchObject({ code: 'invalid_signature' });
+    const forgedPayload = Buffer.from(
+      JSON.stringify({ ...BASE_CLAIMS, iss: jwks.origin, sub: 'attacker' }),
+    ).toString('base64url');
+    await expect(verifier.verify(`${head}.${forgedPayload}.${sig}`)).rejects.toMatchObject({
+      code: 'invalid_signature',
+    });
   });
 
   it('rejects a symmetric-algorithm token (alg confusion)', async () => {
@@ -128,7 +151,9 @@ describe('createAccessJwtVerifier', () => {
   it('rejects an expired token', async () => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin));
     const now = Math.floor(Date.now() / 1000);
-    await expect(verifier.verify(await token({ exp: now - 300, iat: now - 600, nbf: now - 600 }))).rejects.toMatchObject({
+    await expect(
+      verifier.verify(await token({ exp: now - 300, iat: now - 600, nbf: now - 600 })),
+    ).rejects.toMatchObject({
       code: 'expired',
     });
   });
@@ -136,14 +161,18 @@ describe('createAccessJwtVerifier', () => {
   it('rejects a not-yet-valid token', async () => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin));
     const now = Math.floor(Date.now() / 1000);
-    await expect(verifier.verify(await token({ exp: now + 600, nbf: now + 300 }))).rejects.toMatchObject({
+    await expect(
+      verifier.verify(await token({ exp: now + 600, nbf: now + 300 })),
+    ).rejects.toMatchObject({
       code: 'not_yet_valid',
     });
   });
 
   it('rejects a token from another issuer', async () => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin));
-    await expect(verifier.verify(await token({ iss: 'https://evil.example.com' }))).rejects.toMatchObject({
+    await expect(
+      verifier.verify(await token({ iss: 'https://evil.example.com' })),
+    ).rejects.toMatchObject({
       code: 'bad_issuer',
     });
   });
@@ -156,15 +185,29 @@ describe('createAccessJwtVerifier', () => {
   });
 
   it('accepts a configured audience list', async () => {
-    const verifier = createAccessJwtVerifier(configFor(jwks.origin, { audience: ['a', 'test-aud-tag.access'] }));
+    const verifier = createAccessJwtVerifier(
+      configFor(jwks.origin, { audience: ['a', 'test-aud-tag.access'] }),
+    );
     await expect(verifier.verify(await token({}))).resolves.toMatchObject({ sub: 'access-sub-1' });
   });
 
   it('reads the oid from a configured claim path', async () => {
-    const verifier = createAccessJwtVerifier(configFor(jwks.origin, { oidClaimPath: 'custom.oid' }));
+    const verifier = createAccessJwtVerifier(
+      configFor(jwks.origin, { oidClaimPath: 'custom.oid' }),
+    );
     const now = Math.floor(Date.now() / 1000);
-    const claims = { ...BASE_CLAIMS, iss: jwks.origin, exp: now + 600, iat: now, nbf: now, oid: undefined, custom: { oid: 'custom-oid-42' } };
-    await expect(verifier.verify(await signToken(keyA.privateJwk, claims, 'kid-a'))).resolves.toMatchObject({
+    const claims = {
+      ...BASE_CLAIMS,
+      iss: jwks.origin,
+      exp: now + 600,
+      iat: now,
+      nbf: now,
+      oid: undefined,
+      custom: { oid: 'custom-oid-42' },
+    };
+    await expect(
+      verifier.verify(await signToken(keyA.privateJwk, claims, 'kid-a')),
+    ).resolves.toMatchObject({
       oid: 'custom-oid-42',
     });
   });
@@ -172,8 +215,17 @@ describe('createAccessJwtVerifier', () => {
   it('refuses to map identity when the oid claim is absent and the fallback is off (default)', async () => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin));
     const now = Math.floor(Date.now() / 1000);
-    const claims = { ...BASE_CLAIMS, iss: jwks.origin, exp: now + 600, iat: now, nbf: now, oid: undefined };
-    await expect(verifier.verify(await signToken(keyA.privateJwk, claims, 'kid-a'))).rejects.toMatchObject({
+    const claims = {
+      ...BASE_CLAIMS,
+      iss: jwks.origin,
+      exp: now + 600,
+      iat: now,
+      nbf: now,
+      oid: undefined,
+    };
+    await expect(
+      verifier.verify(await signToken(keyA.privateJwk, claims, 'kid-a')),
+    ).rejects.toMatchObject({
       code: 'missing_principal',
     });
   });
@@ -181,8 +233,17 @@ describe('createAccessJwtVerifier', () => {
   it('falls back to email only when explicitly enabled', async () => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin, { allowEmailFallback: true }));
     const now = Math.floor(Date.now() / 1000);
-    const claims = { ...BASE_CLAIMS, iss: jwks.origin, exp: now + 600, iat: now, nbf: now, oid: undefined };
-    await expect(verifier.verify(await signToken(keyA.privateJwk, claims, 'kid-a'))).resolves.toEqual({
+    const claims = {
+      ...BASE_CLAIMS,
+      iss: jwks.origin,
+      exp: now + 600,
+      iat: now,
+      nbf: now,
+      oid: undefined,
+    };
+    await expect(
+      verifier.verify(await signToken(keyA.privateJwk, claims, 'kid-a')),
+    ).resolves.toEqual({
       oid: null,
       email: 'person@example.com',
       sub: 'access-sub-1',
@@ -202,7 +263,9 @@ describe('createAccessJwtVerifier', () => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin));
     await verifier.verify(await token({})); // warm the cache with kid-a
     await jwks.setKeys([keyB.publicJwk as never]); // rotate: the server now serves only kid-b
-    await expect(verifier.verify(await token({}, keyB, 'kid-b'))).resolves.toMatchObject({ sub: 'access-sub-1' });
+    await expect(verifier.verify(await token({}, keyB, 'kid-b'))).resolves.toMatchObject({
+      sub: 'access-sub-1',
+    });
   });
 
   it('rejects a malformed token', async () => {
@@ -211,12 +274,18 @@ describe('createAccessJwtVerifier', () => {
   });
 
   it('rejects a config with a non-origin teamDomain', () => {
-    expect(() => createAccessJwtVerifier(configFor('qnsic.cloudflareaccess.com'))).toThrow(AccessJwtError);
-    expect(() => createAccessJwtVerifier(configFor('ftp://qnsic.cloudflareaccess.com'))).toThrow(AccessJwtError);
+    expect(() => createAccessJwtVerifier(configFor('qnsic.cloudflareaccess.com'))).toThrow(
+      AccessJwtError,
+    );
+    expect(() => createAccessJwtVerifier(configFor('ftp://qnsic.cloudflareaccess.com'))).toThrow(
+      AccessJwtError,
+    );
   });
 
   it('rejects a config without an audience', () => {
-    expect(() => createAccessJwtVerifier(configFor(jwks.origin, { audience: '' }))).toThrow(AccessJwtError);
+    expect(() => createAccessJwtVerifier(configFor(jwks.origin, { audience: '' }))).toThrow(
+      AccessJwtError,
+    );
   });
 });
 
@@ -273,7 +342,10 @@ describe('resilience and default configuration', () => {
   it('fetches at most once per default cooldown when a burst of unknown-kid tokens arrives', async () => {
     // DEFAULT config: the 30 s cooldown must throttle the whole burst to one fetch.
     const jwksSrv = await startJwksServer();
-    const verifier = createAccessJwtVerifier({ teamDomain: jwksSrv.origin, audience: 'test-aud-tag.access' });
+    const verifier = createAccessJwtVerifier({
+      teamDomain: jwksSrv.origin,
+      audience: 'test-aud-tag.access',
+    });
     const key = await rsaKey('kid-unknown');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 5; i += 1) {
@@ -313,7 +385,9 @@ describe('resilience and default configuration', () => {
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     const port = (server.address() as { port: number }).port;
-    const verifier = createAccessJwtVerifier(configFor(`http://127.0.0.1:${port}`, { jwksTimeoutSeconds: 0.2 }));
+    const verifier = createAccessJwtVerifier(
+      configFor(`http://127.0.0.1:${port}`, { jwksTimeoutSeconds: 0.2 }),
+    );
     const { privateKey } = await generateKeyPair('RS256', { extractable: true });
     const now = Math.floor(Date.now() / 1000);
     const t = await signToken(
@@ -325,17 +399,28 @@ describe('resilience and default configuration', () => {
     server.close();
   });
 
-  it.each(['ES256', 'PS256'] as const)('rejects a %s token (only RS256 is allowed)', async (alg) => {
-    const verifier = createAccessJwtVerifier(configFor(jwks.origin));
-    const { privateKey } = await generateKeyPair(alg, { extractable: true });
-    const privJwk = await exportJWK(privateKey);
-    const now = Math.floor(Date.now() / 1000);
-    const t = await signToken(
-      privJwk as Record<string, unknown>,
-      { ...BASE_CLAIMS, iss: jwks.origin, aud: 'test-aud-tag.access', sub: 's', exp: now + 600, iat: now, nbf: now },
-      'kid-a',
-      alg,
-    );
-    await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'wrong_algorithm' });
-  });
+  it.each(['ES256', 'PS256'] as const)(
+    'rejects a %s token (only RS256 is allowed)',
+    async (alg) => {
+      const verifier = createAccessJwtVerifier(configFor(jwks.origin));
+      const { privateKey } = await generateKeyPair(alg, { extractable: true });
+      const privJwk = await exportJWK(privateKey);
+      const now = Math.floor(Date.now() / 1000);
+      const t = await signToken(
+        privJwk as Record<string, unknown>,
+        {
+          ...BASE_CLAIMS,
+          iss: jwks.origin,
+          aud: 'test-aud-tag.access',
+          sub: 's',
+          exp: now + 600,
+          iat: now,
+          nbf: now,
+        },
+        'kid-a',
+        alg,
+      );
+      await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'wrong_algorithm' });
+    },
+  );
 });

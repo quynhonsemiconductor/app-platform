@@ -115,9 +115,18 @@ function classify(error: unknown): AccessJwtError {
       return new AccessJwtError('wrong_algorithm', 'the Access JWT `alg` is not RS256');
     case 'ERR_JWT_CLAIM_VALIDATION_FAILED': {
       const claim = (error as { claim?: string } | null)?.claim;
-      if (claim === 'iss') return new AccessJwtError('bad_issuer', 'the Access JWT `iss` is not the configured team domain');
-      if (claim === 'aud') return new AccessJwtError('bad_audience', 'the Access JWT `aud` is not the configured AUD tag');
-      if (claim === 'nbf') return new AccessJwtError('not_yet_valid', 'the Access JWT is not yet valid (nbf)');
+      if (claim === 'iss')
+        return new AccessJwtError(
+          'bad_issuer',
+          'the Access JWT `iss` is not the configured team domain',
+        );
+      if (claim === 'aud')
+        return new AccessJwtError(
+          'bad_audience',
+          'the Access JWT `aud` is not the configured AUD tag',
+        );
+      if (claim === 'nbf')
+        return new AccessJwtError('not_yet_valid', 'the Access JWT is not yet valid (nbf)');
       break;
     }
     case 'ERR_JWKS_TIMEOUT': // the JWKS fetch exceeded `timeoutDuration`
@@ -131,7 +140,9 @@ function classify(error: unknown): AccessJwtError {
   // message to clients — that goes for every code here.
   if (
     (code === '' || code === 'ERR_JOSE_GENERIC') &&
-    /fetch|timed?\s*out|network|socket|ECONN|ENOTFOUND|expected 200 ok/i.test((error as Error)?.message ?? '')
+    /fetch|timed?\s*out|network|socket|ECONN|ENOTFOUND|expected 200 ok/i.test(
+      (error as Error)?.message ?? '',
+    )
   ) {
     return new AccessJwtError('jwks_unavailable', 'the team JWKS could not be fetched');
   }
@@ -150,10 +161,16 @@ export function createAccessJwtVerifier(config: AccessJwtConfig): AccessJwtVerif
   // configuration is always an https origin.
   const isLoopbackHttp = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(teamDomain);
   if (!/^https:\/\/[^/]+$/.test(teamDomain) && !isLoopbackHttp) {
-    throw new AccessJwtError('malformed', `teamDomain must be an https origin, got ${JSON.stringify(config.teamDomain)}`);
+    throw new AccessJwtError(
+      'malformed',
+      `teamDomain must be an https origin, got ${JSON.stringify(config.teamDomain)}`,
+    );
   }
   if (config.audience === undefined || config.audience === null || config.audience === '') {
-    throw new AccessJwtError('malformed', 'audience (the Access app AUD tag) is required — a token for another app must be rejected');
+    throw new AccessJwtError(
+      'malformed',
+      'audience (the Access app AUD tag) is required — a token for another app must be rejected',
+    );
   }
   const oidClaimPath = config.oidClaimPath ?? DEFAULT_OID_CLAIM_PATH;
   if (oidClaimPath.length === 0) {
@@ -171,7 +188,8 @@ export function createAccessJwtVerifier(config: AccessJwtConfig): AccessJwtVerif
   // throttles that refresh so a burst of bad kids cannot hammer the team domain.
   const jwks = createRemoteJWKSet(new URL('/cdn-cgi/access/certs', teamDomain), {
     cooldownDuration: (config.jwksCooldownSeconds ?? DEFAULT_JWKS_COOLDOWN_SECONDS) * 1000,
-    timeoutDuration: config.jwksTimeoutSeconds === undefined ? undefined : config.jwksTimeoutSeconds * 1000,
+    timeoutDuration:
+      config.jwksTimeoutSeconds === undefined ? undefined : config.jwksTimeoutSeconds * 1000,
   });
 
   async function verify(token: string): Promise<AccessPrincipal> {
@@ -192,12 +210,19 @@ export function createAccessJwtVerifier(config: AccessJwtConfig): AccessJwtVerif
       return { oid, email: typeof payload.email === 'string' ? payload.email : null, sub };
     }
 
-    if (config.allowEmailFallback === true && typeof payload.email === 'string' && payload.email.length > 0) {
+    if (
+      config.allowEmailFallback === true &&
+      typeof payload.email === 'string' &&
+      payload.email.length > 0
+    ) {
       // Deliberate downgrade, enabled by config only after gate (d) proved the claim cannot
       // reach the origin (plan §5): the email is verified by the IdP but can be reassigned.
       return { oid: null, email: payload.email, sub };
     }
-    throw new AccessJwtError('missing_principal', `the Access JWT carries no \`${oidClaimPath}\` claim and the email fallback is not enabled`);
+    throw new AccessJwtError(
+      'missing_principal',
+      `the Access JWT carries no \`${oidClaimPath}\` claim and the email fallback is not enabled`,
+    );
   }
 
   return { verify };

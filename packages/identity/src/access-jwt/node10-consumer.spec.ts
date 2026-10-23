@@ -26,7 +26,11 @@ describe('access-jwt node10-consumer (rova-style resolution)', () => {
     // A real install nests the package at node_modules/@quynhonsemiconductor/identity — node10
     // resolves the subpath to <that dir>/access-jwt.(js|d.ts), the root shims.
     mkdirSync(join(fixtureRoot, 'node_modules', '@quynhonsemiconductor'), { recursive: true });
-    symlinkSync(pkgRoot, join(fixtureRoot, 'node_modules', '@quynhonsemiconductor', 'identity'), 'dir');
+    symlinkSync(
+      pkgRoot,
+      join(fixtureRoot, 'node_modules', '@quynhonsemiconductor', 'identity'),
+      'dir',
+    );
     writeFileSync(
       join(fixtureRoot, 'consumer.ts'),
       [
@@ -42,7 +46,7 @@ describe('access-jwt node10-consumer (rova-style resolution)', () => {
       JSON.stringify({
         compilerOptions: {
           // rova-style legacy resolution; TS 6 deprecates it, so the fixture silences the deprecation
-          ignoreDeprecations: "6.0",
+          ignoreDeprecations: '6.0',
           strict: true,
           module: 'commonjs',
           moduleResolution: 'node',
@@ -63,7 +67,10 @@ describe('access-jwt node10-consumer (rova-style resolution)', () => {
     const typescriptPkg = join(require.resolve('typescript/package.json'), '..', 'bin', 'tsc');
     const result = (() => {
       try {
-        execFileSync(process.execPath, [typescriptPkg, '-p', 'tsconfig.json'], { cwd: fixtureRoot, stdio: 'pipe' });
+        execFileSync(process.execPath, [typescriptPkg, '-p', 'tsconfig.json'], {
+          cwd: fixtureRoot,
+          stdio: 'pipe',
+        });
         return 'ok';
       } catch (e) {
         return `${(e as { stderr?: Buffer }).stderr?.toString() ?? ''}${(e as { stdout?: Buffer }).stdout?.toString() ?? ''}`.trim();

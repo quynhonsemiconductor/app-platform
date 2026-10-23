@@ -13,6 +13,9 @@ overrides:
   "js-yaml@4": "^4.3.2"
   # `@nestjs/platform-fastify` pins fastify EXACTLY, so a range floor on fastify cannot reach it.
   "@nestjs/platform-fastify>fastify": "5.12.7"
+  # GHSA-mrhx-c7xc-m3w5 (CVSS 8.2, memory exhaustion validating oversized constrained
+  # collections, fixed 4.6.6): exactly one zod version in this lockfile.
+  "zod@>=4 <4.6.6": "4.6.6"
 
 # pnpm 11 fails an install that ignores a build script unless the decision is recorded. Same as the root
 # workspace: none is needed (testcontainers falls back to pure JS for ssh2 and cpu-features).

@@ -270,6 +270,61 @@ describe('resilience and default configuration', () => {
     await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'jwks_unavailable' });
   });
 
+  it('fetches at most once per default cooldown when a burst of unknown-kid tokens arrives', async () => {
+    // DEFAULT config: the 30 s cooldown must throttle the whole burst to one fetch.
+    const jwksSrv = await startJwksServer();
+    const verifier = createAccessJwtVerifier({ teamDomain: jwksSrv.origin, audience: 'test-aud-tag.access' });
+    const key = await rsaKey('kid-unknown');
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 5; i += 1) {
+      const t = await signToken(
+        key.privateJwk,
+        { ...BASE_CLAIMS, iss: jwksSrv.origin, exp: now + 600, iat: now, nbf: now },
+        'kid-unknown',
+      );
+      await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'invalid_signature' });
+    }
+    expect(jwksSrv.fetchCount()).toBe(1);
+    await jwksSrv.close();
+  });
+
+  it('reports a JWKS that answers 500 as jwks_unavailable', async () => {
+    const server: Server = createServer((_q, res) => {
+      res.statusCode = 500;
+      res.end('boom');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    const verifier = createAccessJwtVerifier(configFor(`http://127.0.0.1:${port}`));
+    const { privateKey } = await generateKeyPair('RS256', { extractable: true });
+    const now = Math.floor(Date.now() / 1000);
+    const t = await signToken(
+      (await exportJWK(privateKey)) as Record<string, unknown>,
+      { ...BASE_CLAIMS, iss: `http://127.0.0.1:${port}`, exp: now + 600, iat: now, nbf: now },
+      'kid-a',
+    );
+    await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'jwks_unavailable' });
+    server.close();
+  });
+
+  it('reports a hung JWKS as jwks_unavailable (fetch timeout)', async () => {
+    const server: Server = createServer(() => {
+      // never responds
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    const verifier = createAccessJwtVerifier(configFor(`http://127.0.0.1:${port}`, { jwksTimeoutSeconds: 0.2 }));
+    const { privateKey } = await generateKeyPair('RS256', { extractable: true });
+    const now = Math.floor(Date.now() / 1000);
+    const t = await signToken(
+      (await exportJWK(privateKey)) as Record<string, unknown>,
+      { ...BASE_CLAIMS, iss: `http://127.0.0.1:${port}`, exp: now + 600, iat: now, nbf: now },
+      'kid-a',
+    );
+    await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'jwks_unavailable' });
+    server.close();
+  });
+
   it.each(['ES256', 'PS256'] as const)('rejects a %s token (only RS256 is allowed)', async (alg) => {
     const verifier = createAccessJwtVerifier(configFor(jwks.origin));
     const { privateKey } = await generateKeyPair(alg, { extractable: true });

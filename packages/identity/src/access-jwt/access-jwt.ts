@@ -60,6 +60,8 @@ export interface AccessJwtConfig {
   allowEmailFallback?: boolean;
   /** Clock tolerance for `exp`/`nbf`, in seconds. Default 60. */
   clockToleranceSeconds?: number;
+  /** JWKS fetch timeout, in **seconds**. Default 10 (jose's default). A hang is `jwks_unavailable`. */
+  jwksTimeoutSeconds?: number;
   /**
    * JWKS refresh cooldown after a fetch, in **seconds**. Default 30. (jose's own
    * `cooldownDuration` is milliseconds; this converts so callers think in seconds.)
@@ -118,12 +120,19 @@ function classify(error: unknown): AccessJwtError {
       if (claim === 'nbf') return new AccessJwtError('not_yet_valid', 'the Access JWT is not yet valid (nbf)');
       break;
     }
+    case 'ERR_JWKS_TIMEOUT': // the JWKS fetch exceeded `timeoutDuration`
+      return new AccessJwtError('jwks_unavailable', 'the team JWKS could not be fetched');
     default:
       break;
   }
-  // A fetch/network failure reaching the JWKS is an availability problem, not a bad token:
-  // undici surfaces it as a plain TypeError ("fetch failed") or a timeout error with no JOSE code.
-  if (code === '' && /fetch|timed?\s*out|network|socket|ECONN|ENOTFOUND/i.test((error as Error)?.message ?? '')) {
+  // Availability problems, not bad tokens: an undici fetch failure surfaces as a plain TypeError
+  // ("fetch failed"), a non-200 JWKS response as ERR_JOSE_GENERIC, a slow response as
+  // ERR_JWKS_TIMEOUT (handled above). Callers map this code to a 5xx and must never echo the
+  // message to clients — that goes for every code here.
+  if (
+    (code === '' || code === 'ERR_JOSE_GENERIC') &&
+    /fetch|timed?\s*out|network|socket|ECONN|ENOTFOUND|expected 200 ok/i.test((error as Error)?.message ?? '')
+  ) {
     return new AccessJwtError('jwks_unavailable', 'the team JWKS could not be fetched');
   }
   if (error instanceof AccessJwtError) return error;
@@ -162,6 +171,7 @@ export function createAccessJwtVerifier(config: AccessJwtConfig): AccessJwtVerif
   // throttles that refresh so a burst of bad kids cannot hammer the team domain.
   const jwks = createRemoteJWKSet(new URL('/cdn-cgi/access/certs', teamDomain), {
     cooldownDuration: (config.jwksCooldownSeconds ?? DEFAULT_JWKS_COOLDOWN_SECONDS) * 1000,
+    timeoutDuration: config.jwksTimeoutSeconds === undefined ? undefined : config.jwksTimeoutSeconds * 1000,
   });
 
   async function verify(token: string): Promise<AccessPrincipal> {

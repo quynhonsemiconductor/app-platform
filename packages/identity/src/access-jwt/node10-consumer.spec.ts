@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * Rova consumes this package with TypeScript's legacy `moduleResolution: node` under CommonJS,
- * which ignores the package `exports` map: it resolves `@quynhonsemiconductor/identity/access-jwt`
- * to the **root** `access-jwt.js` / `access-jwt.d.ts` shims (same reason `nest.*` and `testing.*`
- * exist). This spec proves both halves against a real consumer fixture:
- *  1. `tsc --moduleResolution node` typechecks a consumer that imports the subpath by name;
- *  2. `node -e require(...)` loads the CommonJS shim and gets the runtime exports.
+ * Rova consumes this package with TypeScript's legacy `moduleResolution: node` under CommonJS.
+ * The two halves resolve differently, and this spec proves each against a real consumer fixture:
+ *  1. tsc under `moduleResolution: node` ignores the package `exports` map and resolves the
+ *     subpath's **types** through the root `access-jwt.d.ts` shim (same reason `nest.d.ts` and
+ *     `testing.d.ts` exist);
+ *  2. modern Node `require()` honours the `exports` map, so the runtime half loads the CommonJS
+ *     build through `./dist/access-jwt`.
  * Requires `dist/` to exist — CI (and the pre-push gate) builds before testing, like `pnpm test` does.
  */
 

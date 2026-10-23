@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.3.2...platform-runtime-v0.3.3) (2026-10-23)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** fastify 5.12.7 for GHSA-389g-gv7q-r4x8 ([#297](https://github.com/quynhonsemiconductor/app-platform/issues/297)) ([57cd0e7](https://github.com/quynhonsemiconductor/app-platform/commit/57cd0e775afac35a4a1e3203c26d192c78a345bf))
+
 ## [0.3.2](https://github.com/quynhonsemiconductor/app-platform/compare/platform-runtime-v0.3.1...platform-runtime-v0.3.2) (2026-10-21)
 
 

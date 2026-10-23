@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.6.2...observability-v0.6.3) (2026-10-23)
+
+
+### ✨ Features
+
+* **observability:** redact the x-rova-mcp-call credential header ([#302](https://github.com/quynhonsemiconductor/app-platform/issues/302)) ([3bdd1cb](https://github.com/quynhonsemiconductor/app-platform/commit/3bdd1cb920ace26d52428523502f1f0f1bfb6a06))
+
 ## [0.6.2](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.6.1...observability-v0.6.2) (2026-10-21)
 
 

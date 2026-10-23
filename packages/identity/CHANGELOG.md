@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.5.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.4.3...identity-v8.5.0) (2026-10-23)
+
+
+### ✨ Features
+
+* **identity:** verify Cloudflare Access JWTs via the identity/access-jwt subpath ([#300](https://github.com/quynhonsemiconductor/app-platform/issues/300)) ([767c464](https://github.com/quynhonsemiconductor/app-platform/commit/767c46493e74560b3fe08b6536613001224603f0))
+
 ## [8.4.3](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.4.2...identity-v8.4.3) (2026-10-23)
 
 

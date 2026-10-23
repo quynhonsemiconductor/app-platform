@@ -47,6 +47,7 @@ describe('createLoggerOptions', () => {
       'res.headers["set-cookie"]',
       'req.headers["x-api-key"]',
       'req.headers["x-csrf-token"]',
+      'req.headers["x-rova-mcp-call"]',
     ]) {
       expect(__redactedPaths).toContain(path);
     }

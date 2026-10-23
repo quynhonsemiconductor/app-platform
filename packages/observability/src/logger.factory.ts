@@ -19,7 +19,16 @@ import { requestContextStorage } from './request-context-storage';
 const ERROR_KEYS = ['err', 'error', 'reason'] as const;
 
 /** Headers that carry a credential, in a request or response, wherever they are nested. */
-const SECRET_HEADERS = ['authorization', 'cookie', 'set-cookie', 'x-api-key', 'x-csrf-token'];
+const SECRET_HEADERS = [
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+  'x-csrf-token',
+  // rova's MCP in-process call token: a single-use credential carried only on an internal
+  // inject() between the MCP transport and its guards (never stored, never shown to a client)
+  'x-rova-mcp-call',
+];
 
 /** Credential-bearing paths. Never log these, in any environment. */
 const REDACTED_PATHS: readonly string[] = [
@@ -28,6 +37,7 @@ const REDACTED_PATHS: readonly string[] = [
   'res.headers["set-cookie"]',
   'req.headers["x-api-key"]',
   'req.headers["x-csrf-token"]',
+  'req.headers["x-rova-mcp-call"]',
   // Belt and braces behind `serializeError`, which already drops these keys: SDK and HTTP-client errors nest the original request, which is
   // the realistic leak path in background workers that never see an inbound HTTP header. Covers every key an error is logged under.
   ...ERROR_KEYS.flatMap((key) =>

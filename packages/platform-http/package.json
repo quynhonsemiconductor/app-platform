@@ -1,6 +1,6 @@
 {
   "name": "@quynhonsemiconductor/platform-http",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "Shared NestJS/Fastify HTTP contract (error taxonomy, global exception filter, cursor & offset pagination) for QNSC product backends.",
   "license": "UNLICENSED",
   "main": "dist/index.js",
@@ -44,7 +44,7 @@
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-fastify": "11.2.7",
     "@nestjs/swagger": "^11.4.5",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.7",
     "ioredis": "^5.4.1",
     "nestjs-zod": "^5.4.0",
     "reflect-metadata": "^0.2.2",

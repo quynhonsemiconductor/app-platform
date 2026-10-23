@@ -44,7 +44,7 @@ export class AccessJwtError extends Error {
 }
 
 export interface AccessJwtConfig {
-  /** The Access team domain as an origin, e.g. `https://qnsic.cloudflareaccess.com`. `iss` must equal it. */
+  /** The Access team domain as an origin, e.g. `https://example-team.cloudflareaccess.com`. `iss` must equal it. */
   teamDomain: string;
   /** The Access application's AUD tag(s). A token minted for another app on the same team is rejected. */
   audience: string | readonly string[];
@@ -130,6 +130,9 @@ function classify(error: unknown): AccessJwtError {
       break;
     }
     case 'ERR_JWKS_TIMEOUT': // the JWKS fetch exceeded `timeoutDuration`
+    case 'ERR_JWKS_INVALID': // the JWKS response was not a usable JWK set
+    case 'ERR_JWKS_MULTIPLE_MATCHING_KEYS': // the JWKS served the same kid twice
+      // all three are JWKS-response problems, not token problems: a 5xx, never a "bad token"
       return new AccessJwtError('jwks_unavailable', 'the team JWKS could not be fetched');
     default:
       break;

@@ -1,9 +1,12 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyOptions } from 'jose';
 
 /**
- * Cloudflare Access JWT verification (`Cf-Access-Jwt-Assertion`) — the origin side of the
- * MCP plan (product-docs `platform/MCP-PLAN.md` §5). This module is the only MCP-adjacent
- * code that touches auth: everything downstream already runs behind the app's own guards.
+ * Cloudflare Access JWT verification — the origin side of the MCP plan (product-docs
+ * `platform/MCP-PLAN.md` §5). Verifies the `Cf-Access-Jwt-Assertion` **request header** (the
+ * Per-App token Cloudflare attaches to every authorized request); it is not the
+ * `CF_Authorization` cookie, and nothing here reads cookies. This module is the only
+ * MCP-adjacent code that touches auth: everything downstream already runs behind the app's own
+ * guards.
  *
  * Verification is full and pinned:
  *  - signature against the team JWKS (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`),
@@ -12,8 +15,9 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyOptions }
  *  - `exp` + `nbf` with a small configurable tolerance.
  *
  * Identity mapping: the Entra object id arrives as a custom OIDC claim — its location is
- * configurable (dot path, default top-level `oid`). Falling back to the verified email is
- * opt-in and off by default: emails can be reassigned, the `oid` cannot (plan §5).
+ * configurable (dot path, default top-level `oid`). Falling back to the token's `email` is
+ * opt-in and off by default: the email is verified by the IdP but can be reassigned, the `oid`
+ * cannot (plan §5). Error messages here are for logs and tests, never echoed to clients.
  */
 
 /** Failure reasons, stable strings — callers branch on `code`, never on message text. */
@@ -25,7 +29,9 @@ export type AccessJwtErrorCode =
   | 'bad_issuer'
   | 'bad_audience'
   | 'wrong_algorithm'
-  | 'missing_principal';
+  | 'missing_principal'
+  /** The JWKS could not be fetched (network outage, timeout). A 5xx, never a "bad token". */
+  | 'jwks_unavailable';
 
 export class AccessJwtError extends Error {
   constructor(
@@ -49,12 +55,15 @@ export interface AccessJwtConfig {
   oidClaimPath?: string;
   /**
    * Fall back to the token's `email` when the `oid` claim is absent. Off by default (plan §5:
-   * emails can be reassigned; only gate (d)'s failure path enables this, explicitly).
+   * IdP-verified, but emails can be reassigned; only gate (d)'s failure path enables this).
    */
   allowEmailFallback?: boolean;
   /** Clock tolerance for `exp`/`nbf`, in seconds. Default 60. */
   clockToleranceSeconds?: number;
-  /** JWKS refresh cooldown after a fetch, in seconds. Default 30 (jose's default). */
+  /**
+   * JWKS refresh cooldown after a fetch, in **seconds**. Default 30. (jose's own
+   * `cooldownDuration` is milliseconds; this converts so callers think in seconds.)
+   */
   jwksCooldownSeconds?: number;
 }
 
@@ -69,6 +78,7 @@ export interface AccessPrincipal {
 }
 
 const DEFAULT_CLOCK_TOLERANCE_SECONDS = 60;
+const DEFAULT_JWKS_COOLDOWN_SECONDS = 30;
 const DEFAULT_OID_CLAIM_PATH = 'oid';
 
 /** Read a dot path (`'custom.oid'`) out of a JWT payload. Returns `undefined` for a miss. */
@@ -81,7 +91,11 @@ function claimAt(payload: JWTPayload, path: string): unknown {
   return node;
 }
 
-/** Map a jose failure to our stable codes. Order matters: the specific check before the generic. */
+/**
+ * Map a jose failure to our stable codes, with fixed message text (jose's own messages are
+ * implementation detail — callers branch on `code`; UIs must never echo the message).
+ * Order matters: the specific check before the generic.
+ */
 function classify(error: unknown): AccessJwtError {
   const code = (error as { code?: string } | null)?.code ?? '';
   switch (code) {
@@ -101,18 +115,19 @@ function classify(error: unknown): AccessJwtError {
       const claim = (error as { claim?: string } | null)?.claim;
       if (claim === 'iss') return new AccessJwtError('bad_issuer', 'the Access JWT `iss` is not the configured team domain');
       if (claim === 'aud') return new AccessJwtError('bad_audience', 'the Access JWT `aud` is not the configured AUD tag');
+      if (claim === 'nbf') return new AccessJwtError('not_yet_valid', 'the Access JWT is not yet valid (nbf)');
       break;
     }
     default:
       break;
   }
-  // nbf in the future surfaces as a generic claim validation failure in some jose versions;
-  // expired/nbf both mean "not acceptable right now", but only nbf reaches here.
-  if (error instanceof Error && /"nbf"/.test(error.message)) {
-    return new AccessJwtError('not_yet_valid', 'the Access JWT is not yet valid (nbf)');
+  // A fetch/network failure reaching the JWKS is an availability problem, not a bad token:
+  // undici surfaces it as a plain TypeError ("fetch failed") or a timeout error with no JOSE code.
+  if (code === '' && /fetch|timed?\s*out|network|socket|ECONN|ENOTFOUND/i.test((error as Error)?.message ?? '')) {
+    return new AccessJwtError('jwks_unavailable', 'the team JWKS could not be fetched');
   }
   if (error instanceof AccessJwtError) return error;
-  return new AccessJwtError('malformed', `the Access JWT was rejected: ${(error as Error)?.message ?? String(error)}`);
+  return new AccessJwtError('malformed', 'the Access JWT was rejected');
 }
 
 export interface AccessJwtVerifier {
@@ -142,10 +157,11 @@ export function createAccessJwtVerifier(config: AccessJwtConfig): AccessJwtVerif
     algorithms: ['RS256'], // pinned: an HS256/none token is rejected before any key is tried
     clockTolerance: config.clockToleranceSeconds ?? DEFAULT_CLOCK_TOLERANCE_SECONDS,
   };
-  // jose's remote JWKS caches per key and refetches automatically when a token carries an
-  // unknown `kid` (rotation-safe); `cooldownDuration` throttles that refresh.
+  // jose caches the JWKS per key and refetches when a token carries an unknown `kid`
+  // (rotation-safe); `cooldownDuration` — milliseconds here, seconds in our config —
+  // throttles that refresh so a burst of bad kids cannot hammer the team domain.
   const jwks = createRemoteJWKSet(new URL('/cdn-cgi/access/certs', teamDomain), {
-    cooldownDuration: config.jwksCooldownSeconds ?? 30,
+    cooldownDuration: (config.jwksCooldownSeconds ?? DEFAULT_JWKS_COOLDOWN_SECONDS) * 1000,
   });
 
   async function verify(token: string): Promise<AccessPrincipal> {
@@ -171,10 +187,7 @@ export function createAccessJwtVerifier(config: AccessJwtConfig): AccessJwtVerif
       // reach the origin (plan §5): the email is verified by the IdP but can be reassigned.
       return { oid: null, email: payload.email, sub };
     }
-    throw new AccessJwtError(
-      'missing_principal',
-      `the Access JWT carries no \`${oidClaimPath}\` claim and the email fallback is not enabled`,
-    );
+    throw new AccessJwtError('missing_principal', `the Access JWT carries no \`${oidClaimPath}\` claim and the email fallback is not enabled`);
   }
 
   return { verify };

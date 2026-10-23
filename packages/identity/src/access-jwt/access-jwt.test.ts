@@ -219,3 +219,68 @@ describe('createAccessJwtVerifier', () => {
     expect(() => createAccessJwtVerifier(configFor(jwks.origin, { audience: '' }))).toThrow(AccessJwtError);
   });
 });
+
+describe('resilience and default configuration', () => {
+  let keyA: Awaited<ReturnType<typeof rsaKey>>;
+  let jwks: JwksServer;
+  beforeAll(async () => {
+    keyA = await rsaKey('kid-a');
+    jwks = await startJwksServer();
+    await jwks.setKeys([keyA.publicJwk as never]);
+  });
+  afterAll(async () => {
+    await jwks.close();
+  });
+
+  it('cools down JWKS refetches: tokens inside the cooldown fetch once', async () => {
+    const jwksSrv = await startJwksServer();
+    // 0.2 s here = 200 ms to jose. If the seconds→milliseconds conversion were dropped, the
+    // cooldown would be 0.2 ms and the tokens spaced 10 ms apart would each trigger a fetch.
+    const verifier = createAccessJwtVerifier({
+      teamDomain: jwksSrv.origin,
+      audience: 'test-aud-tag.access',
+      jwksCooldownSeconds: 0.2,
+    });
+    const key = await rsaKey('kid-unknown');
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 3; i += 1) {
+      const t = await signToken(
+        key.privateJwk,
+        { ...BASE_CLAIMS, iss: jwksSrv.origin, exp: now + 600, iat: now, nbf: now },
+        'kid-unknown',
+      );
+      await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'invalid_signature' });
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(jwksSrv.fetchCount()).toBe(1);
+    await jwksSrv.close();
+  });
+
+  it('reports a JWKS outage as jwks_unavailable, not as a bad token', async () => {
+    const jwksSrv = await startJwksServer();
+    const verifier = createAccessJwtVerifier(configFor(jwksSrv.origin));
+    const { privateKey } = await generateKeyPair('RS256', { extractable: true });
+    const now = Math.floor(Date.now() / 1000);
+    const t = await signToken(
+      (await exportJWK(privateKey)) as Record<string, unknown>,
+      { ...BASE_CLAIMS, iss: jwksSrv.origin, exp: now + 600, iat: now, nbf: now },
+      'kid-unserved',
+    );
+    await jwksSrv.close(); // outage: the JWKS endpoint is gone before the first verify
+    await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'jwks_unavailable' });
+  });
+
+  it.each(['ES256', 'PS256'] as const)('rejects a %s token (only RS256 is allowed)', async (alg) => {
+    const verifier = createAccessJwtVerifier(configFor(jwks.origin));
+    const { privateKey } = await generateKeyPair(alg, { extractable: true });
+    const privJwk = await exportJWK(privateKey);
+    const now = Math.floor(Date.now() / 1000);
+    const t = await signToken(
+      privJwk as Record<string, unknown>,
+      { ...BASE_CLAIMS, iss: jwks.origin, aud: 'test-aud-tag.access', sub: 's', exp: now + 600, iat: now, nbf: now },
+      'kid-a',
+      alg,
+    );
+    await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'wrong_algorithm' });
+  });
+});

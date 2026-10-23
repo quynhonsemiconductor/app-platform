@@ -30,7 +30,9 @@
     "testing.js",
     "testing.d.ts",
     "pnpmfile.cjs",
-    "MIGRATION-v7-to-v8.md"
+    "MIGRATION-v7-to-v8.md",
+    "access-jwt.js",
+    "access-jwt.d.ts"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",

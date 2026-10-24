@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.6...platform-mail-v0.1.7) (2026-10-24)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** osv sweep — msal-node 7.1.0, nodemailer 10.1.7, fast-uri and undici floors ([#309](https://github.com/quynhonsemiconductor/app-platform/issues/309)) ([362ed15](https://github.com/quynhonsemiconductor/app-platform/commit/362ed15b887af5660aa3388d33a216484b9633f7))
+
 ## [0.1.6](https://github.com/quynhonsemiconductor/app-platform/compare/platform-mail-v0.1.5...platform-mail-v0.1.6) (2026-10-20)
 
 

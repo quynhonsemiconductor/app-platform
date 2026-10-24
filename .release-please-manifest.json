@@ -1,10 +1,10 @@
 {
-  "packages/identity": "8.5.0",
+  "packages/identity": "8.5.1",
   "packages/platform-cache": "3.3.1",
   "packages/platform-http": "5.0.1",
   "packages/observability": "0.6.3",
   "packages/platform-runtime": "0.3.3",
   "packages/platform-db": "0.1.2",
   "packages/platform-jobs": "0.1.2",
-  "packages/platform-mail": "0.1.6"
+  "packages/platform-mail": "0.1.7"
 }

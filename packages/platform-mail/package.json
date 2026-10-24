@@ -91,7 +91,7 @@
     "drizzle-orm": "0.45.4",
     "ioredis": "5.11.1",
     "mailparser": "3.9.40",
-    "nodemailer": "10.1.2",
+    "nodemailer": "10.1.7",
     "pg": "8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"

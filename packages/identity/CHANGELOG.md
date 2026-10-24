@@ -1,5 +1,13 @@
 # Changelog
 
+## [8.5.1](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.5.0...identity-v8.5.1) (2026-10-24)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** zod 4.6.6 for GHSA-mrhx-c7xc-m3w5 (CVSS 8.2) ([#306](https://github.com/quynhonsemiconductor/app-platform/issues/306)) ([bc84eb4](https://github.com/quynhonsemiconductor/app-platform/commit/bc84eb441b1fe20265327f1be5f1678585e79032))
+* **identity:** jwks response problems are jwks_unavailable; scrub the example team domain ([#303](https://github.com/quynhonsemiconductor/app-platform/issues/303)) ([d6997f6](https://github.com/quynhonsemiconductor/app-platform/commit/d6997f670c74d11568d6757dca83d1940dc7bc36))
+
 ## [8.5.0](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.4.3...identity-v8.5.0) (2026-10-23)
 
 

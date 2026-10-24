@@ -90,6 +90,10 @@ overrides:
   # Nest + Fastify server in tests, never published; this repo's own fastify devDependencies
   # already resolve to 5.12.5, so this only brings the adapter's copy in line with them.
   "@nestjs/platform-fastify>fastify": "5.12.7"
+  # GHSA-mrhx-c7xc-m3w5 (CVSS 8.2, memory exhaustion validating oversized constrained
+  # collections, fixed 4.6.6): exactly one zod version in the lockfile. Identity and the
+  # reference consumer pin 4.6.6 directly; this floor covers the `^4.4.3` dev ranges.
+  "zod@>=4 <4.6.6": "4.6.6"
 
 # pnpm 11 fails an install that ignores a dependency's build script unless the decision is
 # written down. These five were already being skipped (pnpm 10 only warned); recording them as

@@ -25,7 +25,7 @@ overrides:
   "undici@>=8 <8.12.2": "8.12.2"
   # GHSA-mrhx-c7xc-m3w5 (CVSS 8.2, memory exhaustion validating oversized constrained
   # collections, fixed 4.6.6): exactly one zod version in this lockfile.
-  "zod@>=4 <4.6.6": "4.6.6"
+  "zod@>=4 <4.6.6": "4.6.7"
 
   # Keep Better Auth's optional peers out of the production tree, declaratively. better-auth declares
   # 18 OPTIONAL peers (its CLI `drizzle-kit`, its test helpers `vitest`, its React/Svelte/Vue clients,

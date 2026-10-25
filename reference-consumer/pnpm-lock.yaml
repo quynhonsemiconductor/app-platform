@@ -58,7 +58,7 @@ importers:
         version: 0.1.2(7cb18885174c9408a1117cfe6c3a8a5f)
       '@quynhonsemiconductor/platform-mail':
         specifier: 0.1.2
-        version: 0.1.2(5b32cf2aa5af0064d4e3fbcbc72058b5)
+        version: 0.1.2(437cea60e885fc284ac813f6fba7a200)
       '@quynhonsemiconductor/platform-runtime':
         specifier: 0.2.0
         version: 0.2.0(63ec901dc0475f7133439656481772ca)
@@ -78,8 +78,8 @@ importers:
         specifier: 5.4.0
         version: 5.4.0(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/swagger@11.4.5(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2))(rxjs@7.8.2)(zod@4.6.6)
       nodemailer:
-        specifier: 10.1.7
-        version: 10.1.7
+        specifier: 10.2.0
+        version: 10.2.0
       pg:
         specifier: 8.23.1
         version: 8.23.1
@@ -2209,8 +2209,8 @@ packages:
   node-rsa@1.1.1:
     resolution: {integrity: sha512-Jd4cvbJMryN21r5HgxQOpMEqv+ooke/korixNNK3mGqfGJmy0M77WDDzo/05969+OkMy3XW1UuZsSmW9KQm7Fw==}
 
-  nodemailer@10.1.7:
-    resolution: {integrity: sha512-OQa6FDln5fLttmqSbjDiRYvFDOFNrBqfiOwHPlEbURil3b+vPB1v8xpi+Sp46drzNDlsTnNsS502vthmz56r4w==}
+  nodemailer@10.2.0:
+    resolution: {integrity: sha512-/XyGw6kX2stMdKGUJdAQmYAeY1FscWfdRydfd2NtK3A3KDfUUXCqZzExSNAt2xhh90X2qLCR+o2Gd48YPJcJwA==}
     engines: {node: '>=20.0.0'}
 
   non-error@0.1.0:
@@ -4030,7 +4030,7 @@ snapshots:
       - '@opentelemetry/api'
       - pg-native
 
-  '@quynhonsemiconductor/platform-mail@0.1.2(5b32cf2aa5af0064d4e3fbcbc72058b5)':
+  '@quynhonsemiconductor/platform-mail@0.1.2(437cea60e885fc284ac813f6fba7a200)':
     dependencies:
       '@quynhonsemiconductor/observability': 0.5.0(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(@opentelemetry/api@1.9.1)(@opentelemetry/auto-instrumentations-node@0.81.0(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.12.0(@opentelemetry/api@1.9.1)))(@opentelemetry/exporter-metrics-otlp-http@0.223.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.223.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-node@0.223.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.43.0)(nestjs-pino@4.6.1(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(pino-http@11.0.0)(pino@10.3.1)(rxjs@7.8.2))(pino@10.3.1)
       '@quynhonsemiconductor/platform-jobs': 0.1.2(7cb18885174c9408a1117cfe6c3a8a5f)
@@ -4038,7 +4038,7 @@ snapshots:
       '@azure/identity': 4.13.3
       '@nestjs/common': 11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 11.2.7(@nestjs/common@11.2.7(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      nodemailer: 10.1.7
+      nodemailer: 10.2.0
 
   '@quynhonsemiconductor/platform-runtime@0.2.0(63ec901dc0475f7133439656481772ca)':
     dependencies:
@@ -4999,7 +4999,7 @@ snapshots:
     dependencies:
       asn1: 0.2.6
 
-  nodemailer@10.1.7: {}
+  nodemailer@10.2.0: {}
 
   non-error@0.1.0: {}
 

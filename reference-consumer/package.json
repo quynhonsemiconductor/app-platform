@@ -29,7 +29,7 @@
     "ioredis": "5.11.1",
     "nestjs-pino": "4.6.1",
     "nestjs-zod": "5.4.0",
-    "nodemailer": "10.0.16",
+    "nodemailer": "10.2.0",
     "pg": "8.23.1",
     "pino": "10.3.1",
     "pino-http": "11.0.0",

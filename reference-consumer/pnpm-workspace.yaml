@@ -15,11 +15,13 @@ overrides:
   "@nestjs/platform-fastify>fastify": "5.12.7"
   # Mirrors the root workspace's CVE floors: GHSA-xcx6-jx8p-x3h5 (msal-node 7.1.0),
   # GHSA-333x/-w74x/-wjr9/-xhq7 (fast-uri 3.1.9 / 4.2.3), GHSA-85x2/-8c8m/-m943
-  # (nodemailer 10.1.7), GHSA-4qv8/-f72v (undici 8.12.2). See the root file for detail.
+  # (nodemailer; this workspace pins 10.2.0 to match the direct dependency and
+  # platform-mail's optional peer — the root workspace keeps 10.1.7),
+  # GHSA-4qv8/-f72v (undici 8.12.2). See the root file for detail.
   "@azure/identity>@azure/msal-node": "7.1.0"
   "fast-uri@>=4 <4.2.3": "4.2.3"
   "fast-uri@>=3 <3.1.9": "3.1.9"
-  "nodemailer@<10.1.4": "10.1.7"
+  "nodemailer@<10.1.4": "10.2.0"
   "undici@>=8 <8.12.2": "8.12.2"
   # GHSA-mrhx-c7xc-m3w5 (CVSS 8.2, memory exhaustion validating oversized constrained
   # collections, fixed 4.6.6): exactly one zod version in this lockfile.

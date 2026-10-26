@@ -1,11 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>quynhonsemiconductor/.github:renovate-config"],
-  "packageRules": [
-    {
-      "description": "Renovate's default ignoreScripts=true skips pnpm's pnpmfile evaluation, so a lockfile regen for the reference consumer drops its pnpmfileChecksum and --frozen-lockfile then fails. Let scripts run for updates that touch that workspace (its .pnpmfile.cjs only strips better-auth's optional peers; it runs no build scripts).",
-      "matchFileNames": ["reference-consumer/**"],
-      "ignoreScripts": false
-    }
-  ]
+  "extends": ["local>quynhonsemiconductor/.github:renovate-config"]
 }

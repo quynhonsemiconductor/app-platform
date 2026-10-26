@@ -102,18 +102,27 @@ describe('pnpmfile.cjs (keeps Better Auth’s optional peers out of a product’
     expect(Object.keys(out.peerDependencies ?? {}).sort()).toEqual(['drizzle-orm', 'pg']);
   });
 
-  it('is shipped in the package, and the README snippet and the reference consumer’s copy are identical to it', () => {
+  it('is shipped in the package, and the README snippet is identical to it', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { files: string[] };
     expect(pkg.files).toContain('pnpmfile.cjs');
 
     const readme = readFileSync(join(root, 'README.md'), 'utf8');
-    const snippet = readme.match(/Add this `\.pnpmfile\.cjs`[\s\S]*?```js\n([\s\S]*?)```/)?.[1];
+    const snippet = readme.match(/add this `\.pnpmfile\.cjs`[\s\S]*?```js\n([\s\S]*?)```/)?.[1];
     expect(snippet).toBeDefined();
     // The README shows the code; the shipped file also carries a header comment explaining it.
     expect(shipped.endsWith(snippet!)).toBe(true);
+  });
 
-    expect(
-      readFileSync(join(root, '..', '..', 'reference-consumer', '.pnpmfile.cjs'), 'utf8'),
-    ).toBe(shipped);
+  it('is what the reference consumer used before its declarative override, which keeps the same peers', () => {
+    // The reference consumer dropped .pnpmfile.cjs for `"better-auth>vitest": "-"` in its
+    // pnpm-workspace.yaml (see identity's README; the override is preferred for new products, and
+    // this shipped pnpmfile stays until rova and opshub migrate). This asserts the two mechanisms
+    // still make the SAME trade-off: vitest dropped, drizzle-orm and pg kept.
+    const ws = readFileSync(
+      join(root, '..', '..', 'reference-consumer', 'pnpm-workspace.yaml'),
+      'utf8',
+    );
+    expect(ws).toMatch(/"better-auth>vitest": "-"|'better-auth>vitest': "-"/);
+    expect(ws).not.toMatch(/"better-auth>drizzle-orm":|"better-auth>pg":/);
   });
 });

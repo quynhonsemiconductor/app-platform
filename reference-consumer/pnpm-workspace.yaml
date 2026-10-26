@@ -27,6 +27,20 @@ overrides:
   # collections, fixed 4.6.6): exactly one zod version in this lockfile.
   "zod@>=4 <4.6.6": "4.6.6"
 
+  # Keep Better Auth's optional peers out of the production tree, declaratively. better-auth declares
+  # 18 OPTIONAL peers (its CLI `drizzle-kit`, its test helpers `vitest`, its React/Svelte/Vue clients
+  # ...); pnpm resolves an optional peer against whatever the importing project has installed, so
+  # vitest (a devDependency here) lands in better-auth's lockfile snapshot as an optionalDependency,
+  # and `pnpm install --prod` follows optional dependencies — the runtime tree gains vitest, vite and
+  # esbuild (how a Trivy CRITICAL on esbuild once reached opshub's image; see identity's README).
+  # Remove the peer instead of resolving it. drizzle-orm and pg stay: identity uses them. This
+  # replaces the old `.pnpmfile.cjs`, whose pnpmfileChecksum broke every Renovate lockfile regen
+  # (#271, #316); an override lives in this file, which Renovate keeps. One line per installed
+  # optional peer. pnpm 11 honours it; pnpm 10.33.2 (opshub's Docker pin) keeps the peer out of the
+  # production tree too, though it still records the peer declaration in the lockfile manifest copy
+  # (checked 2026-10-26; see identity's README).
+  "better-auth>vitest": "-"
+
 # pnpm 11 fails an install that ignores a build script unless the decision is recorded. Same as the root
 # workspace: none is needed (testcontainers falls back to pure JS for ssh2 and cpu-features).
 allowBuilds:

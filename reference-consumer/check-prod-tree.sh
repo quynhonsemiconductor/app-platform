@@ -3,19 +3,22 @@
 #
 # A product's runtime image runs `pnpm install --prod`. better-auth declares 18 OPTIONAL peers (vitest,
 # drizzle-kit, react, next, prisma ...), and pnpm records the ones this project has as optionalDependencies
-# of better-auth, which `--prod` follows. Without `.pnpmfile.cjs` the runtime tree gains them and their trees
-# (vite, rolldown, esbuild with its Go binary ...). See "Keeping Better Auth's optional peers out of the
-# runtime image" in the identity README.
+# of better-auth, which `--prod` follows. Without the `"better-auth>vitest": "-"` override in
+# pnpm-workspace.yaml the runtime tree gains them and their trees (vite, rolldown, esbuild with its Go
+# binary ...). See "Keeping Better Auth's optional peers out of the runtime image" in identity's README.
 #
-# WHICH pnpm MATTERS. pnpm 11 does not leak these into `--prod` even without the pnpmfile; pnpm 10 does.
-# opshub's Dockerfile pins 10.33.2, so a check that only ran pnpm 11 could never fail. This one runs
-# BOTH, and then proves it can fail:
+# WHICH pnpm MATTERS. pnpm 11 honours the override; pnpm 10 (opshub's Dockerfile pins 10.33.2) keeps it
+# out of the production tree too (checked 2026-10-26: re-resolving with the override is clean, without it
+# vitest, vite and esbuild land in the tree), even though identity's README long said otherwise. This one
+# runs BOTH, and then proves it can fail:
 #
-#   1. the lockfile (version-independent): better-auth's entries carry no optional peer the pnpmfile drops;
+#   1. the lockfile (version-independent): better-auth's entries resolve no optional peer beyond the kept
+#      two (peerDependencies declarations in the manifest copy stay: the override stops the RESOLUTION,
+#      not the record);
 #   2. for pnpm 10.33.2 and for the repository's pnpm (11): a frozen `--prod` install into a scratch copy, then
 #      EVERY devDependency of package.json must be absent from `pnpm ls --prod --depth Infinity`;
-#   3. a negative control: pnpm 10.33.2 resolving WITHOUT the pnpmfile must show the leak, or the check above
-#      has stopped being able to detect it (and the script fails saying so).
+#   3. a negative control: pnpm 10.33.2 re-resolving with the override line STRIPPED must show the leak, or
+#      the check above has stopped being able to detect it (and the script fails saying so).
 #
 # Installs only into scratch directories; the working tree and its node_modules stay as they are.
 # NPM_CONFIG_USERCONFIG must point at a token with read:packages. `PNPM_OLD` / `PNPM_NEW` override the runners.
@@ -28,7 +31,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pnpm_old="${PNPM_OLD:-npx -y pnpm@10.33.2}"
 repo_pm="$(node -p "require('$here/../package.json').packageManager" 2>/dev/null || true)"
 pnpm_new="${PNPM_NEW:-npx -y pnpm@${repo_pm#pnpm@}}"
-# Peers the pnpmfile KEEPS (identity uses them); everything else optional must be gone from the lockfile.
+# Peers the override KEEPS (identity uses them); everything else optional must be gone from the lockfile.
 kept='drizzle-orm pg'
 
 scratches=()
@@ -39,7 +42,7 @@ fail=0
 say_fail() { echo "::error::$*"; fail=1; }
 
 # ── 1. the lockfile ────────────────────────────────────────────────────────────────────────────────────
-echo "== lockfile: better-auth carries no optional peer the pnpmfile drops"
+echo "== lockfile: better-auth carries no optional peer the override drops"
 rc=0
 node - "$here/pnpm-lock.yaml" $kept <<'NODE' || rc=$?
 const fs = require('node:fs');
@@ -61,7 +64,7 @@ for (const line of lines) {
   if (!k) continue;
   const name = k[1].replace(/'/g, '');
   // peers (packages), and what pnpm resolved them to (snapshots): either carries a peer the hook drops
-  if (['peerDependencies', 'peerDependenciesMeta', 'optionalDependencies'].includes(block) && !kept.includes(name)) {
+  if (['optionalDependencies'].includes(block) && !kept.includes(name)) {
     found.push(`${section}:${entry} ${block}.${name}`);
   }
 }
@@ -69,7 +72,7 @@ if (entries.length === 0) { console.error('::error::no better-auth entry in the 
 if (found.length) { console.error(`::error::better-auth carries optional peers in the lockfile:\n  ${found.join('\n  ')}`); process.exit(1); }
 console.log(`ok (${entries.length} better-auth entries)`);
 NODE
-if [ "$rc" != 0 ]; then say_fail "the lockfile still records better-auth's optional peers (is .pnpmfile.cjs missing, or the lockfile resolved without it?)"; fi
+if [ "$rc" != 0 ]; then say_fail "the lockfile still records better-auth's optional peers (is the better-auth>vitest override missing, or the lockfile resolved without it?)"; fi
 
 # ── 2. the production tree, on both pnpm versions ───────────────────────────────────────────────────────
 # Prints the devDependencies present in the production tree of the install in $PWD (except @types/*).
@@ -92,10 +95,16 @@ prod_install() { # <pnpm cmd> <scratch> [extra install flags...]
   (cd "$dir" && $pnpm_cmd install --prod --ignore-scripts "$@" >/dev/null)
 }
 
-new_scratch() { # [--without-pnpmfile]  -> prints the directory
+new_scratch() { # [--without-override] -> prints the directory
   local dir; dir="$(mktemp -d)"; scratches+=("$dir")
-  cp "$here/package.json" "$here/pnpm-workspace.yaml" "$here/.npmrc" "$dir/"
-  if [ "${1:-}" != "--without-pnpmfile" ]; then cp "$here/pnpm-lock.yaml" "$here/.pnpmfile.cjs" "$dir/"; fi
+  cp "$here/package.json" "$here/pnpm-workspace.yaml" "$here/.npmrc" "$here/pnpm-lock.yaml" "$dir/"
+  if [ "${1:-}" = "--without-override" ]; then
+    sed -i '' '/better-auth>vitest/d' "$dir/pnpm-workspace.yaml" 2>/dev/null ||
+      sed -i '/better-auth>vitest/d' "$dir/pnpm-workspace.yaml"
+    if grep -q 'better-auth>vitest' "$dir/pnpm-workspace.yaml"; then
+      say_fail "could not strip the override for the negative control"
+    fi
+  fi
   echo "$dir"
 }
 
@@ -107,7 +116,6 @@ for pnpm_cmd in "$pnpm_old" "$pnpm_new"; do
   version="$($pnpm_cmd --version)"
   echo "== production tree with pnpm $version"
   dir="$(new_scratch)"
-  # A frozen install checks the pnpmfile's checksum against the lockfile (pnpm 10 and 11).
   prod_install "$pnpm_cmd" "$dir" --frozen-lockfile
   leaked="$(cd "$dir" && leaked_dev_tools "$pnpm_cmd")"
   if [ -n "$leaked" ]; then
@@ -119,14 +127,14 @@ for pnpm_cmd in "$pnpm_old" "$pnpm_new"; do
 done
 
 # ── 3. the negative control ─────────────────────────────────────────────────────────────────────────────
-echo "== negative control: pnpm 10 without the pnpmfile must leak"
-dir="$(new_scratch --without-pnpmfile)"
+echo "== negative control: pnpm 10 re-resolving without the override must leak"
+dir="$(new_scratch --without-override)"
 prod_install "$pnpm_old" "$dir"
 leaked="$(cd "$dir" && leaked_dev_tools "$pnpm_old")"
 if [ -z "$leaked" ]; then
-  say_fail "the check cannot detect the leak: pnpm 10 resolving WITHOUT .pnpmfile.cjs shows no devDependency in the production tree. Either pnpm or better-auth changed (then the pnpmfile may no longer be needed: say so in the identity README), or leaked_dev_tools is broken"
+  say_fail "the check cannot detect the leak: pnpm 10 re-resolving WITHOUT the override shows no devDependency in the production tree. Either pnpm or better-auth changed (then the override may no longer be needed: say so in the identity README), or leaked_dev_tools is broken"
 else
-  echo "ok: without the pnpmfile pnpm 10 puts $leaked in the production tree, so the check above can fail"
+  echo "ok: without the override pnpm 10 puts $leaked in the production tree, so the check above can fail"
 fi
 
 exit "$fail"

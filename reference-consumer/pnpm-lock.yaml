@@ -13,8 +13,22 @@ overrides:
   nodemailer@<10.1.4: 10.2.0
   undici@>=8 <8.12.2: 8.12.2
   zod@>=4 <4.6.6: 4.6.6
-
-pnpmfileChecksum: sha256-JWF1KFI4Zhh11NAkzC9Qb5ZdXTBJMedSdxqE8XzOg08=
+  better-auth>@lynx-js/react: '-'
+  better-auth>@prisma/client: '-'
+  better-auth>@sveltejs/kit: '-'
+  better-auth>@tanstack/react-start: '-'
+  better-auth>@tanstack/solid-start: '-'
+  better-auth>drizzle-kit: '-'
+  better-auth>mongodb: '-'
+  better-auth>mysql2: '-'
+  better-auth>next: '-'
+  better-auth>prisma: '-'
+  better-auth>react: '-'
+  better-auth>react-dom: '-'
+  better-auth>solid-js: '-'
+  better-auth>svelte: '-'
+  better-auth>vitest: '-'
+  better-auth>vue: '-'
 
 importers:
 

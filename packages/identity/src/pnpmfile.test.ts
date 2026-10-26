@@ -102,18 +102,45 @@ describe('pnpmfile.cjs (keeps Better Auth’s optional peers out of a product’
     expect(Object.keys(out.peerDependencies ?? {}).sort()).toEqual(['drizzle-orm', 'pg']);
   });
 
-  it('is shipped in the package, and the README snippet and the reference consumer’s copy are identical to it', () => {
+  it('is shipped in the package, and the README snippet is identical to it', () => {
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { files: string[] };
     expect(pkg.files).toContain('pnpmfile.cjs');
 
     const readme = readFileSync(join(root, 'README.md'), 'utf8');
-    const snippet = readme.match(/Add this `\.pnpmfile\.cjs`[\s\S]*?```js\n([\s\S]*?)```/)?.[1];
+    const snippet = readme.match(/add this `\.pnpmfile\.cjs`[\s\S]*?```js\n([\s\S]*?)```/)?.[1];
     expect(snippet).toBeDefined();
     // The README shows the code; the shipped file also carries a header comment explaining it.
     expect(shipped.endsWith(snippet!)).toBe(true);
+  });
 
-    expect(
-      readFileSync(join(root, '..', '..', 'reference-consumer', '.pnpmfile.cjs'), 'utf8'),
-    ).toBe(shipped);
+  it('the reference consumer override makes the same trade-off and cannot drift', () => {
+    // The reference consumer dropped .pnpmfile.cjs for a `better-auth>peer: "-"` override list in its
+    // pnpm-workspace.yaml (see identity's README; the override is preferred for new products, and
+    // this shipped pnpmfile stays until rova and opshub migrate). The list must drop EVERY optional
+    // peer except drizzle-orm and pg, so a Better Auth bump that adds or removes a peer fails here
+    // until the list (and, for products, the pnpmfile) is updated.
+    const ws = readFileSync(
+      join(root, '..', '..', 'reference-consumer', 'pnpm-workspace.yaml'),
+      'utf8',
+    );
+    const overridden = [...ws.matchAll(/"better-auth>([^"]+)": "-"/g)].map((m) => m[1]).sort();
+    expect(overridden.length).toBeGreaterThan(0);
+
+    const dir = join(root, 'node_modules', 'better-auth', 'package.json');
+    const installed = JSON.parse(readFileSync(dir, 'utf8')) as Manifest;
+    const peers = Object.keys(installed.peerDependencies ?? {});
+    const optional = peers.filter((p) => installed.peerDependenciesMeta?.[p]?.optional === true);
+    expect(overridden).toEqual(optional.filter((p) => !['drizzle-orm', 'pg'].includes(p)).sort());
+
+    // Nothing overrides the two kept peers, or a peer that is not optional.
+    for (const kept of ['drizzle-orm', 'pg']) {
+      expect(overridden).not.toContain(kept);
+      expect(peers).toContain(kept);
+    }
+    for (const required of peers.filter(
+      (p) => installed.peerDependenciesMeta?.[p]?.optional !== true,
+    )) {
+      expect(overridden).not.toContain(required);
+    }
   });
 });

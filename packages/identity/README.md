@@ -69,9 +69,42 @@ a product with `vitest` or `drizzle-kit` in its `devDependencies` gets them writ
 drizzle-kit and their trees (vite, rolldown, esbuild with its Go binary): that is how a Trivy CRITICAL on esbuild
 (CVE-2025-68121) reached opshub's image. Any other of the 18 that a product happens to have installed leaks the same way.
 
-Add this `.pnpmfile.cjs` at the root of the product, next to `pnpm-workspace.yaml`. It is the file the package ships
-(`node_modules/@quynhonsemiconductor/identity/pnpmfile.cjs`, which also carries a header comment; a test keeps this snippet, that
-file and the reference consumer's copy identical):
+**Preferred: the declarative override.** One entry per optional peer of Better Auth (all of them, except the two identity
+uses, `drizzle-orm` and `pg` — not only the ones the product has installed today) in the product's `pnpm-workspace.yaml`:
+
+```yaml
+overrides:
+  'better-auth>@lynx-js/react': '-'
+  'better-auth>@prisma/client': '-'
+  'better-auth>@sveltejs/kit': '-'
+  'better-auth>@tanstack/react-start': '-'
+  'better-auth>@tanstack/solid-start': '-'
+  'better-auth>drizzle-kit': '-'
+  'better-auth>mongodb': '-'
+  'better-auth>mysql2': '-'
+  'better-auth>next': '-'
+  'better-auth>prisma': '-'
+  'better-auth>react': '-'
+  'better-auth>react-dom': '-'
+  'better-auth>solid-js': '-'
+  'better-auth>svelte': '-'
+  'better-auth>vitest': '-'
+  'better-auth>vue': '-'
+```
+
+pnpm 11 honours it while resolving, so the peers never enter the lockfile at all, and Renovate keeps the file — unlike a
+pnpmfile, whose checksum every regen dropped (#271, #316). pnpm 10.33.2 keeps the peers out of the `--prod` tree too
+(checked 2026-10-26 with re-resolving installs in `check-prod-tree.sh`: with the override the tree is clean, without it
+vitest, vite and esbuild land in it), though it still records the peer declarations in the lockfile's manifest copy. The
+reference consumer uses this exact list and no longer carries a pnpmfile; new products should prefer it. When a Better Auth
+bump adds or removes a peer, the test in `packages/identity/src/pnpmfile.test.ts` that compares this list (via the reference
+consumer's copy of it) against better-auth's installed `peerDependenciesMeta` fails until the list is updated here and in
+every product — the same tripwire the pnpmfile's `cmp` step provides.
+
+**The pnpmfile**, for the products that still use it (rova, opshub): add this `.pnpmfile.cjs` at the root of the product,
+next to `pnpm-workspace.yaml`. It is the file the package ships
+(`node_modules/@quynhonsemiconductor/identity/pnpmfile.cjs`, which also carries a header comment; a test keeps this snippet and
+that file identical):
 
 ```js
 const KEPT_PEERS_OF_BETTER_AUTH = ['drizzle-orm', 'pg'];
@@ -99,7 +132,8 @@ conformance kit on every bump.
 
 Then, once:
 
-1. `pnpm install` (changing the file changes the lockfile; commit both).
+1. `pnpm install` (changing the file changes the lockfile; commit both). With the override instead, the same: editing the
+   override re-resolves the lockfile.
 2. **Every Docker stage that runs `pnpm install --frozen-lockfile` copies the file** (`COPY ... .npmrc .pnpmfile.cjs ./`).
    A frozen install checks the file's checksum against the lockfile: a stage that forgot it fails with
    `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`, loudly, rather than shipping the tools.
@@ -111,25 +145,28 @@ Then, once:
    `cmp .pnpmfile.cjs node_modules/@quynhonsemiconductor/identity/pnpmfile.cjs` (a CI step; a difference means a new Better Auth
    peer or a changed rule). The header comment is part of the shipped file, so copy the file rather than the snippet.
 
-**Which pnpm.** The leak happens on **pnpm 10.33.2**, the version opshub's Dockerfile pins; the file is **required** there.
-pnpm 11.28.5 (rova's `packageManager`) did not put these into a `--prod` install in the tests below even without the file, so
-on pnpm 11 it is defensive: it makes the lockfile say what the image holds, and keeps the product safe if it ever builds an
-image on pnpm 10 or a later pnpm changes the default. A check that installs with pnpm 11 only cannot fail, which is why the
-reference consumer's check runs both versions and a negative control (pnpm 10 without the file must leak).
+**Which pnpm.** The leak happens on **pnpm 10.33.2**, the version opshub's Dockerfile pins; there the override (or the file)
+is **required**. pnpm 11.28.5 (rova's `packageManager`) did not put these into a `--prod` install in the tests below even
+without either, so on pnpm 11 the override is defensive: it makes the lockfile say what the image holds, and keeps the
+product safe if it ever builds an image on pnpm 10 or a later pnpm changes the default. A check that installs with pnpm 11
+only cannot fail, which is why the reference consumer's check runs both versions and a negative control (pnpm 10
+re-resolving with the override stripped must leak).
 
-**A tool that passes `--ignore-pnpmfile`** (Renovate's hosted app might; not verified here) re-resolves the lockfile without the
-hook. On pnpm 10 that drops `pnpmfileChecksum` and brings the peers back (checked: `pnpm install --lockfile-only
---ignore-pnpmfile` on the reference consumer), and the next frozen install, which uses the file, fails with the same
-`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`: a failed build, not a quietly fat image. Re-run `pnpm install` on the PR. On pnpm 11 the
-checksum was kept.
+**A tool that passes `--ignore-pnpmfile`** (Renovate's hosted app does; this friction is why the reference consumer dropped
+the pnpmfile for the override) re-resolves the lockfile without the hook. On pnpm 10 that drops `pnpmfileChecksum` and brings
+the peers back, and the next frozen install, which uses the file, fails with
+`ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`: a failed build, not a quietly fat image. Re-run `pnpm install` on the PR.
 
 Verified on a scratch project with `vitest`, `drizzle-kit`, `react` and `react-dom` (esbuild `0.18`, `0.25` and `0.28` in the
 `--prod` tree on pnpm 10 without the file, none with it), and in the repository's `reference-consumer/` (vitest, vite and
 rolldown in the pnpm 10 `--prod` tree without it, none with it; CI runs `check-prod-tree.sh` on every run). What was tried
 instead, and why it is not the fix:
 
-- **`overrides: { "better-auth>vitest": "-" }`** (in `pnpm-workspace.yaml` or `package.json`) removes the entry on pnpm 11 and
-  does nothing on pnpm 10.33.2, and it is a list too.
+- **`overrides: { "better-auth>vitest": "-" }`** (in `pnpm-workspace.yaml`) removes the entry on pnpm 11, and on pnpm 10.33.2
+  it keeps the peer out of the `--prod` tree even though the recorded entry stays (measured 2026-10-26; the earlier note here
+  that pnpm 10 "does nothing" was wrong — it was checked against the lockfile, not the tree). It is a list too, one line per
+  installed optional peer. It is now the reference consumer's choice, and the preferred mechanism: unlike a pnpmfile, it
+  survives Renovate's lockfile regens.
 - **`packageExtensions`** can add to a package's manifest but not remove a peer.
 - **`auto-install-peers=false`** changes nothing: these peers are not auto-installed, they are matched to what the project has.
 - **`pnpm install --prod --no-optional`** drops every optional dependency, including the platform binaries of
@@ -140,7 +177,8 @@ instead, and why it is not the fix:
 
 Accepted cost: a product with the pnpmfile cannot use `better-auth/react`, `better-auth/test`, a framework client or the
 `auth generate` CLI from the same install, because the peers they need are not resolved. Identity does not use them; if a
-product needs one, add its name to `KEPT_PEERS_OF_BETTER_AUTH`, re-install, and accept the matching entry in the image.
+product needs one, add its name to `KEPT_PEERS_OF_BETTER_AUTH` (or, on pnpm 11, drop the matching override line), re-install,
+and accept the matching entry in the image.
 
 ## Subpaths
 

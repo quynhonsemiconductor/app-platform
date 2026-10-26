@@ -2,10 +2,11 @@
 # The production dependency tree of this consumer holds no dev tooling.
 #
 # A product's runtime image runs `pnpm install --prod`. better-auth declares 18 OPTIONAL peers (vitest,
-# drizzle-kit, react, next, prisma ...), and pnpm records the ones this project has as optionalDependencies
-# of better-auth, which `--prod` follows. Without the `"better-auth>vitest": "-"` override in
-# pnpm-workspace.yaml the runtime tree gains them and their trees (vite, rolldown, esbuild with its Go
-# binary ...). See "Keeping Better Auth's optional peers out of the runtime image" in identity's README.
+# drizzle-kit, react, next, prisma ...), and pnpm resolves an optional peer against whatever the
+# importing project has installed; `--prod` follows the resulting optionalDependencies. Without the
+# "better-auth>peer": "-" overrides in pnpm-workspace.yaml (all 16 optional peers except drizzle-orm
+# and pg) the runtime tree gains them and their trees (vite, rolldown, esbuild with its Go binary ...).
+# See "Keeping Better Auth's optional peers out of the runtime image" in identity's README.
 #
 # WHICH pnpm MATTERS. pnpm 11 honours the override; pnpm 10 (opshub's Dockerfile pins 10.33.2) keeps it
 # out of the production tree too (checked 2026-10-26: re-resolving with the override is clean, without it

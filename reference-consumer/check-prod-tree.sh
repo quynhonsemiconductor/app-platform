@@ -17,8 +17,8 @@
 #      not the record);
 #   2. for pnpm 10.33.2 and for the repository's pnpm (11): a frozen `--prod` install into a scratch copy, then
 #      EVERY devDependency of package.json must be absent from `pnpm ls --prod --depth Infinity`;
-#   3. a negative control: pnpm 10.33.2 re-resolving with the override line STRIPPED must show the leak, or
-#      the check above has stopped being able to detect it (and the script fails saying so).
+#   3. a negative control: pnpm 10.33.2 re-resolving with the override STRIPPED and no lockfile must show the
+#      leak, or the check above has stopped being able to detect it (and the script fails saying so).
 #
 # Installs only into scratch directories; the working tree and its node_modules stay as they are.
 # NPM_CONFIG_USERCONFIG must point at a token with read:packages. `PNPM_OLD` / `PNPM_NEW` override the runners.
@@ -72,7 +72,7 @@ if (entries.length === 0) { console.error('::error::no better-auth entry in the 
 if (found.length) { console.error(`::error::better-auth carries optional peers in the lockfile:\n  ${found.join('\n  ')}`); process.exit(1); }
 console.log(`ok (${entries.length} better-auth entries)`);
 NODE
-if [ "$rc" != 0 ]; then say_fail "the lockfile still records better-auth's optional peers (is the better-auth>vitest override missing, or the lockfile resolved without it?)"; fi
+if [ "$rc" != 0 ]; then say_fail "the lockfile still records better-auth's optional peers (are the better-auth> overrides missing, or did the lockfile resolve without them?)"; fi
 
 # ── 2. the production tree, on both pnpm versions ───────────────────────────────────────────────────────
 # Prints the devDependencies present in the production tree of the install in $PWD (except @types/*).
@@ -97,13 +97,17 @@ prod_install() { # <pnpm cmd> <scratch> [extra install flags...]
 
 new_scratch() { # [--without-override] -> prints the directory
   local dir; dir="$(mktemp -d)"; scratches+=("$dir")
-  cp "$here/package.json" "$here/pnpm-workspace.yaml" "$here/.npmrc" "$here/pnpm-lock.yaml" "$dir/"
+  cp "$here/package.json" "$here/pnpm-workspace.yaml" "$here/.npmrc" "$dir/"
   if [ "${1:-}" = "--without-override" ]; then
-    sed -i '' '/better-auth>vitest/d' "$dir/pnpm-workspace.yaml" 2>/dev/null ||
-      sed -i '/better-auth>vitest/d' "$dir/pnpm-workspace.yaml"
-    if grep -q 'better-auth>vitest' "$dir/pnpm-workspace.yaml"; then
+    # No lockfile on purpose: this scratch must RE-RESOLVE, and pnpm defaults to --frozen-lockfile
+    # under CI, which would fail on the committed lockfile instead of demonstrating the leak.
+    sed -i '' '/"better-auth>/d' "$dir/pnpm-workspace.yaml" 2>/dev/null ||
+      sed -i '/"better-auth>/d' "$dir/pnpm-workspace.yaml"
+    if grep -q '"better-auth>' "$dir/pnpm-workspace.yaml"; then
       say_fail "could not strip the override for the negative control"
     fi
+  else
+    cp "$here/pnpm-lock.yaml" "$dir/"
   fi
   echo "$dir"
 }
@@ -129,7 +133,7 @@ done
 # ── 3. the negative control ─────────────────────────────────────────────────────────────────────────────
 echo "== negative control: pnpm 10 re-resolving without the override must leak"
 dir="$(new_scratch --without-override)"
-prod_install "$pnpm_old" "$dir"
+prod_install "$pnpm_old" "$dir" --no-frozen-lockfile
 leaked="$(cd "$dir" && leaked_dev_tools "$pnpm_old")"
 if [ -z "$leaked" ]; then
   say_fail "the check cannot detect the leak: pnpm 10 re-resolving WITHOUT the override shows no devDependency in the production tree. Either pnpm or better-auth changed (then the override may no longer be needed: say so in the identity README), or leaked_dev_tools is broken"

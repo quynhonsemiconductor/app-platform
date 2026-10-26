@@ -69,18 +69,37 @@ a product with `vitest` or `drizzle-kit` in its `devDependencies` gets them writ
 drizzle-kit and their trees (vite, rolldown, esbuild with its Go binary): that is how a Trivy CRITICAL on esbuild
 (CVE-2025-68121) reached opshub's image. Any other of the 18 that a product happens to have installed leaks the same way.
 
-**Preferred: the declarative override.** One line per installed optional peer in the product's `pnpm-workspace.yaml`:
+**Preferred: the declarative override.** One entry per optional peer of Better Auth (all of them, except the two identity
+uses, `drizzle-orm` and `pg` — not only the ones the product has installed today) in the product's `pnpm-workspace.yaml`:
 
 ```yaml
 overrides:
+  'better-auth>@lynx-js/react': '-'
+  'better-auth>@prisma/client': '-'
+  'better-auth>@sveltejs/kit': '-'
+  'better-auth>@tanstack/react-start': '-'
+  'better-auth>@tanstack/solid-start': '-'
+  'better-auth>drizzle-kit': '-'
+  'better-auth>mongodb': '-'
+  'better-auth>mysql2': '-'
+  'better-auth>next': '-'
+  'better-auth>prisma': '-'
+  'better-auth>react': '-'
+  'better-auth>react-dom': '-'
+  'better-auth>solid-js': '-'
+  'better-auth>svelte': '-'
   'better-auth>vitest': '-'
+  'better-auth>vue': '-'
 ```
 
 pnpm 11 honours it while resolving, so the peers never enter the lockfile at all, and Renovate keeps the file — unlike a
-pnpmfile, whose checksum every regen dropped (#271, #316). pnpm 10.33.2 keeps the peer out of the `--prod` tree too
+pnpmfile, whose checksum every regen dropped (#271, #316). pnpm 10.33.2 keeps the peers out of the `--prod` tree too
 (checked 2026-10-26 with re-resolving installs in `check-prod-tree.sh`: with the override the tree is clean, without it
 vitest, vite and esbuild land in it), though it still records the peer declarations in the lockfile's manifest copy. The
-reference consumer uses the override and no longer carries a pnpmfile; new products should prefer it.
+reference consumer uses this exact list and no longer carries a pnpmfile; new products should prefer it. When a Better Auth
+bump adds or removes a peer, the test in `packages/identity/src/pnpmfile.test.ts` that compares this list (via the reference
+consumer's copy of it) against better-auth's installed `peerDependenciesMeta` fails until the list is updated here and in
+every product — the same tripwire the pnpmfile's `cmp` step provides.
 
 **The pnpmfile**, for the products that still use it (rova, opshub): add this `.pnpmfile.cjs` at the root of the product,
 next to `pnpm-workspace.yaml`. It is the file the package ships

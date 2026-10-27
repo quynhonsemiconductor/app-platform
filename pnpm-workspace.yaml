@@ -110,7 +110,7 @@ overrides:
   "nodemailer@<10.1.4": "10.1.7"
   # GHSA-4qv8-2p9j-2685 + GHSA-f72v-6w45-q472 (CVSS 5.9 each, fixed 8.12.2): testcontainers
   # (dev-only) resolves undici 8.11.2.
-  "undici@>=8 <8.12.2": "8.12.2"
+  "undici@>=8 <8.12.2": "8.12.3"
 
 # pnpm 11 fails an install that ignores a dependency's build script unless the decision is
 # written down. These five were already being skipped (pnpm 10 only warned); recording them as

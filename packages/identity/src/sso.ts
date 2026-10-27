@@ -38,7 +38,7 @@ export function ssoPlugin(options: {
   hooks: SsoHooks | undefined;
   getContext: ContextProvider;
   sink: SecurityEventSink;
-}) {
+}): ReturnType<typeof sso> {
   const { hooks, getContext, sink } = options;
   const reject = (code: string, message: string) => ({ action: 'reject', code, message }) as const;
 

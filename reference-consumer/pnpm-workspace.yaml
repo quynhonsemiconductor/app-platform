@@ -22,7 +22,7 @@ overrides:
   "fast-uri@>=4 <4.2.3": "4.2.3"
   "fast-uri@>=3 <3.1.9": "3.1.9"
   "nodemailer@<10.1.4": "10.2.0"
-  "undici@>=8 <8.12.2": "8.12.2"
+  "undici@>=8 <8.12.2": "8.12.3"
   # GHSA-mrhx-c7xc-m3w5 (CVSS 8.2, memory exhaustion validating oversized constrained
   # collections, fixed 4.6.6): exactly one zod version in this lockfile.
   "zod@>=4 <4.6.6": "4.6.6"

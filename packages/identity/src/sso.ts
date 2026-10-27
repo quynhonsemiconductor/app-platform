@@ -1,5 +1,5 @@
 import { sso } from '@better-auth/sso';
-import type { User } from 'better-auth';
+import type { BetterAuthPlugin, User } from 'better-auth';
 import { replaceUnverifiedAccount, type ContextProvider } from './accounts';
 import { domainIn, emailDomain } from './domains';
 import type { SecurityEventSink } from './events';
@@ -38,7 +38,13 @@ export function ssoPlugin(options: {
   hooks: SsoHooks | undefined;
   getContext: ContextProvider;
   sink: SecurityEventSink;
-}) {
+}): BetterAuthPlugin {
+  // The package's public type. Return the narrow plugin interface, NOT the inferred
+  // `ReturnType<typeof sso>`: the inferred type serializes better-auth's whole provider
+  // graph (better-call/samlify) into this package's declarations, and every consumer
+  // compiling identity's types then follows that graph — samlify's @xmldom dependency
+  // carries `/// <reference lib="dom" />`, which pulls lib.dom into programs that have
+  // no DOM business and conflicts with node:crypto's webcrypto types.
   const { hooks, getContext, sink } = options;
   const reject = (code: string, message: string) => ({ action: 'reject', code, message }) as const;
 

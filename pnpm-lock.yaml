@@ -19,7 +19,7 @@ overrides:
   '@grpc/grpc-js@<1.14.5': '>=1.14.5 <2.0.0'
   '@nestjs/platform-fastify>fastify': 5.12.7
   zod@>=4 <4.6.6: 4.6.6
-  '@azure/identity>@azure/msal-node': 7.1.0
+  '@azure/identity>@azure/msal-node': 7.1.1
   fast-uri@>=4 <4.2.3: 4.2.3
   fast-uri@>=3 <3.1.9: 3.1.9
   nodemailer@<10.1.4: 10.1.7
@@ -506,8 +506,12 @@ packages:
     resolution: {integrity: sha512-HOBR0Gfo39TMrkxNG8k6cfjRkrRjXZc3JQs3ebMWQc9S4cihuknMYra3sgmzbZB752oQBqBN9+WF7c826p2vIQ==}
     engines: {node: '>=0.8.0'}
 
-  '@azure/msal-node@7.1.0':
-    resolution: {integrity: sha512-s1O6hSY/C/dmqykTmmeHY6GhSkDuY8N1gxyhuLyaCwbY7N+UBvU2Wu4flas7+NxZiAPcXNPVpgt3n/HP/5yL+w==}
+  '@azure/msal-common@16.14.3':
+    resolution: {integrity: sha512-tz3GvMrR9V/plb2lDdW8qaO8CPpfZevdExBKjltzzbAtyhK0eB2UIvji1aU+gkyHj3fxQ2ie+LNHyMXdmo8wOg==}
+    engines: {node: '>=0.8.0'}
+
+  '@azure/msal-node@7.1.1':
+    resolution: {integrity: sha512-zHXTJB38XVrsNaXrPBCMqEUjeyQysFfgmKtUHRDsEKTRjNIPckJ/w6fE5wBXrmJXBim1D3C7O7LOag0msPTrgw==}
     engines: {node: '>=20'}
 
   '@babel/code-frame@7.29.7':
@@ -1974,6 +1978,7 @@ packages:
   '@opentelemetry/propagator-jaeger@2.12.0':
     resolution: {integrity: sha512-Kz2Vz+NILW7S1WtN4rV1wr76fMtT/RRWvAMFBc91uTIi2dDMXxrfBKNe2KH7yaCfFp1X0xfAuabzuFczvoPB6A==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Package no longer supported. See https://github.com/open-telemetry/opentelemetry-js/pull/7077
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -2038,12 +2043,14 @@ packages:
   '@opentelemetry/sdk-trace-base@2.12.0':
     resolution: {integrity: sha512-JOERgZCxRM06FEJ5kEWxlSRChah6MmXDx3KwCruqEv/iEyLkTokCSemf2y1w8oIHtfrr8EVTpzebq/31vn2Cpg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.3.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-node@2.12.0':
     resolution: {integrity: sha512-9DufH1IlmQMoKAfot5y/FhTP1RnmhLb5K6eKmJO/bvzPjYwPAazoiAUbTZFdPbqxOXN0FEbhZx/e6SB1Og4jmg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -4897,7 +4904,7 @@ snapshots:
       '@azure/core-util': 1.14.0(supports-color@7.2.0)
       '@azure/logger': 1.4.0(supports-color@7.2.0)
       '@azure/msal-browser': 5.25.0
-      '@azure/msal-node': 7.1.0
+      '@azure/msal-node': 7.1.1
       open: 11.0.4
       tslib: 2.8.1
     transitivePeerDependencies:
@@ -4916,9 +4923,11 @@ snapshots:
 
   '@azure/msal-common@16.14.2': {}
 
-  '@azure/msal-node@7.1.0':
+  '@azure/msal-common@16.14.3': {}
+
+  '@azure/msal-node@7.1.1':
     dependencies:
-      '@azure/msal-common': 16.14.2
+      '@azure/msal-common': 16.14.3
       jsonwebtoken: 9.0.3
 
   '@babel/code-frame@7.29.7':

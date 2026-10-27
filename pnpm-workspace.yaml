@@ -98,7 +98,7 @@ overrides:
   # (CVSS 7.5) is 7.1.0 — a major ACROSS the vendor's own dependency. No code here imports
   # msal directly (it is internal to @azure/identity); platform-mail's suite gates the pair.
   # Revisit when @azure/identity ships a minor declaring 7.x.
-  "@azure/identity>@azure/msal-node": "7.1.0"
+  "@azure/identity>@azure/msal-node": "7.1.1"
   # Four fast-uri advisories (GHSA-333x-w4r6-6crp, -w74x-v6f9-j3xg, -wjr9-j795-jxcr,
   # -xhq7-xmqj-769h) — fixed 3.1.9 (3.x) and 4.2.3 (4.x). The fastify chain
   # (@fastify/ajv-compiler, ajv, fast-json-stringify) declares ^4.0.0 / ^3 ranges that already

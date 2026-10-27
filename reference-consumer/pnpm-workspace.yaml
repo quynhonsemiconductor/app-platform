@@ -18,7 +18,7 @@ overrides:
   # (nodemailer; this workspace pins 10.2.0 to match the direct dependency and
   # platform-mail's optional peer — the root workspace keeps 10.1.7),
   # GHSA-4qv8/-f72v (undici 8.12.2). See the root file for detail.
-  "@azure/identity>@azure/msal-node": "7.1.0"
+  "@azure/identity>@azure/msal-node": "7.1.1"
   "fast-uri@>=4 <4.2.3": "4.2.3"
   "fast-uri@>=3 <3.1.9": "3.1.9"
   "nodemailer@<10.1.4": "10.2.0"

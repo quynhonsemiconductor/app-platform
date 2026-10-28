@@ -1,0 +1,14 @@
+# osv-scanner suppressions for the reference-consumer lockfile. Read by the shared security
+# workflow from the directory of the lockfile it scans. EVERY entry expires: ignoreUntil is at
+# most 30 days out, so an ignore cannot quietly become permanent -- when it lapses the check
+# goes red again and somebody has to look.
+
+[[IgnoredVulns]]
+id = "GHSA-gcqx-w48m-w2h4"
+ignoreUntil = 2026-11-27
+reason = """\
+deepmerge 4.2.0-4.3.1 (CVE-2026-93753, prototype poisoning in mergeObject(), LOW). NO patched \
+version exists: 4.3.1 is npm's latest release and OSV records last_affected 4.3.1 with no fixed \
+event. Reached via nestjs-zod@5.4.0 (dev-only consumer harness), which merges FIRST-PARTY \
+option objects, never attacker-supplied source objects. Same entry and expiry as the root \
+osv-scanner.toml and opshub#507."""

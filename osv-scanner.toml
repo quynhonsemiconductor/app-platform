@@ -5,3 +5,16 @@
 
 # No active suppressions. (GHSA-hp3w-g68c-fv3c, sprintf-js, was removed together with
 # ioredis-mock -> fengari, the only path that reached it.)
+
+[[IgnoredVulns]]
+id = "GHSA-gcqx-w48m-w2h4"
+ignoreUntil = 2026-11-27
+reason = """\
+deepmerge 4.2.0-4.3.1 (CVE-2026-93753, prototype poisoning in mergeObject(), LOW). NO patched \
+version exists: 4.3.1 is npm's latest release and OSV records last_affected 4.3.1 with no fixed \
+event (upstream issue TehShrike/deepmerge#273 open). Reached via nestjs-zod (runtime), which \
+merges FIRST-PARTY option objects, never attacker-supplied source objects, which the finding \
+requires. Downgrading below 4.2.0 would pull a 2020 release outside the range nestjs-zod \
+declares, for a LOW-severity finding with no exploitable path here. Revisit by the expiry: drop \
+this entry if upstream ships a fixed release or the advisory is withdrawn. Same entry as \
+opshub#507."""

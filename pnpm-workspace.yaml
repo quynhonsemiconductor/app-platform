@@ -111,6 +111,12 @@ overrides:
   # GHSA-4qv8-2p9j-2685 + GHSA-f72v-6w45-q472 (CVSS 5.9 each, fixed 8.12.2): testcontainers
   # (dev-only) resolves undici 8.11.2.
   "undici@>=8 <8.12.2": "8.12.3"
+  # GHSA-3f7j-7jwc-fxfj (CVSS 7.8) / GHSA-7648-jmwf-vw7j / GHSA-4vjg-vx72-qq4g — systeminformation,
+  # all fixed by 5.33.16. Transitive via @opentelemetry/instrumentation-host-metrics under the
+  # sdk-node chain observability re-exports; its own range already admits the fix, so this floor
+  # only moves the stale 5.33.0 resolution. The reference consumer carries the same floor for the
+  # same reason (its lock resolved 5.33.15).
+  "systeminformation@<5.33.16": ">=5.33.16 <6.0.0"
 
 # pnpm 11 fails an install that ignores a dependency's build script unless the decision is
 # written down. These five were already being skipped (pnpm 10 only warned); recording them as

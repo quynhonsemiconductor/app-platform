@@ -1,5 +1,13 @@
 # Changelog
 
+## [8.5.2](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.5.1...identity-v8.5.2) (2026-10-31)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** drop reference-consumer's pnpmfile for a declarative better-auth override ([#317](https://github.com/quynhonsemiconductor/app-platform/issues/317)) ([dac130f](https://github.com/quynhonsemiconductor/app-platform/commit/dac130f3d3cd16a558e2b8e6da56d5d2c13f7199))
+* **identity:** type ssoPlugin as BetterAuthPlugin, not the inferred sso() return ([#320](https://github.com/quynhonsemiconductor/app-platform/issues/320)) ([fda6ba9](https://github.com/quynhonsemiconductor/app-platform/commit/fda6ba9bba0e3196855aaf66d125c61d96a82922))
+
 ## [8.5.1](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.5.0...identity-v8.5.1) (2026-10-24)
 
 

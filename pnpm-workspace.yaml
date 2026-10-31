@@ -118,6 +118,22 @@ overrides:
   # same reason (its lock resolved 5.33.15).
   "systeminformation@<5.33.16": ">=5.33.16 <6.0.0"
 
+  # GHSA-3g3m-2fjr-6pw4 (CVSS 6.3) — glob's AbortSignal cancellation bypass lets a timed-out
+  # traversal keep walking the filesystem. Introduced in 9.0.0, fixed in 14.0.2, so there is NO
+  # patched release on 10.x: the fix exists only beyond the next major, which is why this crosses
+  # majors where the entries above stay inside one. Reached through the dev/test toolchain
+  # (rimraf 5 under the OTel gaxios chain, and `**` listing under @nestjs/cli / @fastify/static).
+  # The selector is bounded BELOW only, so a package that later asks for glob 15 is not dragged
+  # down. Same pin as rova#835 / opshub#517.
+  "glob@<14.0.3": "14.0.3"
+  # GHSA-g3hv-75wg-m249 (CVSS 6.9) — minimatch's globparts amplification, a DoS reachable from a
+  # pattern an attacker can influence. Fixed in 11.0.1, again with no patch on 3.x/5.x/9.x/10.x.
+  # Four majors arrive here (fork-ts-checker, openapi tooling, @swc/cli, eslint); every consumer
+  # uses the surface the patched line still supports and 11 ships CJS + ESM builds. One forced
+  # version rather than a per-major floor: the advisory covers all of them, so a per-major pin
+  # would only re-open the gate on the next unaudited major.
+  "minimatch@<11.0.3": "11.0.3"
+
 # pnpm 11 fails an install that ignores a dependency's build script unless the decision is
 # written down. These five were already being skipped (pnpm 10 only warned); recording them as
 # `false` keeps today's behaviour exactly. None is needed: esbuild and protobufjs ship their

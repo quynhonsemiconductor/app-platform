@@ -63,6 +63,12 @@ overrides:
   "better-auth>vitest": "-"
   "better-auth>vue": "-"
 
+  # GHSA-3g3m-2fjr-6pw4 (glob, CVSS 6.3) and GHSA-g3hv-75wg-m249 (minimatch, CVSS 6.9) — no
+  # patched release exists in any major this lockfile carries, so both cross majors to the first
+  # fixed versions. Mirrors the root workspace; see that file for the reasoning.
+  "glob@<14.0.3": "14.0.3"
+  "minimatch@<11.0.3": "11.0.3"
+
 # pnpm 11 fails an install that ignores a build script unless the decision is recorded. Same as the root
 # workspace: none is needed (testcontainers falls back to pure JS for ssh2 and cpu-features).
 allowBuilds:

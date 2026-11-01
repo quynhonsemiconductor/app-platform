@@ -82,7 +82,7 @@
     "@quynhonsemiconductor/platform-jobs": "workspace:*",
     "@quynhonsemiconductor/testing": "workspace:*",
     "@types/pg": "8.23.1",
-    "auth": "1.7.10",
+    "auth": "1.7.14",
     "drizzle-kit": "0.31.11",
     "drizzle-orm": "0.45.4",
     "fastify": "^5.12.7",

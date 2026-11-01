@@ -70,7 +70,7 @@
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
-    "@nestjs/platform-fastify": "11.2.7",
+    "@nestjs/platform-fastify": "11.2.8",
     "@quynhonsemiconductor/observability": "workspace:^",
     "@quynhonsemiconductor/platform-cache": "workspace:^",
     "@quynhonsemiconductor/platform-db": "workspace:^",

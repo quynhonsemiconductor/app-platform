@@ -306,7 +306,7 @@ describe('clientIp with the signed edge IP', () => {
     expect(clientIp(req, withEdge)).toBe(VISITOR);
   });
 
-  it('a forged header falls back to today’s order, unchanged', () => {
+  it('a forged header falls back to cf-connecting-ip, then the socket — never x-forwarded-for', () => {
     const forged: Req = {
       method: 'POST',
       url: '/x',
@@ -319,11 +319,16 @@ describe('clientIp with the signed edge IP', () => {
       },
     };
     expect(clientIp(forged, withEdge)).toBe('203.0.113.50');
-    const noCf = { ...forged, headers: { ...forged.headers, 'cf-connecting-ip': undefined } };
-    expect(clientIp(noCf, withEdge)).toBe('1.1.1.1');
+    // Without cf-connecting-ip the forged chain is NOT consulted: the socket is the answer.
+    const socketOnly = {
+      ...forged,
+      headers: { ...forged.headers, 'cf-connecting-ip': undefined },
+      socket: { remoteAddress: '10.0.0.5' },
+    };
+    expect(clientIp(socketOnly, withEdge)).toBe('10.0.0.5');
     const noHeaders = {
-      ...noCf,
-      headers: { ...noCf.headers, 'x-forwarded-for': undefined },
+      ...forged,
+      headers: { ...forged.headers, 'cf-connecting-ip': undefined, 'x-forwarded-for': undefined },
       socket: { remoteAddress: '10.0.0.5' },
     };
     expect(clientIp(noHeaders, withEdge)).toBe('10.0.0.5');

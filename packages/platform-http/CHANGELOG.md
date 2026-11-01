@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.0.2](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v5.0.1...platform-http-v5.0.2) (2026-11-01)
+
+
+### 🐛 Bug Fixes
+
+* **platform-http:** stop trusting x-forwarded-for for the client address ([#327](https://github.com/quynhonsemiconductor/app-platform/issues/327)) ([2be2c9b](https://github.com/quynhonsemiconductor/app-platform/commit/2be2c9bfa5cf9a444fbb15ec67d5645afefca856))
+
 ## [5.0.1](https://github.com/quynhonsemiconductor/app-platform/compare/platform-http-v5.0.0...platform-http-v5.0.1) (2026-10-23)
 
 

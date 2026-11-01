@@ -57,7 +57,7 @@ function signedEdgeIp(req: ClientIpRequest, options: ClientIpOptions): string | 
  * The address of the original client, for access logs and rate-limit keys.
  *
  * Order: a verified signed edge address (only when `EDGE_CLIENT_IP_SECRET` is set) →
- * `cf-connecting-ip` → first `x-forwarded-for` entry → socket address.
+ * `cf-connecting-ip` → socket address.
  *
  * **Behind a Cloudflare Worker or Pages Function** `cf-connecting-ip` can be a Cloudflare-internal
  * address shared by every user, and an unsigned header the Worker sets is just a header any caller could
@@ -68,7 +68,13 @@ function signedEdgeIp(req: ClientIpRequest, options: ClientIpOptions): string | 
  * Behind Cloudflare Tunnel the origin sees only `cloudflared`'s address, and
  * `x-forwarded-for` is appended to by every hop — its first entry is whatever the client
  * chose to send. `cf-connecting-ip` is set by Cloudflare's edge, overwriting anything the
- * client supplied, so when it is present a forged `x-forwarded-for` is ignored.
+ * client supplied, so a forged `x-forwarded-for` is ignored.
+ *
+ * `x-forwarded-for` is NOT a source at all any more. It used to be the fallback after
+ * `cf-connecting-ip`; on the on-prem host the only real source is `cf-connecting-ip` set by
+ * cloudflared, and accepting the chain's first entry let any caller choose its own address —
+ * and so its own rate-limit bucket — wherever `cf-connecting-ip` was absent. The socket
+ * address is the honest answer when no header is present.
  *
  * **Assumption.** `cf-connecting-ip` is only authoritative when the pods are reachable
  * *only* through the Cloudflare Tunnel and the gateway behind it — no public listener, no
@@ -100,7 +106,6 @@ function resolveClientIp(req: ClientIpRequest, options: ClientIpOptions): string
   return (
     signedEdgeIp(req, options) ??
     asIp(firstHeader(req, 'cf-connecting-ip')) ??
-    asIp(firstHeader(req, 'x-forwarded-for')?.split(',')[0]) ??
     req.socket?.remoteAddress ??
     req.ip ??
     UNKNOWN_CLIENT_IP

@@ -12,13 +12,15 @@ describe('clientIp', () => {
     ).toBe('203.0.113.7');
   });
 
-  it('falls back to the FIRST x-forwarded-for entry', () => {
+  // `x-forwarded-for` is appended to by every hop, so its first entry is whatever the client
+  // sent. It is not an address source: without `cf-connecting-ip` the socket is the answer.
+  it('ignores x-forwarded-for entirely and uses the socket', () => {
     expect(
       clientIp({
         headers: { 'x-forwarded-for': '198.51.100.9, 10.1.1.1, 10.0.0.2' },
         socket: { remoteAddress: '10.0.0.5' },
       }),
-    ).toBe('198.51.100.9');
+    ).toBe('10.0.0.5');
   });
 
   it('falls back to the socket address when no header is present', () => {
@@ -64,22 +66,23 @@ describe('clientIp', () => {
     ['1.1.1.1\nfake log line', 'an injected newline'],
     ['a'.repeat(5_000), 'an enormous value'],
     ['', 'an empty value'],
-  ])('skips a cf-connecting-ip that is %o (%s) and uses the next source', (bad) => {
+  ])('skips a cf-connecting-ip that is %o (%s) and uses the socket', (bad) => {
     expect(
       clientIp({
         headers: { 'cf-connecting-ip': bad, 'x-forwarded-for': '198.51.100.9' },
         socket: { remoteAddress: '10.0.0.5' },
       }),
-    ).toBe('198.51.100.9');
+    ).toBe('10.0.0.5');
   });
 
-  it('skips a garbage first x-forwarded-for entry and uses the socket', () => {
+  it('never trusts a garbage or valid x-forwarded-for', () => {
     expect(
       clientIp({
         headers: { 'x-forwarded-for': 'unknown, 198.51.100.9' },
         socket: { remoteAddress: '10.0.0.5' },
       }),
     ).toBe('10.0.0.5');
+    expect(clientIp({ headers: { 'x-forwarded-for': '203.0.113.7' } })).toBe(UNKNOWN_CLIENT_IP);
   });
 
   it("falls back to the framework's resolved ip last", () => {

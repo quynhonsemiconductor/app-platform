@@ -57,7 +57,7 @@ export function guardPool<P extends Pool>(pool: P, options: GuardPoolOptions = {
   const logger = options.logger ?? console;
   const minBackoffMs = options.minBackoffMs ?? 250;
   const maxBackoffMs = Math.max(minBackoffMs, options.maxBackoffMs ?? 5_000);
-  const now = options.now ?? Date.now;
+  const now = options.now ?? (() => Date.now());
   const on = options.target ? ` on ${options.target}` : '';
 
   // Logs the driver's message only. pg's messages carry neither the connection string, the user

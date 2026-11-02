@@ -28,7 +28,11 @@ const GUARDED = Symbol.for('@quynhonsemiconductor/platform-db:guarded');
 /** pg-pool's own message when a caller waited in the queue for a busy pool: not a database failure. */
 const QUEUE_TIMEOUT = 'timeout exceeded when trying to connect';
 
-type ConnectCallback = (err: Error | undefined, client?: PoolClient, done?: () => void) => void;
+type ConnectCallback = (
+  err: Error | undefined,
+  client?: PoolClient,
+  done?: (release?: unknown) => void,
+) => void;
 
 /**
  * Make a node-postgres pool survive the database going away and coming back, in place.
@@ -114,7 +118,8 @@ export function guardPool<P extends Pool>(pool: P, options: GuardPoolOptions = {
     const pending = attempt();
     if (!cb) return pending;
     pending.then(
-      (client) => cb(undefined, client, () => client.release()),
+      // `done(err)` is pg's way to discard a broken client rather than return it to the pool.
+      (client) => cb(undefined, client, (release?: unknown) => client.release(release as boolean)),
       (err: Error) => cb(err, undefined, () => undefined),
     );
     return undefined;

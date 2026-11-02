@@ -83,6 +83,21 @@ describe('guardPool without a database', () => {
     }
   });
 
+  it('the callback form passes done(err) through, so a broken client is discarded', async () => {
+    const pool = refusedPool();
+    const release = vi.fn();
+    vi.spyOn(pool, 'connect').mockImplementation((() =>
+      Promise.resolve({ release })) as unknown as Pool['connect']);
+    guardPool(pool, { logger: quiet });
+    const done = await new Promise<(err?: unknown) => void>((resolve, reject) =>
+      pool.connect((err, _client, d) => (err ? reject(err) : resolve(d))),
+    );
+    const broken = new Error('broken');
+    done(broken);
+    expect(release).toHaveBeenCalledWith(broken);
+    await pool.end();
+  });
+
   it('is idempotent: guarding twice does not wrap connect twice', async () => {
     const pool = refusedPool();
     guardPool(pool, { logger: quiet });

@@ -47,7 +47,14 @@ export async function createTcpGate(target: { host: string; port: number }): Pro
         client.on('close', () => upstream.destroy());
         upstream.on('close', () => client.destroy());
       });
-      await new Promise<void>((resolve) => s.listen(port, host, resolve));
+      // The port was released after reserving it, so another process can take it in between.
+      await new Promise<void>((resolve, reject) => {
+        s.once('error', reject);
+        s.listen(port, host, () => {
+          s.off('error', reject);
+          resolve();
+        });
+      });
       server = s;
     },
     async close() {

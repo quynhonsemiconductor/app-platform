@@ -1,12 +1,9 @@
 import { Pool, type PoolConfig } from 'pg';
 import { readDatabaseConfig, type DatabaseConfig, type DatabaseEnv } from './config';
 import type { ConnectionTarget } from './errors';
+import { guardPool, type DbLogger } from './guard';
 
-/** Minimal logger so the core needs no framework. A Nest `Logger` and `console` both fit. */
-export interface DbLogger {
-  warn(message: string): void;
-  error(message: string): void;
-}
+export type { DbLogger } from './guard';
 
 export interface CreatePoolOptions {
   /** Where pool-level errors go. Default: `console`. */
@@ -35,27 +32,12 @@ function poolConfig(config: DatabaseConfig, host: string, max: number): PoolConf
 }
 
 function build(config: DatabaseConfig, host: string, max: number, logger: DbLogger): Pool {
-  const pool = new Pool(poolConfig(config, host, max));
-  // EVERY client gets a permanent 'error' listener, the moment it connects.
-  //
-  // pg-pool removes its own listener from a client when it hands the client out, and neither
-  // Drizzle's transaction() nor a bare pool.query() adds one. So when the server ends a
-  // connection that is IN USE (a failover, a node drain, a CNPG switchover: 57P01 "terminating
-  // connection due to administrator command"), the client emits 'error' with no listener and
-  // Node treats it as an uncaught exception: one dropped connection restarts the process. The
-  // query on that client still rejects normally and the pool discards the dead client.
-  //
-  // Logs host and port and the driver's message only. Never the connection string, user or
-  // password: pg's error messages do not carry them, and this must not add them.
-  pool.on('connect', (client) => {
-    client.on('error', (err) => {
-      logger.warn(`Database client error on ${host}:${config.port}: ${err.message}`);
-    });
+  // Error listeners on the pool and every client, and backoff on connection attempts: see
+  // guardPool. Without the listeners one connection dropped by a failover ends the process.
+  return guardPool(new Pool(poolConfig(config, host, max)), {
+    logger,
+    target: `${host}:${config.port}`,
   });
-  // The pool re-emits an IDLE client's error as its own, and throws if nobody listens. The
-  // client listener above has already logged it, so this only has to exist.
-  pool.on('error', () => undefined);
-  return pool;
 }
 
 /** What {@link pingDatabase} and error messages need to say about a pool. */

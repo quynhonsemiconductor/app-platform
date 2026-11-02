@@ -26,6 +26,7 @@ export {
   type CreatePoolOptions,
   type DbLogger,
 } from './pool';
+export { guardPool, type GuardPoolOptions } from './guard';
 export { pingDatabase } from './ping';
 export { withAdvisoryLock, type AdvisoryLockResult } from './advisory-lock';
 export { DATABASE_POOL_TOKEN, DATABASE_READ_POOL_TOKEN } from './tokens';

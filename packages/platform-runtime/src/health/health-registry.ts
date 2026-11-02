@@ -35,6 +35,7 @@ export class HealthRegistry {
   private readonly logger = new Logger('Health');
   private readonly checks = new Map<string, HealthCheck>();
   private readonly lastStatus = new Map<string, CheckStatus>();
+  private readonly lastCause = new Map<string, string | undefined>();
   private draining = false;
 
   /** @throws if `name` is already registered: two checks sharing a name hide each other. */
@@ -108,12 +109,20 @@ export class HealthRegistry {
   }
 
   /** Log on a CHANGE only: a probe every 5 s per replica would otherwise drown the log. */
+  /**
+   * Logs a check going down, recovering, or STAYING down for a different reason. The last case is
+   * not noise: after the 2026-11-03 node reboot a pod logged "down: ECONNREFUSED" once and then
+   * nothing while the real cause became "no connection slot is free (53300)", so the one line in
+   * the log described a database that had long since come back.
+   */
   private transition(name: string, status: CheckStatus, err?: unknown): void {
-    if (this.lastStatus.get(name) === status) return;
     const before = this.lastStatus.get(name);
+    const cause =
+      status === 'down' ? (err instanceof Error ? err.message : String(err)) : undefined;
+    if (before === status && this.lastCause.get(name) === cause) return;
     this.lastStatus.set(name, status);
+    this.lastCause.set(name, cause);
     if (status === 'down') {
-      const cause = err instanceof Error ? err.message : String(err);
       this.logger.error(`Readiness check "${name}" is down: ${cause}`);
     } else if (before === 'down') {
       this.logger.log(`Readiness check "${name}" recovered`);

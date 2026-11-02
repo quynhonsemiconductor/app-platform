@@ -129,6 +129,17 @@ describe('startOtel', () => {
       expect(resource.attributes['deployment.environment.name']).toBe('develop');
     });
 
+    it('reports DEPLOYMENT_ENV=prod unchanged as the resource attribute', () => {
+      process.env['DEPLOYMENT_ENV'] = 'prod';
+      startOtel({ defaultServiceName: 'svc' });
+      const resource = (
+        nodeSdkConstructor.mock.calls[0][0] as {
+          resource: { attributes: Record<string, unknown> };
+        }
+      ).resource;
+      expect(resource.attributes['deployment.environment.name']).toBe('prod');
+    });
+
     it('falls back to NODE_ENV when DEPLOYMENT_ENV is unset', () => {
       // Keeps a deployment that has not adopted DEPLOYMENT_ENV on its old behaviour
       // rather than reporting "unknown".
@@ -148,6 +159,8 @@ describe('startOtel', () => {
     it.each([
       ['develop', 'TraceIdRatioBased{1}'],
       ['production', 'TraceIdRatioBased{0.1}'],
+      ['prod', 'TraceIdRatioBased{0.1}'],
+      ['dev', 'TraceIdRatioBased{1}'],
     ])('defaults the sampling ratio from DEPLOYMENT_ENV=%s', (env, expected) => {
       process.env['NODE_ENV'] = 'production'; // identical in both deployments
       process.env['DEPLOYMENT_ENV'] = env;

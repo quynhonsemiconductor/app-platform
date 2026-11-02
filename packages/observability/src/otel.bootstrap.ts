@@ -320,7 +320,11 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
   // Falls back to NODE_ENV so a deployment that has not set DEPLOYMENT_ENV yet keeps
   // its previous behaviour rather than reporting "unknown".
   const deploymentEnv = process.env['DEPLOYMENT_ENV'] ?? process.env['NODE_ENV'] ?? 'development';
-  const isProd = deploymentEnv === 'production';
+  // `prod` is the org's environment name (dev|prod, on-prem gitops values); `production` is what the
+  // AWS-era products set. Both are production: matching only `production` left an on-prem
+  // `DEPLOYMENT_ENV=prod` on the develop defaults (sampling 1.0, small batches). The value reported as
+  // `deployment.environment.name` is passed through unchanged.
+  const isProd = deploymentEnv === 'production' || deploymentEnv === 'prod';
   const serviceName =
     process.env[options.serviceNameEnvVar ?? 'OTEL_SERVICE_NAME'] ?? options.defaultServiceName;
   const endpoint = process.env['OTEL_EXPORTER_OTLP_ENDPOINT'] ?? 'http://localhost:4318';

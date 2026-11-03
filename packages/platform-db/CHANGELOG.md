@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/quynhonsemiconductor/app-platform/compare/platform-db-v0.1.2...platform-db-v0.1.3) (2026-11-03)
+
+
+### ✨ Features
+
+* **platform-db:** guardPool for self-healing pools; readiness logs a changed cause ([#332](https://github.com/quynhonsemiconductor/app-platform/issues/332)) ([5ecd753](https://github.com/quynhonsemiconductor/app-platform/commit/5ecd7538741cd6ec87732a180d5432a3be126c4f))
+
 ## [0.1.2](https://github.com/quynhonsemiconductor/app-platform/compare/platform-db-v0.1.1...platform-db-v0.1.2) (2026-10-14)
 
 

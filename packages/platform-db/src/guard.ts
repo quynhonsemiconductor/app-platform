@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import type { Pool, PoolClient } from 'pg';
 
 /** Minimal logger so the core needs no framework. A Nest `Logger` and `console` both fit. */
@@ -19,20 +20,32 @@ export interface GuardPoolOptions {
   maxBackoffMs?: number;
   /** What the log lines call the server, e.g. `host:port`. Never put credentials here. */
   target?: string;
-  /** For tests. */
+  /** Monotonic milliseconds. Default: `performance.now()`, so a wall-clock step cannot stretch the window. For tests. */
   now?: () => number;
 }
 
 const GUARDED = Symbol.for('@quynhonsemiconductor/platform-db:guarded');
 
-/** pg-pool's own message when a caller waited in the queue for a busy pool: not a database failure. */
-const QUEUE_TIMEOUT = 'timeout exceeded when trying to connect';
+/** pg-pool's internal queue entry, as `newClient` receives it. */
+interface PendingItem {
+  callback: (
+    err: Error | undefined,
+    client?: PoolClient,
+    done?: (release?: unknown) => void,
+  ) => void;
+  timedOut?: boolean;
+}
 
-type ConnectCallback = (
-  err: Error | undefined,
-  client?: PoolClient,
-  done?: (release?: unknown) => void,
-) => void;
+/** The pg-pool internals the backoff hooks into (pg-pool 3.x). */
+interface PoolInternals {
+  Client: new (...args: never[]) => {
+    connect(callback?: (err?: Error) => void): Promise<void> | void;
+  };
+  newClient(pendingItem: PendingItem): void;
+  _pulseQueue(): void;
+}
+
+const NOOP = () => undefined;
 
 /**
  * Make a node-postgres pool survive the database going away and coming back, in place.
@@ -46,10 +59,15 @@ type ConnectCallback = (
  * 2. CONNECTION BACKOFF. While the database is unreachable, every caller (each outbox relay tick,
  *    each readiness probe, each request) would otherwise dial it, and a database that is starting
  *    up or out of slots (53300) is hammered by exactly the clients waiting for it. After a failed
- *    attempt, a connect that WOULD DIAL (no idle client to hand out, room under `max`) fails fast
- *    with the last error until the backoff has passed: 250 ms, doubling, capped at
- *    `maxBackoffMs`. The first success resets it. Nothing is cached beyond that window, so the
- *    pool is never left unusable: the next attempt after it dials for real.
+ *    dial, every further dial fails fast with the last error until the backoff has passed: 250 ms,
+ *    doubling, capped at `maxBackoffMs`. The first successful dial resets it. Handing out an idle
+ *    client is never gated, and nothing is cached beyond the window, so the pool is never left
+ *    unusable: the next dial after it is real.
+ *
+ *    The gate sits on pg-pool's `newClient`, the one place every dial goes through: `connect()`
+ *    calls it directly, and so does the queue pump (`_pulseQueue`) for callers that waited in the
+ *    queue while the pool was full. Gating only `connect()` would let queued waiters dial straight
+ *    through the window.
  *
  * Idempotent. Returns the same pool.
  */
@@ -61,7 +79,7 @@ export function guardPool<P extends Pool>(pool: P, options: GuardPoolOptions = {
   const logger = options.logger ?? console;
   const minBackoffMs = options.minBackoffMs ?? 250;
   const maxBackoffMs = Math.max(minBackoffMs, options.maxBackoffMs ?? 5_000);
-  const now = options.now ?? (() => Date.now());
+  const now = options.now ?? (() => performance.now());
   const on = options.target ? ` on ${options.target}` : '';
 
   // Logs the driver's message only. pg's messages carry neither the connection string, the user
@@ -76,53 +94,56 @@ export function guardPool<P extends Pool>(pool: P, options: GuardPoolOptions = {
   let retryAt = 0;
   let lastError: Error | undefined;
 
-  const dial = pool.connect.bind(pool) as () => Promise<PoolClient>;
-  const max = (pool as unknown as { options: { max?: number } }).options.max ?? 10;
-
-  const attempt = async (): Promise<PoolClient> => {
-    const wouldDial = pool.idleCount === 0 && pool.totalCount < max;
-    if (wouldDial && lastError && now() < retryAt) throw lastError;
-    try {
-      const client = await dial();
-      if (failures > 0) {
-        (logger.log ?? logger.warn).call(
-          logger,
-          `Database connection${on} recovered after ${failures} failed attempt(s)`,
+  const record = (err: Error | undefined) => {
+    if (err) {
+      failures += 1;
+      const delay = Math.min(maxBackoffMs, minBackoffMs * 2 ** Math.min(failures - 1, 20));
+      retryAt = now() + delay;
+      lastError = err;
+      if (failures === 1) {
+        logger.warn(
+          `Database connection${on} failed (${err.message}); retrying with backoff up to ${maxBackoffMs} ms`,
         );
       }
-      failures = 0;
-      retryAt = 0;
-      lastError = undefined;
-      return client;
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      if (error.message !== QUEUE_TIMEOUT) {
-        failures += 1;
-        const delay = Math.min(maxBackoffMs, minBackoffMs * 2 ** Math.min(failures - 1, 20));
-        retryAt = now() + delay;
-        lastError = error;
-        if (failures === 1) {
-          logger.warn(
-            `Database connection${on} failed (${error.message}); retrying with backoff up to ${maxBackoffMs} ms`,
-          );
-        }
-      }
-      throw error;
+      return;
+    }
+    if (failures > 0) {
+      (logger.log ?? logger.warn).call(
+        logger,
+        `Database connection${on} recovered after ${failures} failed attempt(s)`,
+      );
+    }
+    failures = 0;
+    retryAt = 0;
+    lastError = undefined;
+  };
+
+  const internals = pool as unknown as PoolInternals;
+
+  // The outcome is recorded in the client's own connect callback, which runs BEFORE pg-pool's: on
+  // a failure pg-pool pumps the queue first and only then answers the caller, so recording it any
+  // later would let the next queued waiter dial before the window opened.
+  const Base = internals.Client;
+  internals.Client = class extends Base {
+    connect(callback?: (err?: Error) => void) {
+      if (!callback) return super.connect();
+      return super.connect((err?: Error) => {
+        record(err ?? undefined);
+        callback(err);
+      });
     }
   };
 
-  // pg-pool calls `this.connect(cb)` from `pool.query`, so the callback form must keep working.
-  (
-    pool as unknown as { connect: (cb?: ConnectCallback) => Promise<PoolClient> | undefined }
-  ).connect = (cb?: ConnectCallback) => {
-    const pending = attempt();
-    if (!cb) return pending;
-    pending.then(
-      // `done(err)` is pg's way to discard a broken client rather than return it to the pool.
-      (client) => cb(undefined, client, (release?: unknown) => client.release(release as boolean)),
-      (err: Error) => cb(err, undefined, () => undefined),
-    );
-    return undefined;
+  const dial = internals.newClient.bind(pool);
+  internals.newClient = (pendingItem: PendingItem) => {
+    if (lastError && now() < retryAt) {
+      // No client was created, so nothing will pump the queue for the next waiter: do it here,
+      // on the next tick so a long queue drains without deep recursion.
+      process.nextTick(() => internals._pulseQueue());
+      if (!pendingItem.timedOut) pendingItem.callback(lastError, undefined, NOOP);
+      return;
+    }
+    dial(pendingItem);
   };
 
   return pool;

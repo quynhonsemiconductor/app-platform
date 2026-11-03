@@ -240,8 +240,8 @@ client. Pass pools from `createPool()` to `withAdvisoryLock` and Drizzle.
 
 The pool connects lazily and keeps no failed state: a pool created while PostgreSQL is still starting
 serves queries as soon as it is up, and `/readyz` (platform-runtime's `database` check, which pings on
-every probe) turns 200 on its own. While connections fail, a connect that would have to dial fails fast
-with the last error for a short backoff (250 ms, doubling, capped at 5 s; the first success resets it),
+every probe) turns 200 on its own. While connections fail, every dial (direct, or for a caller queued behind a full pool) fails fast
+with the last error for a short backoff (250 ms, doubling, capped at 5 s, on a monotonic clock; the first success resets it),
 so outbox relays and probes do not hammer a database that is starting up or out of slots (`53300`).
 
 A pool built by hand gets the same listeners and backoff from `guardPool`:

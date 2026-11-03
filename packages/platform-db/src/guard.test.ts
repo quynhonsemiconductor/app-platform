@@ -34,10 +34,15 @@ describe('guardPool without a database', () => {
     });
   }
 
+  /** Counts real dials: pg-pool's `newClient`, spied BEFORE guardPool wraps it. */
+  function spyDials(pool: Pool) {
+    return vi.spyOn(pool as unknown as { newClient: (item: unknown) => void }, 'newClient');
+  }
+
   it('fails fast while backing off, then dials again once the backoff has passed', async () => {
     let clock = 1_000;
     const pool = refusedPool();
-    const dial = vi.spyOn(pool, 'connect');
+    const dial = spyDials(pool);
     const warnings: string[] = [];
     guardPool(pool, {
       logger: { warn: (m) => warnings.push(m), error: () => undefined },
@@ -83,27 +88,50 @@ describe('guardPool without a database', () => {
     }
   });
 
-  it('the callback form passes done(err) through, so a broken client is discarded', async () => {
-    const pool = refusedPool();
-    const release = vi.fn();
-    vi.spyOn(pool, 'connect').mockImplementation((() =>
-      Promise.resolve({ release })) as unknown as Pool['connect']);
-    guardPool(pool, { logger: quiet });
-    const done = await new Promise<(err?: unknown) => void>((resolve, reject) =>
-      pool.connect((err, _client, d) => (err ? reject(err) : resolve(d))),
-    );
-    const broken = new Error('broken');
-    done(broken);
-    expect(release).toHaveBeenCalledWith(broken);
-    await pool.end();
+  it('queued waiters do not dial inside the window either (the queue pump goes through newClient too)', async () => {
+    const clock = 1_000; // frozen: everything below happens inside the first window
+    const pool = refusedPool(1); // max 1: every caller after the first waits in the queue
+    const dial = spyDials(pool);
+    guardPool(pool, { logger: quiet, minBackoffMs: 100, now: () => clock });
+    try {
+      const waiters = Array.from({ length: 6 }, () => pool.connect());
+      const results = await Promise.allSettled(waiters);
+      expect(results.every((r) => r.status === 'rejected')).toBe(true);
+      for (const r of results) {
+        expect((r as PromiseRejectedResult).reason).toMatchObject({ code: 'ECONNREFUSED' });
+      }
+      // One real dial; the five queued waiters were failed fast by the pump, not dialed.
+      expect(dial).toHaveBeenCalledTimes(1);
+      expect(pool.totalCount).toBe(0);
+    } finally {
+      await pool.end();
+    }
   });
 
-  it('is idempotent: guarding twice does not wrap connect twice', async () => {
+  it('defaults to a monotonic clock, so a wall-clock step back cannot stretch the window', async () => {
+    const pool = refusedPool();
+    const dial = spyDials(pool);
+    guardPool(pool, { logger: quiet, minBackoffMs: 50, maxBackoffMs: 50 });
+    try {
+      await expect(pool.connect()).rejects.toThrow();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() - 3_600_000); // NTP steps the wall clock back an hour
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await expect(pool.connect()).rejects.toThrow();
+      expect(dial).toHaveBeenCalledTimes(2); // the window still ended after 50 ms
+    } finally {
+      vi.useRealTimers();
+      await pool.end();
+    }
+  });
+
+  it('is idempotent: guarding twice does not wrap the dial twice', async () => {
     const pool = refusedPool();
     guardPool(pool, { logger: quiet });
-    const once = pool.connect;
+    const internals = pool as unknown as { newClient: unknown };
+    const once = internals.newClient;
     expect(guardPool(pool, { logger: quiet })).toBe(pool);
-    expect(pool.connect).toBe(once);
+    expect(internals.newClient).toBe(once);
     await pool.end();
   });
 

@@ -47,6 +47,7 @@ describe('createLoggerOptions', () => {
       'res.headers["set-cookie"]',
       'req.headers["x-api-key"]',
       'req.headers["x-csrf-token"]',
+      'req.headers["cf-access-jwt-assertion"]',
       'req.headers["x-rova-mcp-call"]',
     ]) {
       expect(__redactedPaths).toContain(path);
@@ -60,6 +61,7 @@ describe('createLoggerOptions', () => {
       expect(__redactedPaths).toContain(`${key}.config.headers["authorization"]`);
       expect(__redactedPaths).toContain(`${key}.request.headers["authorization"]`);
       expect(__redactedPaths).toContain(`${key}.headers["cookie"]`);
+      expect(__redactedPaths).toContain(`${key}.request.headers["cf-access-jwt-assertion"]`);
     }
   });
 
@@ -231,6 +233,17 @@ describe('createLoggerOptions', () => {
         req: { headers: { cookie: 'sid=SECRET' } },
       });
       expect(lines[0]).not.toContain('SECRET');
+      expect(lines[0]).toContain('[REDACTED]');
+    });
+
+    it('redacts the Cloudflare Access JWT an error carries in its request headers', () => {
+      const { logger, lines } = capture();
+      logger.error({
+        error: {
+          request: { headers: { 'cf-access-jwt-assertion': 'SECRET_HEADER.SECRET_PAYLOAD.SIG' } },
+        },
+      });
+      expect(lines[0]).not.toContain('SECRET_HEADER');
       expect(lines[0]).toContain('[REDACTED]');
     });
   });

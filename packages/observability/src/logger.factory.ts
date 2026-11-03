@@ -25,6 +25,9 @@ const SECRET_HEADERS = [
   'set-cookie',
   'x-api-key',
   'x-csrf-token',
+  // Cloudflare Access forwards the user's identity to the origin as this header; it is a JWT the
+  // origin verifies, so it is a credential wherever a request is logged.
+  'cf-access-jwt-assertion',
   // rova's MCP in-process call token: a single-use credential carried only on an internal
   // inject() between the MCP transport and its guards (never stored, never shown to a client)
   'x-rova-mcp-call',
@@ -37,6 +40,7 @@ const REDACTED_PATHS: readonly string[] = [
   'res.headers["set-cookie"]',
   'req.headers["x-api-key"]',
   'req.headers["x-csrf-token"]',
+  'req.headers["cf-access-jwt-assertion"]',
   'req.headers["x-rova-mcp-call"]',
   // Belt and braces behind `serializeError`, which already drops these keys: SDK and HTTP-client errors nest the original request, which is
   // the realistic leak path in background workers that never see an inbound HTTP header. Covers every key an error is logged under.

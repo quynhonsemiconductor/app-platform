@@ -135,6 +135,21 @@ describe('guardPool without a database', () => {
     await pool.end();
   });
 
+  it('keeps the listeners and warns, rather than gating nothing, on an unknown pg-pool shape', async () => {
+    const pool = refusedPool();
+    const internals = pool as unknown as { newClient?: unknown };
+    const real = internals.newClient;
+    internals.newClient = undefined;
+    const warnings: string[] = [];
+    guardPool(pool, { logger: { warn: (m) => warnings.push(m), error: () => undefined } });
+    expect(warnings).toEqual([
+      'guardPool: unsupported pg-pool version; connection backoff is disabled',
+    ]);
+    expect(pool.listenerCount('error')).toBe(1);
+    internals.newClient = real;
+    await pool.end();
+  });
+
   it('listens for pool errors, so an idle client error does not become an uncaught exception', async () => {
     const pool = guardPool(refusedPool(), { logger: quiet });
     expect(pool.listenerCount('error')).toBe(1);

@@ -119,6 +119,16 @@ export function guardPool<P extends Pool>(pool: P, options: GuardPoolOptions = {
   };
 
   const internals = pool as unknown as PoolInternals;
+  // pg-pool's internals are not a public API. If a future pg-pool reshapes them, keep the listeners
+  // and say so, rather than install a gate that silently never runs.
+  if (
+    typeof internals.newClient !== 'function' ||
+    typeof internals._pulseQueue !== 'function' ||
+    typeof internals.Client !== 'function'
+  ) {
+    logger.warn('guardPool: unsupported pg-pool version; connection backoff is disabled');
+    return pool;
+  }
 
   // The outcome is recorded in the client's own connect callback, which runs BEFORE pg-pool's: on
   // a failure pg-pool pumps the queue first and only then answers the caller, so recording it any
@@ -128,7 +138,7 @@ export function guardPool<P extends Pool>(pool: P, options: GuardPoolOptions = {
     connect(callback?: (err?: Error) => void) {
       if (!callback) return super.connect();
       return super.connect((err?: Error) => {
-        record(err ?? undefined);
+        record(err);
         callback(err);
       });
     }

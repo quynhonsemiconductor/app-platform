@@ -7,5 +7,6 @@ export {
   type Queryable,
   type TruncateOptions,
 } from './reset';
+export { createTcpGate, type TcpGate } from './tcp-gate';
 export { generateTls, TLS_SERVER_NAME, type GeneratedTls } from './tls';
 export { startValkey, type StartValkeyOptions, type ValkeyHarness } from './valkey';

@@ -41,7 +41,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "pg-boss": "12.37.0"
+    "pg-boss": "12.38.0"
   },
   "peerDependencies": {
     "@nestjs/common": ">=11",

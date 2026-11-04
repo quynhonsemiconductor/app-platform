@@ -11,6 +11,11 @@ minimumReleaseAgeExclude:
 # lockfile is scanned too. Nothing here declares these packages.
 overrides:
   "js-yaml@4": "^4.3.2"
+  # GHSA-r3ph-w7gj-g6xm (CVSS 5.3, maxTotalMergeKeys does not bound CPU for empty merge
+  # sources), fixed in 5.4.1. @nestjs/swagger 11.4.7 declares js-yaml exactly 5.3.0, so the
+  # 4.x floor above does not reach it. Same entry as the root workspace; capped to the 5.x line,
+  # the major swagger already uses.
+  "js-yaml@>=5.0.0 <5.4.1": "^5.4.1"
   # `@nestjs/platform-fastify` pins fastify EXACTLY, so a range floor on fastify cannot reach it.
   "@nestjs/platform-fastify>fastify": "5.12.7"
   # Mirrors the root workspace's CVE floors: GHSA-xcx6-jx8p-x3h5 (msal-node 7.1.0),

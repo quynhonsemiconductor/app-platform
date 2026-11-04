@@ -1,4 +1,10 @@
-import { betterAuth, type Auth, type BetterAuthOptions, type User } from 'better-auth';
+import {
+  betterAuth,
+  type Auth,
+  type BetterAuthOptions,
+  type DBAdapterInstance,
+  type User,
+} from 'better-auth';
 import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { admin, organization, twoFactor } from 'better-auth/plugins';
 import type { CacheService } from '@quynhonsemiconductor/platform-cache';
@@ -381,7 +387,13 @@ export function createIdentityInternal(o: IdentityOptions, internal: InternalOpt
           },
         }
       : { level: 'error' },
-    database: ring ? withEncryptedSsoSecrets(database, ring) : database,
+    // `database` is the drizzle adapter's own DBAdapterInstance and the option is typed against
+    // better-auth's: @better-auth/core is installed once per peer set (better-call's zod peer,
+    // @better-fetch/fetch), so the two are nominal copies of the same interface. They are the same
+    // code at runtime — the cast is the boundary between the two copies, nothing else.
+    database: ring
+      ? withEncryptedSsoSecrets(database as unknown as DBAdapterInstance, ring)
+      : (database as unknown as DBAdapterInstance),
     secondaryStorage: storage,
     rateLimit: {
       enabled: true,

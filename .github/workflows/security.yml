@@ -31,8 +31,9 @@ on:
     #
     # `main` is this repo's only long-lived branch, so the filter skipped nothing anyone
     # wanted skipped. No upside, one silent failure mode.
-  schedule:
-    - cron: '0 4 * * 1' # weekly Monday 04:00 UTC — catch new CVEs between pushes
+  # No `schedule:` here. The repo's ONE periodic scan is scheduled-security.yml
+  # (daily, osv blocking); a weekly run of the same reusable was a duplicate that
+  # cost runner time and gave a red advisory two places to be read.
 
 concurrency:
   group: security-${{ github.ref }}

@@ -961,9 +961,9 @@ describe('metric export interval', () => {
   const readerOf = () =>
     (
       nodeSdkConstructor.mock.calls.at(-1)![0] as {
-        metricReader: { _exportInterval: number; _exportTimeout: number };
+        metricReaders: Array<{ _exportInterval: number; _exportTimeout: number }>;
       }
-    ).metricReader;
+    ).metricReaders[0]!;
   const exportIntervalOf = () => readerOf()._exportInterval;
 
   it('reaches the metric reader at 60 seconds by default', () => {

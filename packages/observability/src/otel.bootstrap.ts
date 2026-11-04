@@ -420,13 +420,17 @@ export function startOtel(options: OtelBootstrapOptions): boolean {
       }),
     ],
 
-    metricReader: new PeriodicExportingMetricReader({
-      exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
-      exportIntervalMillis: metricExportIntervalMs,
-      // The SDK refuses a timeout longer than the interval, so a short override must cap it or
-      // startup throws.
-      exportTimeoutMillis: Math.min(30_000, metricExportIntervalMs),
-    }),
+    // `metricReaders` (plural) is the SDK's only name as of 0.223: the singular `metricReader`
+    // was deprecated and then removed from NodeSDKConfiguration.
+    metricReaders: [
+      new PeriodicExportingMetricReader({
+        exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
+        exportIntervalMillis: metricExportIntervalMs,
+        // The SDK refuses a timeout longer than the interval, so a short override must cap it or
+        // startup throws.
+        exportTimeoutMillis: Math.min(30_000, metricExportIntervalMs),
+      }),
+    ],
 
     // Spread, not `views: views` — when the caller omits the option the key must be
     // ABSENT from the config object, not present-and-empty. `views: []` is not the same

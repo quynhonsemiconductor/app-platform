@@ -93,7 +93,7 @@ overrides:
   # GHSA-mrhx-c7xc-m3w5 (CVSS 8.2, memory exhaustion validating oversized constrained
   # collections, fixed 4.6.6): exactly one zod version in the lockfile. Identity and the
   # reference consumer pin 4.6.6 directly; this floor covers the `^4.4.3` dev ranges.
-  "zod@>=4 <4.6.6": "4.6.6"
+  "zod@>=4 <4.6.6": "4.6.7"
   # @azure/identity 4.14.0 declares msal-node ^6.0.0, but the fix for GHSA-xcx6-jx8p-x3h5
   # (CVSS 7.5) is 7.1.0 — a major ACROSS the vendor's own dependency. No code here imports
   # msal directly (it is internal to @azure/identity); platform-mail's suite gates the pair.

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.5](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.6.4...observability-v0.6.5) (2026-11-03)
+
+
+### 🐛 Bug Fixes
+
+* **observability:** redact the cloudflare access jwt header ([#333](https://github.com/quynhonsemiconductor/app-platform/issues/333)) ([0aa39d5](https://github.com/quynhonsemiconductor/app-platform/commit/0aa39d5335e63222e224aa393331b575a513aa17))
+
+## [0.6.4](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.6.3...observability-v0.6.4) (2026-11-03)
+
+
+### 🐛 Bug Fixes
+
+* **observability:** treat DEPLOYMENT_ENV=prod as production ([#330](https://github.com/quynhonsemiconductor/app-platform/issues/330)) ([52f35f3](https://github.com/quynhonsemiconductor/app-platform/commit/52f35f3de39868b116400ba70242c4be1956917c))
+
 ## [0.6.3](https://github.com/quynhonsemiconductor/app-platform/compare/observability-v0.6.2...observability-v0.6.3) (2026-10-23)
 
 

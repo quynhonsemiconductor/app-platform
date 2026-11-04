@@ -4,14 +4,16 @@ import type { CanActivate } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { CacheModule } from '@quynhonsemiconductor/platform-cache';
 import { DatabaseModule } from '@quynhonsemiconductor/platform-db/nest';
+import { Logger } from '@nestjs/common';
 import {
+  createTcpGate,
   dockerTestsEnabled,
   startPostgres,
   startValkey,
   type PostgresHarness,
   type ValkeyHarness,
 } from '@quynhonsemiconductor/testing';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestApp } from '../testing/app';
 import {
   enableHealth,
@@ -158,6 +160,22 @@ describe('GET /readyz', () => {
     expect((await get(app, '/readyz')).statusCode).toBe(200);
   });
 
+  it('logs a check that stays down for a NEW reason, so the log never describes a cleared outage', async () => {
+    const errors = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    let cause = 'ECONNREFUSED';
+    const { app } = await start(Empty, { checks: { db: () => Promise.reject(new Error(cause)) } });
+    await get(app, '/readyz');
+    await get(app, '/readyz'); // same cause: not repeated
+    cause = 'too many clients already';
+    await get(app, '/readyz');
+    const lines = errors.mock.calls.map(([m]) => String(m));
+    expect(lines).toEqual([
+      'Readiness check "db" is down: ECONNREFUSED',
+      'Readiness check "db" is down: too many clients already',
+    ]);
+    errors.mockRestore();
+  });
+
   it('never leaks the cause: the endpoint is unauthenticated', async () => {
     const { app } = await start(Empty, {
       checks: {
@@ -274,6 +292,44 @@ describe.skipIf(!dockerOn)('built-in checks, against real PostgreSQL 18 and Valk
     expect(res.json().checks).toEqual({ database: 'down' });
     expect(res.body).not.toMatch(/wrong-on-purpose|Password/i);
   });
+
+  // The 2026-11-03 incident: after a node reboot the API started before PostgreSQL. It must not need a
+  // restart: the pool built while the database was down serves it once it is up, and /readyz says so.
+  it('a database that comes up AFTER the app booted turns /readyz to 200 without a restart', async () => {
+    const gate = await createTcpGate({ host: pg.host, port: pg.port });
+    try {
+      const { app } = await start(
+        moduleWith(
+          { ...pg.env(), DATABASE_HOST: gate.host, DATABASE_PORT: String(gate.port) },
+          undefined,
+        ),
+      );
+      expect((await get(app, '/readyz')).statusCode).toBe(503);
+      expect((await get(app, '/readyz')).statusCode).toBe(503);
+
+      await gate.open();
+      await vi.waitFor(async () => expect((await get(app, '/readyz')).statusCode).toBe(200), {
+        timeout: 10_000,
+        interval: 200,
+      });
+      expect((await get(app, '/livez')).statusCode).toBe(200);
+
+      // And again after the database restarts underneath the warm pool.
+      await gate.close();
+      await vi.waitFor(async () => expect((await get(app, '/readyz')).statusCode).toBe(503), {
+        timeout: 5_000,
+        interval: 100,
+      });
+      expect((await get(app, '/livez')).statusCode).toBe(200);
+      await gate.open();
+      await vi.waitFor(async () => expect((await get(app, '/readyz')).statusCode).toBe(200), {
+        timeout: 10_000,
+        interval: 200,
+      });
+    } finally {
+      await gate.close();
+    }
+  }, 30_000);
 
   it('has no database check when the product does not use platform-db', async () => {
     const { registry } = await start();

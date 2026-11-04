@@ -234,8 +234,23 @@ the driver's message; never credentials). Without it, ending a connection that i
 failover, a node drain, a CNPG switchover: `57P01`) raised an uncaught exception, because pg-pool
 removes its own listener while a client is checked out and Drizzle's `transaction()` adds none. The
 query or transaction on that connection still **rejects** normally and the pool discards the dead
-client. Pass pools from `createPool()` to `withAdvisoryLock` and Drizzle; a pool built by hand does not
-carry the listener.
+client. Pass pools from `createPool()` to `withAdvisoryLock` and Drizzle.
+
+## A database that is down at boot, or restarts, needs no pod restart
+
+The pool connects lazily and keeps no failed state: a pool created while PostgreSQL is still starting
+serves queries as soon as it is up, and `/readyz` (platform-runtime's `database` check, which pings on
+every probe) turns 200 on its own. While connections fail, every dial (direct, or for a caller queued behind a full pool) fails fast
+with the last error for a short backoff (250 ms, doubling, capped at 5 s, on a monotonic clock; the first success resets it),
+so outbox relays and probes do not hammer a database that is starting up or out of slots (`53300`).
+
+A pool built by hand gets the same listeners and backoff from `guardPool`:
+
+```ts
+import { guardPool } from '@quynhonsemiconductor/platform-db';
+
+const pool = guardPool(new Pool({ ... }), { logger, target: `${host}:${port}` });
+```
 
 ## Read replica (unused until needed)
 

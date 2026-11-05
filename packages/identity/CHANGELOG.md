@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.5.3](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.5.2...identity-v8.5.3) (2026-11-05)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** update npm production (non-major) ([#271](https://github.com/quynhonsemiconductor/app-platform/issues/271)) ([27c22c2](https://github.com/quynhonsemiconductor/app-platform/commit/27c22c297ebb756e3fd2752dc411f7ba9dd93dc1))
+
 ## [8.5.2](https://github.com/quynhonsemiconductor/app-platform/compare/identity-v8.5.1...identity-v8.5.2) (2026-11-01)
 
 

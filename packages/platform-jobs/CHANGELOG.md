@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/quynhonsemiconductor/app-platform/compare/platform-jobs-v0.1.2...platform-jobs-v0.1.3) (2026-11-05)
+
+
+### 🐛 Bug Fixes
+
+* **deps:** update npm production (non-major) ([#271](https://github.com/quynhonsemiconductor/app-platform/issues/271)) ([27c22c2](https://github.com/quynhonsemiconductor/app-platform/commit/27c22c297ebb756e3fd2752dc411f7ba9dd93dc1))
+
 ## [0.1.2](https://github.com/quynhonsemiconductor/app-platform/compare/platform-jobs-v0.1.1...platform-jobs-v0.1.2) (2026-10-10)
 
 

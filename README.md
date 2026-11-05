@@ -136,7 +136,7 @@ they join the `CI required` gate once green on three consecutive PRs.
 
 ## Local development
 
-Node 24 and pnpm 11 (see `.nvmrc` and `packageManager`). Docker is needed for the tests that start
+Node 24 and pnpm 12 (see `.nvmrc` and `packageManager`). Docker is needed for the tests that start
 PostgreSQL or Valkey; without it they are skipped locally, and fail on CI.
 
 ```bash
